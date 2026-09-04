@@ -25,7 +25,10 @@
 - Always pass `Span`, `ByteSpan`, and `GpuRange` function parameters by value. This allows the compiler to pass their pointer-and-size fields in registers instead of forcing a memory store/load round trip. Review all code against this rule after every change.
 - Use C++20 designated initializers with named fields for structures.
 - Give public API structure fields useful default values. At call sites, initialize only the non-default fields and name every initialized field.
-- Vertex and pixel shaders and their variants share a shader source file. Put entirely different shaders in separate files. Do not combine unrelated shaders behind preprocessor conditionals.
+- Vertex and pixel shaders and their variants share a shader source file. Put entirely different shaders in separate files. Do not combine unrelated shaders
+  behind preprocessor conditionals.
+- Keep each shader source file's CPU-shared declarations in its own matching shared header. Keep shader-specific root data and constants in that header;
+  put types used by multiple shader files in a neutral common header.
 - Always review code for performance issues before considering work complete.
 - Line length is 160 characters. Please don't chop expressions to multiple lines if not needed.
 

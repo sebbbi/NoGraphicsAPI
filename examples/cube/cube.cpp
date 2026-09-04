@@ -133,13 +133,11 @@ int main() {
 
 	CommandBuffer* upload_commands = begin_commands(device);
 	copy_memory_to_texture(upload_commands, gpu_range(texture_upload), texture);
-	barrier(
-		upload_commands,
-		Stage::transfer,
-		Access::transfer_write,
-		Stage::fragment,
-		Access::shader_read
-	);
+
+	barrier(upload_commands,
+		Stage::transfer, Access::transfer_write,
+		Stage::fragment, Access::shader_read);
+
 	latest_completion.value++;
 	submit({ upload_commands }, latest_completion);
 
@@ -174,7 +172,9 @@ int main() {
         set_texture_heap(commands, gpu_range(texture_heap));
         set_sampler_heap(commands, gpu_range(sampler_heap));
 
-		barrier(commands, Stage::depth_stencil_tests, Access::depth_stencil_write, Stage::depth_stencil_tests, Access::depth_stencil_write);
+		barrier(commands, 
+			Stage::depth_stencil_tests, Access::depth_stencil_write, 
+			Stage::depth_stencil_tests, Access::depth_stencil_write);
 
 		begin_render_pass(commands, {
 			.colors = { {

@@ -1,21 +1,12 @@
 #pragma once
 
-#include <NoGraphicsAPI/shader_types.h>
-
-struct GBufferVertex
-{
-    float3 position;
-    float3 normal;
-};
-
-struct ObjectData
-{
-    float3x4 transform;
-};
+#include "object_data.h"
 
 struct GBufferRoot
 {
-    GBufferVertex* vertices;
     ObjectData* objects;
     float4x4 view_projection;
+    float3x4 orientation;
 };
+
+static const uint32 object_grid_width = 512;

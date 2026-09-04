@@ -170,9 +170,9 @@ The Windows examples use the normal swapchain path:
 - [`triangle`](examples/triangle/triangle.cpp): the minimum vertex/fragment draw and presentation path;
 - [`cube`](examples/cube/cube.cpp): typed GPU-pointer vertex fetch plus application-owned texture and
   sampler heaps;
-- [`deferred_renderer`](examples/deferred_renderer/deferred_renderer.cpp): a large instanced,
-  multi-pass workload with pointer-based scene data, barriers between passes, and timeline-managed
-  CPU/GPU overlap.
+- [`deferred_renderer`](examples/deferred_renderer/deferred_renderer.cpp): GPU-compute simulation and
+  mesh-shader rendering in a multi-pass workload with pointer-based scene data, barriers between
+  passes, and timeline-managed CPU/GPU overlap.
 
 They can be run from their corresponding directories under `build/examples` when
 `NOGRAPHICSAPI_BUILD_EXAMPLES` is enabled.

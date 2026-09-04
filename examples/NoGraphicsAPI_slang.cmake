@@ -43,6 +43,9 @@ function(NoGraphicsAPI_compile_slang output source entry stage)
     if(SLANG_DEFINE)
         list(APPEND options -D${SLANG_DEFINE}=1)
     endif()
+    if(stage STREQUAL "mesh")
+        list(APPEND options -capability spvMeshShadingEXT)
+    endif()
 
     get_filename_component(output_dir "${output}" DIRECTORY)
     add_custom_command(

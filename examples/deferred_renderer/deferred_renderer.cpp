@@ -1,6 +1,7 @@
 #include "deferred_lighting_shared.h"
 #include "example_support.hpp"
 #include "gbuffer_shared.h"
+#include "simulation_shared.h"
 
 #include <NoGraphicsAPI/math.hpp>
 
@@ -9,7 +10,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <cstring>
 
 using namespace gpu;
 using namespace std;
@@ -19,69 +19,17 @@ namespace
 
 constexpr uint32_t initial_width = 1280;
 constexpr uint32_t initial_height = 720;
-constexpr uint32_t object_count = 256 * 1024;
+constexpr uint32_t object_count = object_grid_width * object_grid_width;
 constexpr uint32_t frames_in_flight = 2;
 constexpr uint32_t gbuffer_texture_count = uint32_t(GBufferTexture::count);
 constexpr float cube_scale = 0.42f;
 constexpr float cube_rotation_speed = 0.5f;
-constexpr float central_gravity = 81000.0f;
-constexpr float gravity_softening = 12.0f;
 constexpr float minimum_orbit_radius = 54.0f;
 constexpr float maximum_orbit_radius = 240.0f;
 constexpr float3 camera_position{
     .x = 260.0f,
     .y = 210.0f,
     .z = 300.0f,
-};
-
-constexpr GBufferVertex cube_vertices[] = {
-    {.position = {.x = -1.0f, .y = -1.0f, .z = -1.0f}, .normal = {.x = -1.0f}},
-    {.position = {.x = -1.0f, .y = -1.0f, .z = 1.0f}, .normal = {.x = -1.0f}},
-    {.position = {.x = -1.0f, .y = 1.0f, .z = 1.0f}, .normal = {.x = -1.0f}},
-    {.position = {.x = -1.0f, .y = 1.0f, .z = -1.0f}, .normal = {.x = -1.0f}},
-
-    {.position = {.x = -1.0f, .y = -1.0f, .z = -1.0f}, .normal = {.z = -1.0f}},
-    {.position = {.x = -1.0f, .y = 1.0f, .z = -1.0f}, .normal = {.z = -1.0f}},
-    {.position = {.x = 1.0f, .y = 1.0f, .z = -1.0f}, .normal = {.z = -1.0f}},
-    {.position = {.x = 1.0f, .y = -1.0f, .z = -1.0f}, .normal = {.z = -1.0f}},
-
-    {.position = {.x = -1.0f, .y = -1.0f, .z = -1.0f}, .normal = {.y = -1.0f}},
-    {.position = {.x = 1.0f, .y = -1.0f, .z = -1.0f}, .normal = {.y = -1.0f}},
-    {.position = {.x = 1.0f, .y = -1.0f, .z = 1.0f}, .normal = {.y = -1.0f}},
-    {.position = {.x = -1.0f, .y = -1.0f, .z = 1.0f}, .normal = {.y = -1.0f}},
-
-    {.position = {.x = -1.0f, .y = 1.0f, .z = -1.0f}, .normal = {.y = 1.0f}},
-    {.position = {.x = -1.0f, .y = 1.0f, .z = 1.0f}, .normal = {.y = 1.0f}},
-    {.position = {.x = 1.0f, .y = 1.0f, .z = 1.0f}, .normal = {.y = 1.0f}},
-    {.position = {.x = 1.0f, .y = 1.0f, .z = -1.0f}, .normal = {.y = 1.0f}},
-
-    {.position = {.x = 1.0f, .y = 1.0f, .z = -1.0f}, .normal = {.x = 1.0f}},
-    {.position = {.x = 1.0f, .y = 1.0f, .z = 1.0f}, .normal = {.x = 1.0f}},
-    {.position = {.x = 1.0f, .y = -1.0f, .z = 1.0f}, .normal = {.x = 1.0f}},
-    {.position = {.x = 1.0f, .y = -1.0f, .z = -1.0f}, .normal = {.x = 1.0f}},
-
-    {.position = {.x = -1.0f, .y = -1.0f, .z = 1.0f}, .normal = {.z = 1.0f}},
-    {.position = {.x = 1.0f, .y = -1.0f, .z = 1.0f}, .normal = {.z = 1.0f}},
-    {.position = {.x = 1.0f, .y = 1.0f, .z = 1.0f}, .normal = {.z = 1.0f}},
-    {.position = {.x = -1.0f, .y = 1.0f, .z = 1.0f}, .normal = {.z = 1.0f}},
-};
-
-constexpr uint16_t cube_indices[] = {
-    0,  1,  2,  2,  3,  0,
-    4,  5,  6,  6,  7,  4,
-    8,  9,  10, 10, 11, 8,
-    12, 13, 14, 14, 15, 12,
-    16, 17, 18, 18, 19, 16,
-    20, 21, 22, 22, 23, 20,
-};
-
-constexpr size_t cube_vertex_count = sizeof(cube_vertices) / sizeof(cube_vertices[0]);
-constexpr uint32_t cube_index_count = uint32_t(sizeof(cube_indices) / sizeof(cube_indices[0]));
-
-struct ObjectState
-{
-    float3 position;
-    float3 velocity;
 };
 
 struct GBuffer
@@ -153,7 +101,7 @@ float random_signed(uint32_t& state) noexcept
     return float(state >> 8u) * (2.0f / 16777216.0f) - 1.0f;
 }
 
-void initialize_object_states(ObjectState* objects) noexcept
+void initialize_object_data(ObjectData* objects) noexcept
 {
     constexpr float minimum_radius_squared = minimum_orbit_radius * minimum_orbit_radius;
     constexpr float maximum_radius_squared = maximum_orbit_radius * maximum_orbit_radius;
@@ -201,32 +149,6 @@ void initialize_object_states(ObjectState* objects) noexcept
     }
 }
 
-void update_object_data(ObjectData* object_data,
-                        ObjectState* objects,
-                        float angle,
-                        float delta_seconds) noexcept
-{
-    constexpr float softening_squared = gravity_softening * gravity_softening;
-    const float3x4 orientation = math::to_float3x4(
-        math::rotation_y(angle) *
-        math::rotation_x(angle * 0.5f) *
-        math::scale({
-            .x = cube_scale,
-            .y = cube_scale,
-            .z = cube_scale,
-        }));
-
-    for (uint32_t i = 0; i != object_count; ++i)
-    {
-        ObjectState& object = objects[i];
-        const float inverse_distance = math::rsqrt(math::dot(object.position, object.position) + softening_squared);
-        const float gravity_scale = -central_gravity * inverse_distance * inverse_distance * inverse_distance * delta_seconds;
-        object.velocity += object.position * gravity_scale;
-        object.position += object.velocity * delta_seconds;
-        object_data[i].transform = math::set_translation(orientation, object.position);
-    }
-}
-
 } // namespace
 
 int main()
@@ -249,15 +171,14 @@ int main()
 
     // GPU resources
     GpuAllocation<byte> texture_heap = gpu_malloc(device, caps.texture_descriptor_stride * gbuffer_texture_count * frames_in_flight, MemoryType::texture_heap);
-    GpuAllocation<GBufferVertex> vertex_memory = gpu_malloc<GBufferVertex>(device, cube_vertex_count);
-    memcpy(vertex_memory.cpu, cube_vertices, sizeof(cube_vertices));
-    GpuAllocation<uint16_t> index_memory = gpu_malloc<uint16_t>(device, cube_index_count);
-    memcpy(index_memory.cpu, cube_indices, sizeof(cube_indices));
-    GpuAllocation<ObjectData> object_data = gpu_malloc<ObjectData>(device, size_t(object_count) * frames_in_flight);
+    GpuAllocation<ObjectData> object_data = gpu_malloc<ObjectData>(device, object_count);
+    initialize_object_data(object_data.cpu);
 
     // Shaders
-    PSO* gbuffer_pso = create_graphics_pso(device, {
-        .vertex_spirv = read_spirv(NOGRAPHICSAPI_GBUFFER_VERTEX_SPV_PATH),
+    PSO* simulation_pso = create_compute_pso(device, read_spirv(NOGRAPHICSAPI_SIMULATION_COMPUTE_SPV_PATH));
+
+    PSO* gbuffer_pso = create_mesh_pso(device, {
+        .mesh_spirv = read_spirv(NOGRAPHICSAPI_GBUFFER_MESH_SPV_PATH),
         .fragment_spirv = read_spirv(NOGRAPHICSAPI_GBUFFER_FRAGMENT_SPV_PATH),
         .color_targets = {
             {.format = Format::rgba8_unorm},
@@ -286,16 +207,13 @@ int main()
     auto previous_time = chrono::steady_clock::now();
     float rotation_angle = 0.0f;
 
-    static ObjectState object_states[object_count];
-    initialize_object_states(object_states);
-
     TimelinePoint latest_completion{.semaphore = create_timeline_semaphore(device)};
 
     while (pump_example_window(window))
     {
         const DrawableExtent extent = get_drawable_extent(device);
 
-        // Limit the application to two frames in flight (double buffered data)
+        // Limit the application to two frames in flight so double-buffered descriptors are safe to reuse
         if (latest_completion.value >= frames_in_flight)
         {
             wait_timeline({.semaphore = latest_completion.semaphore, .value = latest_completion.value - frames_in_flight + 1});
@@ -310,30 +228,30 @@ int main()
                              extent.width, extent.height);
         }
 
-        // Simulation
-        const size_t frame_slot = size_t(latest_completion.value % frames_in_flight);
-        const auto current_time = chrono::steady_clock::now();
-        float delta_seconds = chrono::duration<float>(current_time - previous_time).count();
-        previous_time = current_time;
-        rotation_angle += cube_rotation_speed * delta_seconds;
-        update_object_data(object_data.cpu + frame_slot * object_count, object_states, rotation_angle, delta_seconds);
-
-        // Render
         const SwapchainFrame frame = acquire(device);
 
         CommandBuffer* commands = begin_commands(device);
         set_texture_heap(commands, gpu_range(texture_heap));
 
-        float4x4 projection = math::perspective_rh_zo(math::pi / 3.0f, float(extent.width) / float(extent.height), 0.3f, 1500.0f);
-        projection.rows[1].y = -projection.rows[1].y;
-        float4x4 view_projection = projection * view;
+        // Simulation
+        const auto current_time = chrono::steady_clock::now();
+        const float delta_seconds = chrono::duration<float>(current_time - previous_time).count();
+        previous_time = current_time;
+
+        barrier(commands,
+            Stage::compute | Stage::mesh, Access::shader_write | Access::shader_read,
+            Stage::compute,  Access::shader_read | Access::shader_write);
+
+        bind_pso(commands, simulation_pso);
+        dispatch(commands, SimulationRoot{
+            .objects = object_data.gpu,
+            .delta_seconds = delta_seconds,
+        }, object_count / simulation_thread_count);
 
         // G-buffer
         barrier(commands,
-            Stage::fragment | Stage::depth_stencil_tests,
-            Access::shader_read | Access::depth_stencil_write,
-            Stage::color_output | Stage::depth_stencil_tests,
-            Access::color_write | Access::depth_stencil_write);
+            Stage::compute | Stage::fragment | Stage::depth_stencil_tests, Access::shader_write | Access::shader_read | Access::depth_stencil_write,
+            Stage::mesh | Stage::color_output | Stage::depth_stencil_tests, Access::shader_read | Access::color_write | Access::depth_stencil_write);
 
         begin_render_pass(commands, {
             .colors = { {
@@ -352,22 +270,28 @@ int main()
 
         bind_pso(commands, gbuffer_pso);
 
+        float4x4 projection = math::perspective_rh_zo(math::pi / 3.0f, float(extent.width) / float(extent.height), 0.3f, 1500.0f);
+        projection.rows[1].y = -projection.rows[1].y;
+        float4x4 view_projection = projection * view;
+        rotation_angle += cube_rotation_speed * delta_seconds;
+
         const GBufferRoot gbuffer_root{
-            .vertices = vertex_memory.gpu,
-            .objects = object_data.gpu + frame_slot * object_count,
+            .objects = object_data.gpu,
             .view_projection = view_projection,
+            .orientation = math::to_float3x4(
+                math::rotation_y(rotation_angle) *
+                math::rotation_x(rotation_angle * 0.5f) *
+                math::scale({.x = cube_scale, .y = cube_scale, .z = cube_scale})),
         };
 
-        draw_indexed(commands, gbuffer_root, gpu_range(index_memory), IndexType::uint16, cube_index_count, object_count);
+        draw_meshlets(commands, gbuffer_root, object_grid_width, object_grid_width);
 
         end_render_pass(commands);
 
         // Lighting
         barrier(commands,
-            Stage::color_output | Stage::depth_stencil_tests,
-            Access::color_write | Access::depth_stencil_write,
-            Stage::fragment,
-            Access::shader_read);
+            Stage::color_output | Stage::depth_stencil_tests, Access::color_write | Access::depth_stencil_write,
+            Stage::fragment, Access::shader_read);
 
         begin_render_pass(commands, {
             .colors = {{
@@ -411,6 +335,7 @@ int main()
     destroy_timeline_semaphore(latest_completion.semaphore);
     destroy_pso(deferred_lighting_pso);
     destroy_pso(gbuffer_pso);
+    destroy_pso(simulation_pso);
     destroy_render_view(gbuffer.depth_render_view);
     destroy_render_view(gbuffer.normal_roughness_render_view);
     destroy_render_view(gbuffer.albedo_render_view);
@@ -418,8 +343,6 @@ int main()
     destroy_texture(gbuffer.normal_roughness);
     destroy_texture(gbuffer.albedo);
     gpu_free(object_data);
-    gpu_free(index_memory);
-    gpu_free(vertex_memory);
     gpu_free(texture_heap);
 
     destroy_device(device);
