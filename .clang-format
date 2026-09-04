@@ -1,0 +1,6 @@
+BasedOnStyle: Microsoft
+ColumnLimit: 160
+PointerAlignment: Left
+ReferenceAlignment: Left
+SpaceAfterTemplateKeyword: false
+AllowShortCaseLabelsOnASingleLine: true

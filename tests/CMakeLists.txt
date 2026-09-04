@@ -1,0 +1,27 @@
+add_executable(test_shader_types shader_types_test.cpp)
+NoGraphicsAPI_disable_exceptions(test_shader_types)
+target_link_libraries(test_shader_types PRIVATE NoGraphicsAPI::math)
+add_test(NAME test_shader_types COMMAND test_shader_types)
+
+add_executable(test_math math_test.cpp)
+NoGraphicsAPI_disable_exceptions(test_math)
+target_link_libraries(test_math PRIVATE NoGraphicsAPI::math)
+add_test(NAME test_math COMMAND test_math)
+
+if(WIN32)
+    add_executable(test_math_win32_include math_win32_include_test.cpp)
+    NoGraphicsAPI_disable_exceptions(test_math_win32_include)
+    target_link_libraries(test_math_win32_include PRIVATE NoGraphicsAPI::math)
+    add_test(NAME test_math_win32_include COMMAND test_math_win32_include)
+endif()
+
+add_executable(test_api api_test.cpp)
+NoGraphicsAPI_disable_exceptions(test_api)
+target_link_libraries(test_api PRIVATE NoGraphicsAPI::NoGraphicsAPI)
+add_test(NAME test_api COMMAND test_api)
+
+add_executable(test_command_context command_context_test.cpp)
+NoGraphicsAPI_disable_exceptions(test_command_context)
+target_link_libraries(test_command_context PRIVATE NoGraphicsAPI::NoGraphicsAPI)
+add_test(NAME test_command_context COMMAND test_command_context)
+set_tests_properties(test_command_context PROPERTIES SKIP_RETURN_CODE 77)
