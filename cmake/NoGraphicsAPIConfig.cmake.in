@@ -1,0 +1,8 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Vulkan 1.4.357)
+
+include("${CMAKE_CURRENT_LIST_DIR}/NoGraphicsAPITargets.cmake")
+
+check_required_components(NoGraphicsAPI)

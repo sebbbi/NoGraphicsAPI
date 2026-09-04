@@ -96,7 +96,8 @@ The public memory classes retain their intent:
 - `sampler_heap` provides the logical sampler namespace described below.
 
 Buffers and textures are placed in `MTLHeap` storage. Allocation growth, alignment, and the number
-or size of backing heaps remain backend policy. Destruction invalidates the public object
+of backing heaps remain backend policy. `DeviceDesc::heap_memory_block_size` supplies the requested
+backing-block size, subject to native backend limits. Destruction invalidates the public object
 immediately, while physical storage is reused only after the last relevant timeline value has
 completed. The initial port does not add simultaneous live aliasing.
 

@@ -20,6 +20,7 @@ int main() { return 0; }
     endif()
 
     add_library(NoGraphicsAPI_math INTERFACE)
+    set_target_properties(NoGraphicsAPI_math PROPERTIES EXPORT_NAME math)
     target_compile_features(NoGraphicsAPI_math INTERFACE cxx_std_20)
     if(MSVC)
         target_compile_options(NoGraphicsAPI_math INTERFACE /arch:AVX2)

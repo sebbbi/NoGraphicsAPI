@@ -17,5 +17,5 @@ bool read_binary_file(const char* path,
 void* open_example_window(const char* title,
                           std::uint32_t width,
                           std::uint32_t height) noexcept;
-bool pump_example_window(void*& window) noexcept;
+bool pump_example_window(void* window) noexcept;
 void close_example_window(void*& window) noexcept;

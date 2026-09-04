@@ -56,12 +56,18 @@ synchronization2, scalar block layout, and the remaining core features. See
 ## GPU memory and descriptor heaps
 
 There is no public buffer handle. `GpuAllocation<T>` exposes a CPU pointer, a GPU pointer, and a byte
-size. The ordinary memory classes are:
+size. Every non-null pointer returned by `gpu_malloc()` is 16-byte aligned. The ordinary memory classes are:
 
 - `cpu_visible`: coherent device-local memory for data written by the CPU;
 - `gpu_only`: device-local memory with no CPU mapping (`cpu` is null);
 - `readback`: coherent mapped memory with host-cached memory preferred;
 - `texture_heap` and `sampler_heap`: mapped application-owned descriptor storage.
+
+`DeviceDesc::heap_memory_block_size` controls the internal backing-block size for the three ordinary
+memory classes and pooled texture memory. It defaults to 256 MiB and must be a non-zero multiple of
+16 bytes; its `uint32_t` type keeps it below 4 GiB. Application-owned `texture_heap` and
+`sampler_heap` allocations remain exact-sized and are not affected by this setting. Each ordinary
+allocation and texture memory requirement must fit one block.
 
 `GpuRange` is the non-owning GPU address/size view used by commands. The application owns allocation,
 descriptor-slot, and pointed-to data lifetimes; timeline points mark when mutable storage can be
@@ -121,6 +127,8 @@ Requirements:
 
 - CMake 3.24+, a C++20 compiler, and Vulkan SDK headers and development libraries version 1.4.357
   or newer;
+- Git and network access during initial configuration to fetch the pinned OffsetAllocator dependency,
+  unless `FETCHCONTENT_SOURCE_DIR_OFFSETALLOCATOR` points to a local checkout;
 - a little-endian x86-64 target with AVX2 and FMA;
 - a Vulkan 1.4 loader and device exposing the required descriptor-heap, device-address-command,
   untyped-pointer, and mesh extensions above, plus their required BDA, synchronization, and
@@ -130,11 +138,29 @@ Requirements:
 - Slang 2026.14.1+ and SPIRV-Tools 2026.3+ when building the examples.
 
 MSVC and clang-cl are supported on Windows. GNU and Clang can build the headless library on other
-platforms; configure with `-DNOGRAPHICSAPI_BUILD_EXAMPLES=OFF`. MinGW, 32-bit x86, and ARM targets are
-not supported.
+platforms. MinGW, 32-bit x86, and ARM targets are not supported.
+
+The default configuration builds only the library. Examples and tests are opt-in so embedding
+NoGraphicsAPI with `add_subdirectory()` or FetchContent does not add development targets:
 
 ```sh
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+cmake --install build --prefix path/to/install
+```
+
+Installed packages provide the `NoGraphicsAPI::NoGraphicsAPI` target:
+
+```cmake
+find_package(NoGraphicsAPI CONFIG REQUIRED)
+target_link_libraries(my_application PRIVATE NoGraphicsAPI::NoGraphicsAPI)
+```
+
+For repository development on Windows, enable the examples and tests explicitly. Building examples
+requires the Slang and SPIR-V Tools versions listed above.
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNOGRAPHICSAPI_BUILD_EXAMPLES=ON -DNOGRAPHICSAPI_BUILD_TESTS=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
@@ -148,7 +174,8 @@ The Windows examples use the normal swapchain path:
   multi-pass workload with pointer-based scene data, barriers between passes, and timeline-managed
   CPU/GPU overlap.
 
-They can be run from their corresponding directories under `build/examples`.
+They can be run from their corresponding directories under `build/examples` when
+`NOGRAPHICSAPI_BUILD_EXAMPLES` is enabled.
 
 ## Current scope
 
@@ -156,10 +183,12 @@ Implemented today: graphics, mesh, and compute PSOs; direct and indirect work; G
 application-owned descriptor heaps; common texture types and views; dynamic rendering; global
 barriers; timeline submission; deferred destruction; and Win32 presentation.
 
-This is a deliberately single-threaded, single-queue prototype. Ray tracing, task shaders, sparse
-memory, device-generated command graphs beyond the existing indirect operations, pipeline caching,
-MSAA, non-Win32 presentation, and a Metal backend are outside the current implementation. The
-public header remains the source of truth for the exact API surface.
+This is a deliberately single-threaded, single-queue prototype and a low-level thin wrapper, not a
+validation layer. API preconditions are generally enforced by debug assertions; use the Vulkan
+validation layer during development. Ray tracing, task shaders, sparse memory, device-generated
+command graphs beyond the existing indirect operations, pipeline caching, MSAA, non-Win32
+presentation, and a Metal backend are outside the current implementation. The public header remains
+the source of truth for the exact API surface.
 
 Further reading:
 
@@ -167,3 +196,10 @@ Further reading:
 - [Vulkan extension and command mapping](docs/vulkan-support.md)
 - [Slang shader contract and root ABI](docs/slang.md)
 - [Proposed Metal 4 port](docs/metal-porting.md)
+
+## License
+
+NoGraphicsAPI is distributed under the [MIT License](LICENSE). The pinned OffsetAllocator dependency
+is also MIT-licensed. The cube example's texture is derived from Vulkan-Tools and is redistributed
+under Apache-2.0. See [third-party notices](THIRD_PARTY_NOTICES.md) for complete attribution and
+license details.

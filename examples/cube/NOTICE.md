@@ -1,15 +1,13 @@
 # Third-party notice
 
-This example adapts the cube mesh, UV coordinates, camera/presentation
-parameters, and shader lighting from the Vulkan-Tools vkcube sample at tag
-`vulkan-sdk-1.4.357.0`. `lunarg_logo_256x256.rgba8` is a raw RGBA8 expansion of
-that sample's texture from `cube/lunarg.ppm.h`:
+`lunarg_logo_256x256.rgba8` is adapted from the Vulkan-Tools vkcube sample at
+tag `vulkan-sdk-1.4.357.0`. It is a raw RGBA8 expansion of the texture from
+`cube/lunarg.ppm.h`:
 
 https://github.com/KhronosGroup/Vulkan-Tools/blob/vulkan-sdk-1.4.357.0/cube/lunarg.ppm.h
 
 The RGB image content is unchanged and every added alpha byte is 255. Pixels are
-stored from top to bottom in tightly packed row-major order. The C++ and shader
-code was rewritten for the NoGraphicsAPI API and Slang.
+stored from top to bottom in tightly packed row-major order.
 
 The upstream Vulkan cube sample carries these notices:
 

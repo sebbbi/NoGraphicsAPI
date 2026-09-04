@@ -46,12 +46,18 @@ The backend requires device-local host-visible coherent memory for mapped alloca
 descriptor heaps, plus non-host-visible device-local memory for GPU-only allocations and textures.
 It deliberately has no host-only or non-coherent fallback path.
 
+`DeviceDesc::heap_memory_block_size` selects the internal Vulkan buffer and image-memory block size.
+Physical-device selection requires both ordinary memory heaps, `maxBufferSize`, and
+`maxMemoryAllocationSize` to accommodate it. The size must be a non-zero multiple of 16 bytes.
+Texture memory is suballocated from these blocks.
+
 ## GPU pointers
 
 GPU pointers are the central departure from conventional graphics APIs. `gpu_malloc<T>()` returns a
 typed `GpuAllocation<T>` with a CPU mapping when the selected memory class is mapped and a `gpu`
-pointer containing the Vulkan device address. The same pointer type can appear in a C++ root
-structure and its Slang counterpart:
+pointer containing the Vulkan device address. Every non-null returned pointer is 16-byte aligned;
+types requiring stronger alignment must be allocated by the application. The same pointer type can
+appear in a C++ root structure and its Slang counterpart:
 
 ```cpp
 struct Root
@@ -81,8 +87,8 @@ allocation record. Buffers therefore never need descriptor slots.
 | Buffer and texture copies | `vkCmdCopyMemoryKHR`, `vkCmdCopyMemoryToImageKHR`, and `vkCmdCopyImageToMemoryKHR`. |
 
 Address commands use fully bound storage-buffer ranges. Interior ranges are valid, so applications
-can suballocate and pass only the relevant byte interval. Alignment, bounds, and lifetime remain
-the caller's contract.
+can suballocate and pass only the relevant byte interval. Interior-pointer alignment, bounds, and
+lifetime remain the caller's contract.
 
 Conventional vertex-input bindings are absent. Vertex shaders normally load through a typed pointer
 in root data; indexed draws bind only the index address range required by Vulkan.
@@ -98,9 +104,9 @@ directly at the selected CPU address. `set_texture_heap()` and `set_sampler_heap
 corresponding GPU ranges explicitly. Shaders then index Slang's `ResourceDescriptorHeap` and
 `SamplerDescriptorHeap`; heap-using shaders compile for [`SPV_EXT_descriptor_heap`][spirv-heap].
 
-Texture views can select a compatible format and mip/layer range. Sampler descriptors are encoded
-directly, so there is no public sampler object. Buffers use GPU pointers instead of resource-heap
-entries.
+Texture views can select a compatible format only when `TextureDesc::mutable_format` is enabled;
+they can always select a mip/layer range. Sampler descriptors are encoded directly, so there is no
+public sampler object. Buffers use GPU pointers instead of resource-heap entries.
 
 The application owns descriptor-slot reuse. A slot cannot be overwritten while in-flight work may
 read it. This is intentionally the same explicit lifetime model used for mapped allocations.

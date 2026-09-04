@@ -1,6 +1,3 @@
-// Adapted from Vulkan-Tools' cube.vert and cube.frag and modified for Slang
-// and NoGraphicsAPI. See NOTICE.md and LICENSE-Apache-2.0.txt.
-
 #include "cube_shared.h"
 
 [[vk::push_constant]] ConstantBuffer<CubeRootArguments> root;

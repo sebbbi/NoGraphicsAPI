@@ -29,10 +29,10 @@ int main()
     printf("Using %s\n", get_device_caps(device).device_name);
 
     PSO* triangle_pso = create_graphics_pso(device, {
-            .vertex_spirv = read_spirv(NOGRAPHICSAPI_VERTEX_SPV_PATH),
-            .fragment_spirv = read_spirv(NOGRAPHICSAPI_FRAGMENT_SPV_PATH),
-            .color_targets = { { .format = Format::bgra8_srgb } }
-        });
+        .vertex_spirv = read_spirv(NOGRAPHICSAPI_VERTEX_SPV_PATH),
+        .fragment_spirv = read_spirv(NOGRAPHICSAPI_FRAGMENT_SPV_PATH),
+        .color_targets = { { .format = Format::bgra8_srgb } }
+    });
 
     TimelinePoint latest_completion{ .semaphore = create_timeline_semaphore(device) };
 

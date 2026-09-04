@@ -38,7 +38,6 @@ using std::uintptr_t;
 namespace
 {
 
-constexpr uint32_t allocation_heap_size = 256u * 1024u * 1024u;
 constexpr uint32_t max_device_extensions = 512;
 constexpr uint32_t max_instance_extensions = 256;
 constexpr uint32_t max_instance_layers = 64;
@@ -49,8 +48,8 @@ constexpr uint32_t image_barrier_batch_size = 64;
 constexpr uint32_t initial_command_context_count = 2;
 constexpr uint32_t max_swapchain_images = 8;
 constexpr VkPresentModeKHR swapchain_present_mode = VK_PRESENT_MODE_FIFO_KHR;
-constexpr uint32_t max_deferred_deletions = 4096;
 constexpr uint32_t max_heap_suballocations = 128u * 1024u;
+constexpr uint32_t gpu_allocation_alignment = 16;
 #if !defined(NDEBUG)
 constexpr uint32_t live_allocation_word_count =
     (max_heap_suballocations + 63u) / 64u;
@@ -64,6 +63,11 @@ static_assert(
     sizeof(uint32_t));
 static_assert(max_heap_suballocations <
               OffsetAllocator::Allocation::NO_SPACE);
+
+constexpr uint32_t allocation_unit_count(VkDeviceSize size) noexcept
+{
+    return static_cast<uint32_t>((size - 1) / gpu_allocation_alignment + 1);
+}
 
 [[nodiscard]] Error error_from_vk(VkResult result) noexcept
 {
@@ -189,7 +193,7 @@ VkFormat to_vk(Format format)
     case Format::rgba8_srgb: return VK_FORMAT_R8G8B8A8_SRGB;
     case Format::bgra8_srgb: return VK_FORMAT_B8G8R8A8_SRGB;
     case Format::rgba4_unorm: return VK_FORMAT_R4G4B4A4_UNORM_PACK16;
-    case Format::r5g5b5a1_unorm: return VK_FORMAT_A1R5G5B5_UNORM_PACK16;
+    case Format::r5g5b5a1_unorm: return VK_FORMAT_R5G5B5A1_UNORM_PACK16;
     case Format::r5g6b5_unorm: return VK_FORMAT_R5G6B5_UNORM_PACK16;
     case Format::r8_unorm: return VK_FORMAT_R8_UNORM;
     case Format::rg8_unorm: return VK_FORMAT_R8G8_UNORM;
@@ -809,7 +813,7 @@ bool is_usable_memory_type(const VkPhysicalDeviceMemoryProperties& properties,
             VK_MEMORY_HEAP_TILE_MEMORY_BIT_QCOM) == 0;
 }
 
-bool has_cpu_visible_device_memory(const VkPhysicalDeviceMemoryProperties& properties)
+bool has_cpu_visible_device_memory(const VkPhysicalDeviceMemoryProperties& properties, uint32_t heap_memory_block_size)
 {
     for (uint32_t i = 0; i < properties.memoryTypeCount; ++i)
     {
@@ -824,7 +828,7 @@ bool has_cpu_visible_device_memory(const VkPhysicalDeviceMemoryProperties& prope
         if (type.heapIndex < properties.memoryHeapCount &&
             (properties.memoryHeaps[type.heapIndex].flags &
              VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0 &&
-            properties.memoryHeaps[type.heapIndex].size >= allocation_heap_size)
+            properties.memoryHeaps[type.heapIndex].size >= heap_memory_block_size)
         {
             return true;
         }
@@ -832,7 +836,7 @@ bool has_cpu_visible_device_memory(const VkPhysicalDeviceMemoryProperties& prope
     return false;
 }
 
-bool has_gpu_only_device_memory(const VkPhysicalDeviceMemoryProperties& properties)
+bool has_gpu_only_device_memory(const VkPhysicalDeviceMemoryProperties& properties, uint32_t heap_memory_block_size)
 {
     for (uint32_t i = 0; i < properties.memoryTypeCount; ++i)
     {
@@ -845,7 +849,7 @@ bool has_gpu_only_device_memory(const VkPhysicalDeviceMemoryProperties& properti
             type.heapIndex < properties.memoryHeapCount &&
             (properties.memoryHeaps[type.heapIndex].flags &
              VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0 &&
-            properties.memoryHeaps[type.heapIndex].size >= allocation_heap_size)
+            properties.memoryHeaps[type.heapIndex].size >= heap_memory_block_size)
         {
             return true;
         }
@@ -887,7 +891,6 @@ struct BackingBuffer
     void* mapped = nullptr;
     VkDeviceAddress address = 0;
     VkDeviceSize size = 0;
-    VkDeviceSize allocation_size = 0;
 };
 
 struct AllocationHeap;
@@ -946,16 +949,23 @@ struct DeletionQueue
     void push(uint64_t retire_value, uint64_t payload,
               const Callback& callback) noexcept
     {
-        assert(count < max_deferred_deletions);
+        if (count == entries.size())
+        {
+            const size_t old_size = entries.size();
+            entries.resize(old_size == 0 ? 1 : old_size * 2);
+            for (size_t index = 0; index < first; ++index)
+            {
+                entries[old_size + index] = entries[index];
+                entries[index] = {};
+            }
+        }
         if (count != 0)
         {
-            const uint32_t back =
-                (first + count - 1) % max_deferred_deletions;
+            const size_t back = (first + count - 1) % entries.size();
             assert(entries[back].retire_value <= retire_value &&
                    "deferred deletion retire values must be monotonic");
         }
-        DeferredDeletion& entry =
-            entries[(first + count) % max_deferred_deletions];
+        DeferredDeletion& entry = entries[(first + count) % entries.size()];
         entry.retire_value = retire_value;
         entry.payload = payload;
         entry.callback.set(callback);
@@ -972,19 +982,16 @@ struct DeletionQueue
             entry.callback.clear();
             entry.retire_value = 0;
             entry.payload = 0;
-            first = (first + 1) % max_deferred_deletions;
+            first = (first + 1) % entries.size();
             --count;
         }
+        if (count == 0)
+            first = 0;
     }
 
-    [[nodiscard]] bool full() const noexcept
-    {
-        return count == max_deferred_deletions;
-    }
-
-    DeferredDeletion entries[max_deferred_deletions]{};
-    uint32_t first = 0;
-    uint32_t count = 0;
+    std::vector<DeferredDeletion> entries;
+    size_t first = 0;
+    size_t count = 0;
 };
 
 struct RetiredSwapchain
@@ -1085,6 +1092,7 @@ struct CommandBuffer
     VkCommandBuffer command_buffer = VK_NULL_HANDLE;
     bool recording = false;
     bool rendering = false;
+#if !defined(NDEBUG)
     Format rendering_color_formats[max_color_attachments]{};
     uint32_t rendering_color_count = 0;
     Format rendering_depth_format = Format::undefined;
@@ -1095,6 +1103,7 @@ struct CommandBuffer
     bool graphics_compatible = false;
     const PSO* bound_graphics = nullptr;
     const PSO* bound_compute = nullptr;
+#endif
     Swapchain* swapchain = nullptr;
     detail::TextureInitializationList pending_texture_initializations;
 };
@@ -1143,6 +1152,7 @@ struct Device
     VkPhysicalDeviceMeshShaderPropertiesEXT mesh_properties{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT};
     uint64_t max_timeline_value_difference = 0;
+    uint32_t heap_memory_block_size = 0;
     detail::DeviceFunctions fn;
     DeviceCaps caps;
     VkFormatFeatureFlags2 format_features[format_count]{};
@@ -1273,20 +1283,14 @@ struct Device
 
         VkMemoryRequirements requirements{};
         vkGetBufferMemoryRequirements(device, result.buffer, &requirements);
-        result.allocation_size = requirements.size;
         uint32_t memory_type = 0;
         const bool has_memory_type = find_memory_type(
             requirements.memoryTypeBits, required, preferred,
             requirements.size, memory_type, forbidden);
         assert(has_memory_type);
 
-        const VkMemoryDedicatedAllocateInfo dedicated_info{
-            .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
-            .buffer = result.buffer,
-        };
         const VkMemoryAllocateFlagsInfo flags_info{
             .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,
-            .pNext = &dedicated_info,
             .flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT,
         };
         const VkMemoryAllocateInfo allocate_info{
@@ -1309,25 +1313,22 @@ struct Device
             .buffer = result.buffer,
         };
         result.address = vkGetBufferDeviceAddress(device, &address_info);
-        assert(result.address != 0);
+        const bool valid_address = result.address != 0 && result.address % gpu_allocation_alignment == 0 &&
+                                   (!result.mapped || reinterpret_cast<uintptr_t>(result.mapped) % gpu_allocation_alignment == 0);
+        assert(valid_address && "GPU allocation backing has an invalid address or alignment");
+        if (!valid_address)
+            std::abort();
         output = result;
     }
 
-    [[nodiscard]] GpuAllocation<> allocate_gpu(
-        VkDeviceSize size,
-        MemoryType memory,
-        VkDeviceSize alignment) noexcept;
+    [[nodiscard]] GpuAllocation<> allocate_gpu(VkDeviceSize size, MemoryType memory) noexcept;
     [[nodiscard]] detail::AllocationHeap* create_allocation_heap(
         MemoryType memory) noexcept;
     [[nodiscard]] bool try_allocate_gpu(detail::AllocationHeap& heap,
                                         VkDeviceSize size,
-                                        uint32_t padded_size,
-                                        VkDeviceSize alignment,
+                                        uint32_t unit_count,
                                         GpuAllocation<>& output) noexcept;
-    [[nodiscard]] GpuAllocation<> allocate_descriptor_heap(
-        VkDeviceSize size,
-        MemoryType memory,
-        VkDeviceSize alignment) noexcept;
+    [[nodiscard]] GpuAllocation<> allocate_descriptor_heap(VkDeviceSize size, MemoryType memory) noexcept;
     void release_allocation(const GpuAllocation<>& allocation) noexcept;
     [[nodiscard]] Error create_command_contexts() noexcept;
     [[nodiscard]] Error create_command_context(detail::CommandContext& context) noexcept;
@@ -1346,12 +1347,6 @@ struct Device
         assert(active_command_buffers == 0 &&
                "resource destruction is not allowed while a command buffer is recording");
         poll_command_retirement();
-        if (deletion_queue.full())
-        {
-            assert(false &&
-                   "deferred deletion queue capacity exhausted");
-            std::abort();
-        }
         deletion_queue.push(command_retirement_value, payload, callback);
         deletion_queue.collect(*this, completed_command_retirement);
     }
@@ -1373,7 +1368,7 @@ struct ImageHeap
     ImageHeap(Device* owner, uint32_t type)
         : state(owner),
           memory_type(type),
-          offsets(allocation_heap_size, max_heap_suballocations)
+          offsets(owner->heap_memory_block_size / gpu_allocation_alignment, max_heap_suballocations)
     {}
 
     ~ImageHeap()
@@ -1399,7 +1394,7 @@ struct AllocationHeap
           },
           state(device),
           memory(type),
-          offsets(allocation_heap_size, max_heap_suballocations)
+          offsets(device->heap_memory_block_size / gpu_allocation_alignment, max_heap_suballocations)
     {}
 
     ~AllocationHeap()
@@ -1852,7 +1847,7 @@ detail::AllocationHeap* Device::create_allocation_heap(MemoryType memory) noexce
     detail::AllocationHeap* heap = new detail::AllocationHeap(this, memory);
     create_backing_buffer(
         heap->backing,
-        allocation_heap_size,
+        heap_memory_block_size,
         universal_buffer_usage,
         required,
         preferred,
@@ -1862,42 +1857,30 @@ detail::AllocationHeap* Device::create_allocation_heap(MemoryType memory) noexce
 
 bool Device::try_allocate_gpu(detail::AllocationHeap& heap,
                               VkDeviceSize size,
-                              uint32_t padded_size,
-                              VkDeviceSize alignment,
+                              uint32_t unit_count,
                               GpuAllocation<>& output) noexcept
 {
-    if (heap.backing.mapped)
-    {
-        const uintptr_t host_base =
-            reinterpret_cast<uintptr_t>(heap.backing.mapped);
-        assert((host_base % alignment) == (heap.backing.address % alignment));
-    }
-
-    const OffsetAllocator::Allocation token = heap.offsets.allocate(padded_size);
+    const OffsetAllocator::Allocation token = heap.offsets.allocate(unit_count);
     if (token.offset == OffsetAllocator::Allocation::NO_SPACE)
         return false;
+    const VkDeviceSize offset = static_cast<VkDeviceSize>(token.offset) * gpu_allocation_alignment;
     assert(token.metadata < max_heap_suballocations &&
-           token.offset < allocation_heap_size &&
+           offset < heap.backing.size &&
            "OffsetAllocator returned invalid allocation metadata");
-
-    const VkDeviceAddress raw_address = heap.backing.address + token.offset;
-    const VkDeviceAddress gpu_address = align_up(raw_address, alignment);
-    const VkDeviceSize offset = gpu_address - heap.backing.address;
-    assert(offset <= allocation_heap_size &&
-           size <= allocation_heap_size - offset &&
-           "OffsetAllocator returned an invalid padded range");
+    assert(offset <= heap.backing.size &&
+           size <= heap.backing.size - offset &&
+           "OffsetAllocator returned an invalid allocation range");
 
     byte* cpu_pointer = nullptr;
     if (heap.backing.mapped)
     {
         const uintptr_t host_address =
             reinterpret_cast<uintptr_t>(heap.backing.mapped) + offset;
-        assert(host_address % alignment == 0 &&
-               "mapped GPU allocation does not satisfy its requested alignment");
+        assert(host_address % gpu_allocation_alignment == 0 && "mapped GPU allocation is not 16-byte aligned");
         cpu_pointer = reinterpret_cast<byte*>(host_address);
     }
-    assert(gpu_address % alignment == 0 &&
-           "GPU allocation does not satisfy its requested alignment");
+    const VkDeviceAddress gpu_address = heap.backing.address + offset;
+    assert(gpu_address % gpu_allocation_alignment == 0 && "GPU allocation is not 16-byte aligned");
 
     const uint64_t raw_token =
         (static_cast<uint64_t>(token.metadata) << 32) |
@@ -1920,12 +1903,15 @@ bool Device::try_allocate_gpu(detail::AllocationHeap& heap,
     return true;
 }
 
-GpuAllocation<> Device::allocate_gpu(VkDeviceSize size, MemoryType memory, VkDeviceSize alignment) noexcept
+GpuAllocation<> Device::allocate_gpu(VkDeviceSize size, MemoryType memory) noexcept
 {
-    const bool request_fits = size <= allocation_heap_size && alignment - 1 <= allocation_heap_size - size;
-    assert(request_fits && "gpu_malloc request including alignment padding exceeds 256 MiB");
+    if (size > heap_memory_block_size)
+    {
+        assert(false && "gpu_malloc request exceeds the configured heap memory block size");
+        return {};
+    }
 
-    const auto padded_size = static_cast<uint32_t>(size + alignment - 1);
+    const uint32_t unit_count = allocation_unit_count(size);
     const auto pool_index = memory_pool_index(memory);
     detail::AllocationHeap*& pool = allocation_heaps[pool_index];
     detail::AllocationHeap*& active = active_allocation_heaps[pool_index];
@@ -1933,7 +1919,7 @@ GpuAllocation<> Device::allocate_gpu(VkDeviceSize size, MemoryType memory, VkDev
     if (active)
     {
         GpuAllocation<> allocation{};
-        if (try_allocate_gpu(*active, size, padded_size, alignment, allocation))
+        if (try_allocate_gpu(*active, size, unit_count, allocation))
         {
             return allocation;
         }
@@ -1943,7 +1929,7 @@ GpuAllocation<> Device::allocate_gpu(VkDeviceSize size, MemoryType memory, VkDev
         if (heap == active)
             continue;
         GpuAllocation<> allocation{};
-        if (try_allocate_gpu(*heap, size, padded_size, alignment, allocation))
+        if (try_allocate_gpu(*heap, size, unit_count, allocation))
         {
             active = heap;
             return allocation;
@@ -1951,17 +1937,19 @@ GpuAllocation<> Device::allocate_gpu(VkDeviceSize size, MemoryType memory, VkDev
     }
 
     detail::AllocationHeap* heap = create_allocation_heap(memory);
+    GpuAllocation<> allocation{};
+    if (!try_allocate_gpu(*heap, size, unit_count, allocation))
+    {
+        delete heap;
+        return {};
+    }
     heap->next = pool;
     pool = heap;
     active = heap;
-    GpuAllocation<> allocation{};
-    if (try_allocate_gpu(*heap, size, padded_size, alignment, allocation))
-        return allocation;
-    assert(false && "new GPU allocation heap could not satisfy its first allocation");
-    std::abort();
+    return allocation;
 }
 
-GpuAllocation<> Device::allocate_descriptor_heap(VkDeviceSize size, MemoryType memory, VkDeviceSize alignment) noexcept
+GpuAllocation<> Device::allocate_descriptor_heap(VkDeviceSize size, MemoryType memory) noexcept
 {
     assert(memory == MemoryType::texture_heap || memory == MemoryType::sampler_heap);
     const bool texture_heap = memory == MemoryType::texture_heap;
@@ -1982,7 +1970,7 @@ GpuAllocation<> Device::allocate_descriptor_heap(VkDeviceSize size, MemoryType m
     assert(reserved_offset <= maximum_size);
     assert(reserved_size <= maximum_size - reserved_offset);
     const auto bind_size = reserved_offset + reserved_size;
-    const auto allocation_alignment = alignment > heap_alignment ? alignment : heap_alignment;
+    const auto allocation_alignment = heap_alignment > gpu_allocation_alignment ? heap_alignment : gpu_allocation_alignment;
     const auto alignment_padding = allocation_alignment - 1;
     assert(bind_size <= vulkan13_properties.maxBufferSize);
     assert(alignment_padding <= vulkan13_properties.maxBufferSize - bind_size);
@@ -1998,7 +1986,8 @@ GpuAllocation<> Device::allocate_descriptor_heap(VkDeviceSize size, MemoryType m
     const auto cpu_address = reinterpret_cast<uintptr_t>(allocation->backing.mapped) + allocation_offset;
     assert(allocation->backing.mapped);
     assert(gpu_address % heap_alignment == 0);
-    assert(gpu_address % alignment == 0);
+    assert(gpu_address % gpu_allocation_alignment == 0);
+    assert(cpu_address % gpu_allocation_alignment == 0);
     assert(allocation_offset <= allocation->backing.size);
     assert(bind_size <= allocation->backing.size - allocation_offset);
 
@@ -2080,8 +2069,9 @@ void Device::release_allocation(const GpuAllocation<>& allocation) noexcept
         .metadata = static_cast<OffsetAllocator::NodeIndex>(raw_token >> 32),
     };
 #if !defined(NDEBUG)
+    const VkDeviceSize offset = static_cast<VkDeviceSize>(offset_allocation.offset) * gpu_allocation_alignment;
     assert(offset_allocation.offset != OffsetAllocator::Allocation::NO_SPACE &&
-           offset_allocation.offset < allocation_heap_size &&
+           offset < heap->backing.size &&
            offset_allocation.metadata < max_heap_suballocations &&
            "gpu_free received an invalid allocation token");
     const uint32_t live_word = offset_allocation.metadata / 64u;
@@ -2090,28 +2080,11 @@ void Device::release_allocation(const GpuAllocation<>& allocation) noexcept
     assert((heap->live_allocations[live_word] & live_bit) != 0 &&
            "gpu_free received an allocation that is not live");
 
-    const VkDeviceSize padded_size =
-        heap->offsets.allocationSize(offset_allocation);
-    const bool valid_size =
-        allocation.size != 0 && allocation.size <= padded_size;
-    const VkDeviceSize alignment = valid_size
-        ? padded_size - allocation.size + 1
-        : 0;
-    const bool valid_alignment =
-        alignment != 0 && (alignment & (alignment - 1)) == 0;
-    const VkDeviceAddress raw_address =
-        heap->backing.address + offset_allocation.offset;
-    const VkDeviceAddress expected_address = valid_alignment
-        ? align_up(raw_address, alignment)
-        : 0;
-    const bool valid_address = valid_alignment &&
-        expected_address >= heap->backing.address &&
-        expected_address - heap->backing.address <= heap->backing.size &&
-        allocation.size <=
-            heap->backing.size -
-                (expected_address - heap->backing.address) &&
-        expected_address == static_cast<VkDeviceAddress>(
-            reinterpret_cast<uintptr_t>(allocation.gpu));
+    const uint32_t unit_count = heap->offsets.allocationSize(offset_allocation);
+    const bool valid_size = allocation.size != 0 && allocation.size <= heap->backing.size && allocation_unit_count(allocation.size) == unit_count;
+    const VkDeviceAddress expected_address = heap->backing.address + offset;
+    const bool valid_address = valid_size && offset <= heap->backing.size && allocation.size <= heap->backing.size - offset &&
+                               expected_address == static_cast<VkDeviceAddress>(reinterpret_cast<uintptr_t>(allocation.gpu));
     byte* expected_cpu = nullptr;
     if (valid_address && heap->backing.mapped)
     {
@@ -2145,7 +2118,6 @@ struct Texture
 {
     Device* state = nullptr;
     VkImage image = VK_NULL_HANDLE;
-    VkDeviceMemory dedicated_memory = VK_NULL_HANDLE;
     detail::ImageHeap* heap = nullptr;
     OffsetAllocator::Allocation heap_allocation{};
     uint32_t width = 0;
@@ -2184,8 +2156,6 @@ struct Texture
             heap->offsets.free(heap_allocation);
             state->active_image_heaps[heap->memory_type] = heap;
         }
-        if (dedicated_memory)
-            state->free_memory(dedicated_memory);
     }
 };
 
@@ -2238,11 +2208,13 @@ struct PSO
     Device* state = nullptr;
     VkPipeline pso = VK_NULL_HANDLE;
     VkPipelineBindPoint bind_point = VK_PIPELINE_BIND_POINT_GRAPHICS;
+#if !defined(NDEBUG)
     Format color_formats[max_color_attachments]{};
     uint32_t color_count = 0;
     Format depth_format = Format::undefined;
     Format stencil_format = Format::undefined;
     Kind kind = Kind::vertex_graphics;
+#endif
 
     ~PSO()
     {
@@ -2433,6 +2405,8 @@ struct Candidate
     bool unified_image_layouts = false;
     VkPhysicalDeviceDescriptorHeapPropertiesEXT heap_properties{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_PROPERTIES_EXT};
+    VkPhysicalDeviceVulkan11Properties vulkan11_properties{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES};
     VkPhysicalDeviceVulkan12Properties vulkan12_properties{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES};
     VkPhysicalDeviceVulkan13Properties vulkan13_properties{
@@ -2443,6 +2417,7 @@ struct Candidate
 
 Error inspect_candidate(VkPhysicalDevice physical_device,
                         VkSurfaceKHR surface,
+                        uint32_t heap_memory_block_size,
                         Candidate& output) noexcept
 {
     VkPhysicalDeviceProperties properties{};
@@ -2481,9 +2456,9 @@ Error inspect_candidate(VkPhysicalDevice physical_device,
 
     VkPhysicalDeviceMemoryProperties memory_properties{};
     vkGetPhysicalDeviceMemoryProperties(physical_device, &memory_properties);
-    if (!has_cpu_visible_device_memory(memory_properties))
+    if (!has_cpu_visible_device_memory(memory_properties, heap_memory_block_size))
         return Error::unsupported;
-    if (!has_gpu_only_device_memory(memory_properties))
+    if (!has_gpu_only_device_memory(memory_properties, heap_memory_block_size))
         return Error::unsupported;
 
     QueriedFeatures features(
@@ -2565,7 +2540,8 @@ Error inspect_candidate(VkPhysicalDevice physical_device,
             features.unified_image_layouts.unifiedImageLayouts == VK_TRUE,
     };
 
-    result.heap_properties.pNext = &result.vulkan12_properties;
+    result.heap_properties.pNext = &result.vulkan11_properties;
+    result.vulkan11_properties.pNext = &result.vulkan12_properties;
     result.vulkan12_properties.pNext = &result.vulkan13_properties;
     result.vulkan13_properties.pNext = &result.mesh_properties;
     VkPhysicalDeviceProperties2 properties2{
@@ -2574,6 +2550,7 @@ Error inspect_candidate(VkPhysicalDevice physical_device,
     };
     vkGetPhysicalDeviceProperties2(physical_device, &properties2);
     result.heap_properties.pNext = nullptr;
+    result.vulkan11_properties.pNext = nullptr;
     result.vulkan12_properties.pNext = nullptr;
     result.vulkan13_properties.pNext = nullptr;
     const auto& heap = result.heap_properties;
@@ -2594,7 +2571,8 @@ Error inspect_candidate(VkPhysicalDevice physical_device,
         heap.samplerDescriptorSize != 0 &&
         heap.minResourceHeapReservedRange <= heap.maxResourceHeapSize &&
         heap.minSamplerHeapReservedRange <= heap.maxSamplerHeapSize;
-    if (result.vulkan13_properties.maxBufferSize < allocation_heap_size ||
+    if (result.vulkan11_properties.maxMemoryAllocationSize < heap_memory_block_size ||
+        result.vulkan13_properties.maxBufferSize < heap_memory_block_size ||
         !valid_heap_properties)
         return Error::unsupported;
     output = result;
@@ -2641,9 +2619,11 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept;
 DeviceInit create_device(const DeviceDesc& desc) noexcept
 {
     const bool presentation = desc.window != nullptr;
-    const bool valid_desc = desc.desired_swapchain_image_count != 0 && desc.desired_swapchain_image_count <= max_swapchain_images &&
+    const bool valid_desc = desc.heap_memory_block_size != 0 && desc.heap_memory_block_size % gpu_allocation_alignment == 0 &&
+                            desc.desired_swapchain_image_count != 0 &&
+                            desc.desired_swapchain_image_count <= max_swapchain_images &&
                             (presentation ? is_color_format(desc.swapchain_format) : desc.swapchain_format == Format::undefined);
-    assert(valid_desc && "create_device requires a swapchain image count in [1, 8] and a color "
+    assert(valid_desc && "create_device requires a non-zero 16-byte-multiple heap memory block size, a swapchain image count in [1, 8], and a color "
                          "swapchain format exactly when a window is supplied");
     if (!valid_desc)
         return {.error = Error::unsupported};
@@ -2664,6 +2644,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         };
 
     auto* state = new Device;
+    state->heap_memory_block_size = desc.heap_memory_block_size;
     state->present_context_count = presentation ? desc.desired_swapchain_image_count : 0;
     VkExtensionProperties instance_extensions[max_instance_extensions]{};
     uint32_t instance_extension_count = 0;
@@ -2802,8 +2783,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     {
         const VkPhysicalDevice physical_device = physical_devices[index];
         Candidate candidate{};
-        error = inspect_candidate(
-            physical_device, state->surface, candidate);
+        error = inspect_candidate(physical_device, state->surface, state->heap_memory_block_size, candidate);
         if (error == Error::unsupported)
             continue;
         if (error != Error::none)
@@ -3132,21 +3112,18 @@ void wait_timeline(TimelinePoint point) noexcept
     semaphore->state->poll_command_retirement();
 }
 
-GpuAllocation<> gpu_malloc(Device* device, uint64_t byte_count, MemoryType memory,
-                           uint64_t alignment) noexcept
+GpuAllocation<> gpu_malloc(Device* device, uint64_t byte_count, MemoryType memory) noexcept
 {
     assert(device && "gpu_malloc called with a null device");
     assert(byte_count != 0 && "gpu_malloc byte count must be non-zero");
-    assert(alignment != 0 && (alignment & (alignment - 1)) == 0 &&
-           "gpu_malloc alignment must be a non-zero power of two");
     device->poll_command_retirement();
     switch (memory)
     {
     case MemoryType::cpu_visible:
     case MemoryType::gpu_only:
-    case MemoryType::readback: return device->allocate_gpu(byte_count, memory, alignment);
+    case MemoryType::readback: return device->allocate_gpu(byte_count, memory);
     case MemoryType::texture_heap:
-    case MemoryType::sampler_heap: return device->allocate_descriptor_heap(byte_count, memory, alignment);
+    case MemoryType::sampler_heap: return device->allocate_descriptor_heap(byte_count, memory);
     default: assert(false && "gpu_malloc received an invalid memory type"); std::abort();
     }
 }
@@ -3484,23 +3461,39 @@ bool try_suballocate_image(Device& device,
                            detail::ImageHeap& heap,
                            uint32_t memory_type,
                            const VkMemoryRequirements& requirements,
-                           uint32_t padded_size) noexcept
+                           uint32_t unit_count,
+                           VkDeviceSize padded_unit_count) noexcept
 {
     if (heap.memory_type != memory_type)
         return false;
-    const OffsetAllocator::Allocation token = heap.offsets.allocate(padded_size);
-    if (token.offset == OffsetAllocator::Allocation::NO_SPACE)
-        return false;
-    const VkDeviceSize memory_offset = align_up(
-        static_cast<VkDeviceSize>(token.offset), requirements.alignment);
-    const bool valid_range = memory_offset <= allocation_heap_size &&
-                             requirements.size <= allocation_heap_size - memory_offset;
-    assert(valid_range && "image suballocation range is invalid");
-    texture.heap = &heap;
-    texture.heap_allocation = token;
-    texture.owns_heap_allocation = true;
-    require_vk(vkBindImageMemory(device.device, texture.image, heap.memory, memory_offset));
-    return true;
+    for (uint32_t attempt = 0; attempt < 2; ++attempt)
+    {
+        if (attempt != 0)
+        {
+            if (padded_unit_count == unit_count || padded_unit_count > device.heap_memory_block_size / gpu_allocation_alignment)
+                break;
+            unit_count = static_cast<uint32_t>(padded_unit_count);
+        }
+        const OffsetAllocator::Allocation token = heap.offsets.allocate(unit_count);
+        if (token.offset == OffsetAllocator::Allocation::NO_SPACE)
+            return false;
+        const VkDeviceSize raw_offset = static_cast<VkDeviceSize>(token.offset) * gpu_allocation_alignment;
+        const VkDeviceSize allocated_size = static_cast<VkDeviceSize>(heap.offsets.allocationSize(token)) * gpu_allocation_alignment;
+        const VkDeviceSize memory_offset = align_up(raw_offset, requirements.alignment);
+        const bool valid_range = memory_offset >= raw_offset && memory_offset - raw_offset <= allocated_size &&
+                                 requirements.size <= allocated_size - (memory_offset - raw_offset) && memory_offset <= device.heap_memory_block_size &&
+                                 requirements.size <= device.heap_memory_block_size - memory_offset;
+        if (valid_range)
+        {
+            texture.heap = &heap;
+            texture.heap_allocation = token;
+            texture.owns_heap_allocation = true;
+            require_vk(vkBindImageMemory(device.device, texture.image, heap.memory, memory_offset));
+            return true;
+        }
+        heap.offsets.free(token);
+    }
+    return false;
 }
 
 } // namespace
@@ -3742,7 +3735,7 @@ Texture* create_texture(Device* device, const TextureDesc& desc) noexcept
         has_flag(desc.usage, TextureUsage::sampled) ? base_format_bit : 0;
     uint64_t storage_view_format_mask =
         has_flag(desc.usage, TextureUsage::storage) ? base_format_bit : 0;
-    for (uint32_t value = 0; value < format_count; ++value)
+    for (uint32_t value = 0; desc.mutable_format && value < format_count; ++value)
     {
         const Format view_format = static_cast<Format>(value);
         if (view_format == desc.format ||
@@ -3835,111 +3828,76 @@ Texture* create_texture(Device* device, const TextureDesc& desc) noexcept
     };
     require_vk(vkCreateImage(device->device, &image_info, nullptr, &result->image));
 
-    VkMemoryDedicatedRequirements dedicated_requirements{
-        .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS,
-    };
-    VkMemoryRequirements2 requirements2{
-        .sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2,
-        .pNext = &dedicated_requirements,
-    };
-    const VkImageMemoryRequirementsInfo2 requirements_info{
-        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2,
-        .image = result->image,
-    };
-    vkGetImageMemoryRequirements2(device->device, &requirements_info, &requirements2);
-    const auto& requirements = requirements2.memoryRequirements;
-    const bool padded_fits = requirements.size <= allocation_heap_size &&
-                             requirements.alignment != 0 &&
-                             requirements.alignment - 1 <=
-                                 allocation_heap_size - requirements.size;
-    const bool dedicated = dedicated_requirements.requiresDedicatedAllocation ||
-                           !padded_fits;
+    VkMemoryRequirements requirements{};
+    vkGetImageMemoryRequirements(device->device, result->image, &requirements);
+    assert(requirements.alignment != 0 && (requirements.alignment & (requirements.alignment - 1)) == 0);
+    const bool allocation_fits = requirements.size != 0 && requirements.size <= device->heap_memory_block_size;
+    assert(allocation_fits && "texture allocation cannot be suballocated from the configured heap memory block");
+    if (!allocation_fits)
+    {
+        delete result;
+        return nullptr;
+    }
     uint32_t memory_type = 0;
     const bool has_memory_type = device->find_memory_type(
         requirements.memoryTypeBits,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
         0,
-        dedicated ? requirements.size : allocation_heap_size,
+        device->heap_memory_block_size,
         memory_type,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
     assert(has_memory_type);
-
-    if (dedicated)
+    if (!has_memory_type)
     {
-        const VkMemoryDedicatedAllocateInfo dedicated_info{
-            .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
-            .image = result->image,
-        };
-        const VkMemoryAllocateInfo allocate_info{
-            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-            .pNext = &dedicated_info,
-            .allocationSize = requirements.size,
-            .memoryTypeIndex = memory_type,
-        };
-        device->allocate_memory(allocate_info, result->dedicated_memory);
-        require_vk(vkBindImageMemory(
-            device->device, result->image, result->dedicated_memory, 0));
+        delete result;
+        return nullptr;
     }
-    else
+
+    const uint32_t unit_count = allocation_unit_count(requirements.size);
+    const VkDeviceSize padded_unit_count = unit_count + (requirements.alignment - 1) / gpu_allocation_alignment;
+    assert(memory_type < VK_MAX_MEMORY_TYPES);
+    detail::ImageHeap*& active = device->active_image_heaps[memory_type];
+    const bool valid_active = !active || (active->state == device && active->memory_type == memory_type);
+    assert(valid_active && "active image heap is invalid");
+    bool allocated = false;
+    if (active)
     {
-        const auto padded_size = static_cast<uint32_t>(
-            requirements.size + requirements.alignment - 1);
-        bool allocated = false;
-        assert(memory_type < VK_MAX_MEMORY_TYPES);
-        detail::ImageHeap*& active =
-            device->active_image_heaps[memory_type];
-        const bool valid_active =
-            !active || (active->state == device &&
-                        active->memory_type == memory_type);
-        assert(valid_active && "active image heap is invalid");
-        if (active)
+        allocated = try_suballocate_image(*device, *result, *active, memory_type, requirements, unit_count, padded_unit_count);
+    }
+    if (!allocated)
+    {
+        for (detail::ImageHeap* heap = device->image_heaps; heap; heap = heap->next)
         {
-            allocated = try_suballocate_image(
-                *device,
-                *result,
-                *active,
-                memory_type,
-                requirements,
-                padded_size);
-        }
-        if (!allocated)
-        {
-            for (detail::ImageHeap* heap = device->image_heaps;
-                 heap;
-                 heap = heap->next)
+            if (heap == active)
+                continue;
+            if (try_suballocate_image(*device, *result, *heap, memory_type, requirements, unit_count, padded_unit_count))
             {
-                if (heap == active)
-                    continue;
-                if (try_suballocate_image(
-                        *device,
-                        *result,
-                        *heap,
-                        memory_type,
-                        requirements,
-                        padded_size))
-                {
-                    allocated = true;
-                    active = heap;
-                    break;
-                }
+                allocated = true;
+                active = heap;
+                break;
             }
         }
+    }
+    if (!allocated)
+    {
+        detail::ImageHeap* heap = new detail::ImageHeap(device, memory_type);
+        const VkMemoryAllocateInfo allocate_info{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .allocationSize = device->heap_memory_block_size,
+            .memoryTypeIndex = memory_type,
+        };
+        device->allocate_memory(allocate_info, heap->memory);
+        allocated = try_suballocate_image(*device, *result, *heap, memory_type, requirements, unit_count, padded_unit_count);
+        assert(allocated && "a new image heap could not satisfy its first allocation");
         if (!allocated)
         {
-            detail::ImageHeap* heap = new detail::ImageHeap(device, memory_type);
-            const VkMemoryAllocateInfo allocate_info{
-                .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-                .allocationSize = allocation_heap_size,
-                .memoryTypeIndex = memory_type,
-            };
-            device->allocate_memory(allocate_info, heap->memory);
-            heap->next = device->image_heaps;
-            device->image_heaps = heap;
-            active = heap;
-            allocated = try_suballocate_image(
-                *device, *result, *heap, memory_type, requirements, padded_size);
-            assert(allocated && "a new image heap could not satisfy its first allocation");
+            delete heap;
+            delete result;
+            return nullptr;
         }
+        heap->next = device->image_heaps;
+        device->image_heaps = heap;
+        active = heap;
     }
 
     const VkImageAspectFlags aspect_mask = image_aspects(desc.format);
@@ -4384,13 +4342,15 @@ PSO* create_raster_pso(Device* device,
     auto* result = new PSO{
         .state = device,
         .bind_point = VK_PIPELINE_BIND_POINT_GRAPHICS,
-        .color_count = static_cast<uint32_t>(color_targets.size),
-        .depth_format = depth_format,
-        .stencil_format = stencil_format,
-        .kind = kind,
     };
+#if !defined(NDEBUG)
+    result->color_count = static_cast<uint32_t>(color_targets.size);
+    result->depth_format = depth_format;
+    result->stencil_format = stencil_format;
+    result->kind = kind;
     for (size_t index = 0; index < color_targets.size; ++index)
         result->color_formats[index] = color_targets.data[index].format;
+#endif
     const auto pso_result = vkCreateGraphicsPipelines(
         device->device, VK_NULL_HANDLE, 1, &pso_info, nullptr, &result->pso);
     require_vk(pso_result);
@@ -4458,8 +4418,10 @@ PSO* create_compute_pso(Device* device, Span<const uint32_t> compute_spirv) noex
     auto* result = new PSO{
         .state = device,
         .bind_point = VK_PIPELINE_BIND_POINT_COMPUTE,
-        .kind = PSO::Kind::compute,
     };
+#if !defined(NDEBUG)
+    result->kind = PSO::Kind::compute;
+#endif
     const auto pso_result = vkCreateComputePipelines(
         device->device, VK_NULL_HANDLE, 1, &pso_info, nullptr, &result->pso);
     require_vk(pso_result);
@@ -4902,7 +4864,6 @@ void destroy_texture(Texture* texture) noexcept
 
     const VkImage image =
         texture->owns_image ? texture->image : VK_NULL_HANDLE;
-    const VkDeviceMemory dedicated_memory = texture->dedicated_memory;
     detail::ImageHeap* heap =
         texture->owns_heap_allocation ? texture->heap : nullptr;
     const uint64_t heap_token =
@@ -4931,13 +4892,6 @@ void destroy_texture(Texture* texture) noexcept
                 owner.active_image_heaps[heap->memory_type] = heap;
             },
             heap_token);
-    }
-    if (dedicated_memory)
-    {
-        device->defer_delete(
-            [dedicated_memory](Device& owner, uint64_t) noexcept {
-                owner.free_memory(dedicated_memory);
-            });
     }
 }
 
@@ -4992,6 +4946,7 @@ void bind_pso(CommandBuffer* commands, const PSO* pso) noexcept
     assert(same_device && "PSO belongs to a different device");
     vkCmdBindPipeline(
         commands->command_buffer, pso->bind_point, pso->pso);
+#if !defined(NDEBUG)
     if (pso->bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS)
     {
         commands->bound_graphics = pso;
@@ -4999,6 +4954,7 @@ void bind_pso(CommandBuffer* commands, const PSO* pso) noexcept
     }
     else
         commands->bound_compute = pso;
+#endif
 }
 
 AddressRange validate_range(CommandBuffer* commands, GpuRange range) noexcept
@@ -5227,7 +5183,11 @@ void require_graphics_pso(CommandBuffer* commands, PSO::Kind kind) noexcept
 
 void require_compute_pso(CommandBuffer* commands) noexcept
 {
+#if !defined(NDEBUG)
     assert(commands->bound_compute && "dispatch requires a bound compute PSO");
+#else
+    (void)commands;
+#endif
 }
 
 void emit_root_data(CommandBuffer* commands, ByteSpan root) noexcept
@@ -5446,6 +5406,7 @@ void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc) noexc
     vkCmdSetViewport(commands->command_buffer, 0, 1, &viewport);
     vkCmdSetScissor(commands->command_buffer, 0, 1, &scissor);
     commands->rendering = true;
+#if !defined(NDEBUG)
     commands->rendering_color_count = static_cast<uint32_t>(desc.colors.size);
     for (size_t index = 0; index < desc.colors.size; ++index)
     {
@@ -5459,6 +5420,7 @@ void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc) noexc
     commands->rendering_stencil_format =
         stencil_texture ? stencil_texture->format : Format::undefined;
     commands->graphics_compatibility_dirty = true;
+#endif
 }
 
 void end_render_pass(CommandBuffer* commands) noexcept
@@ -5467,10 +5429,12 @@ void end_render_pass(CommandBuffer* commands) noexcept
     assert(valid && "end_render_pass requires an active rendering scope");
     vkCmdEndRendering(commands->command_buffer);
     commands->rendering = false;
+#if !defined(NDEBUG)
     commands->rendering_color_count = 0;
     commands->rendering_has_depth = false;
     commands->rendering_has_stencil = false;
     commands->graphics_compatibility_dirty = true;
+#endif
 }
 
 void draw(CommandBuffer* commands, ByteSpan root, uint32_t vertex_count,

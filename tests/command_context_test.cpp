@@ -9,6 +9,7 @@ namespace
 constexpr int skipped = 77;
 constexpr std::size_t batch_command_count = 20;
 constexpr std::uint32_t batch_submission_count = 4;
+constexpr std::uint32_t test_heap_memory_block_size = 1024u * 1024u;
 
 struct DescriptorHeapData
 {
@@ -18,31 +19,46 @@ struct DescriptorHeapData
 
 bool test_ordinary_allocations(gpu::Device* device) noexcept
 {
-    gpu::GpuAllocation<std::uint32_t> first = gpu::gpu_malloc<std::uint32_t>(device, 4);
-    gpu::GpuAllocation<std::uint32_t> second = gpu::gpu_malloc<std::uint32_t>(device, 8);
-    const bool valid = first.cpu && first.gpu && first.size == 4 * sizeof(std::uint32_t) && first.allocation_owner &&
-                       first.allocation_token != 0 && second.cpu && second.gpu &&
-                       second.size == 8 * sizeof(std::uint32_t) && second.allocation_owner &&
-                       second.allocation_token != 0;
-    gpu::gpu_free(first);
-    gpu::gpu_free(second);
+    constexpr std::uint64_t sizes[]{1, 15, 16, 17, test_heap_memory_block_size};
+    constexpr std::size_t size_count = sizeof(sizes) / sizeof(sizes[0]);
+    gpu::GpuAllocation<> allocations[size_count]{};
+    bool valid = true;
+    for (std::size_t index = 0; index < size_count; ++index)
+    {
+        allocations[index] = gpu::gpu_malloc(device, sizes[index]);
+        valid = valid && allocations[index].cpu && allocations[index].gpu && allocations[index].size == sizes[index] && allocations[index].allocation_owner &&
+                allocations[index].allocation_token != 0 && reinterpret_cast<std::uintptr_t>(allocations[index].cpu) % 16 == 0 &&
+                reinterpret_cast<std::uintptr_t>(allocations[index].gpu) % 16 == 0;
+    }
+    const gpu::GpuAllocation<> readback = gpu::gpu_malloc(device, 1, gpu::MemoryType::readback);
+    const gpu::GpuAllocation<> gpu_only = gpu::gpu_malloc(device, 1, gpu::MemoryType::gpu_only);
+    valid = valid && readback.cpu && readback.gpu && reinterpret_cast<std::uintptr_t>(readback.cpu) % 16 == 0 &&
+            reinterpret_cast<std::uintptr_t>(readback.gpu) % 16 == 0 && !gpu_only.cpu && gpu_only.gpu &&
+            reinterpret_cast<std::uintptr_t>(gpu_only.gpu) % 16 == 0;
+#if defined(NDEBUG)
+    const gpu::GpuAllocation<std::byte> oversized = gpu::gpu_malloc(device, static_cast<std::uint64_t>(test_heap_memory_block_size) + 1);
+    valid = valid && !oversized.cpu && !oversized.gpu && oversized.size == 0 && !oversized.allocation_owner && oversized.allocation_token == 0;
+#endif
+    for (const gpu::GpuAllocation<>& allocation : allocations)
+        gpu::gpu_free(allocation);
+    gpu::gpu_free(readback);
+    gpu::gpu_free(gpu_only);
     return valid;
 }
 
 bool test_descriptor_heaps(gpu::Device* device, const gpu::DeviceCaps& caps, gpu::TimelineSemaphore* timeline,
                            std::uint64_t& next_timeline_value) noexcept
 {
-    constexpr std::uint64_t heap_alignment = 256;
-    gpu::GpuAllocation<std::byte> texture_heap =
-        gpu::gpu_malloc(device, caps.texture_descriptor_stride, gpu::MemoryType::texture_heap, heap_alignment);
+    gpu::GpuAllocation<std::byte> texture_heap = gpu::gpu_malloc(device, caps.texture_descriptor_stride, gpu::MemoryType::texture_heap);
     if (!texture_heap.cpu || !texture_heap.gpu || texture_heap.size != caps.texture_descriptor_stride ||
-        reinterpret_cast<std::uintptr_t>(texture_heap.gpu) % heap_alignment != 0)
+        reinterpret_cast<std::uintptr_t>(texture_heap.cpu) % 16 != 0 || reinterpret_cast<std::uintptr_t>(texture_heap.gpu) % 16 != 0)
     {
         return false;
     }
     gpu::GpuAllocation<std::byte> sampler_heap =
         gpu::gpu_malloc(device, caps.sampler_descriptor_stride, gpu::MemoryType::sampler_heap);
-    if (!sampler_heap.cpu || !sampler_heap.gpu || sampler_heap.size != caps.sampler_descriptor_stride)
+    if (!sampler_heap.cpu || !sampler_heap.gpu || sampler_heap.size != caps.sampler_descriptor_stride ||
+        reinterpret_cast<std::uintptr_t>(sampler_heap.cpu) % 16 != 0 || reinterpret_cast<std::uintptr_t>(sampler_heap.gpu) % 16 != 0)
     {
         gpu::gpu_free(texture_heap);
         return false;
@@ -54,11 +70,9 @@ bool test_descriptor_heaps(gpu::Device* device, const gpu::DeviceCaps& caps, gpu
         gpu::gpu_malloc<DescriptorHeapData>(device, 1, gpu::MemoryType::sampler_heap);
     const bool typed_heaps_valid =
         typed_texture_heap.cpu && typed_texture_heap.gpu && typed_texture_heap.size == sizeof(DescriptorHeapData) &&
-        reinterpret_cast<std::uintptr_t>(typed_texture_heap.cpu) % alignof(DescriptorHeapData) == 0 &&
-        reinterpret_cast<std::uintptr_t>(typed_texture_heap.gpu) % alignof(DescriptorHeapData) == 0 &&
+        reinterpret_cast<std::uintptr_t>(typed_texture_heap.cpu) % 16 == 0 && reinterpret_cast<std::uintptr_t>(typed_texture_heap.gpu) % 16 == 0 &&
         typed_sampler_heap.cpu && typed_sampler_heap.gpu && typed_sampler_heap.size == sizeof(DescriptorHeapData) &&
-        reinterpret_cast<std::uintptr_t>(typed_sampler_heap.cpu) % alignof(DescriptorHeapData) == 0 &&
-        reinterpret_cast<std::uintptr_t>(typed_sampler_heap.gpu) % alignof(DescriptorHeapData) == 0;
+        reinterpret_cast<std::uintptr_t>(typed_sampler_heap.cpu) % 16 == 0 && reinterpret_cast<std::uintptr_t>(typed_sampler_heap.gpu) % 16 == 0;
     gpu::gpu_free(typed_texture_heap);
     gpu::gpu_free(typed_sampler_heap);
     if (!typed_heaps_valid)
@@ -180,7 +194,15 @@ void record_attachment_subresource_passes(gpu::CommandBuffer* commands,
 
 int main()
 {
-    const gpu::DeviceInit device_init = gpu::create_device();
+#if defined(NDEBUG)
+    const gpu::DeviceInit invalid_device_init = gpu::create_device({.heap_memory_block_size = 0});
+    if (invalid_device_init.device || invalid_device_init.error != gpu::Error::unsupported)
+        return 1;
+    const gpu::DeviceInit unaligned_device_init = gpu::create_device({.heap_memory_block_size = 17});
+    if (unaligned_device_init.device || unaligned_device_init.error != gpu::Error::unsupported)
+        return 1;
+#endif
+    const gpu::DeviceInit device_init = gpu::create_device({.heap_memory_block_size = test_heap_memory_block_size});
     if (device_init.error == gpu::Error::unsupported)
         return skipped;
     if (device_init.error != gpu::Error::none)
@@ -197,6 +219,15 @@ int main()
         gpu::destroy_device(device);
         return 1;
     }
+#if defined(NDEBUG)
+    gpu::Texture* oversized_texture = gpu::create_texture(device, {.width = 1024, .height = 1024, .usage = gpu::TextureUsage::sampled});
+    if (oversized_texture)
+    {
+        gpu::destroy_texture(oversized_texture);
+        gpu::destroy_device(device);
+        return 1;
+    }
+#endif
     gpu::TimelineSemaphore* timeline = gpu::create_timeline_semaphore(device);
     std::uint64_t next_timeline_value = 0;
     gpu::TimelinePoint final_completion{};

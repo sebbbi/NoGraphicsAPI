@@ -4,7 +4,10 @@
 - Avoid adding named variables for trivial expressions, especially when the value is used only once.
 - Disable C++ exceptions and RTTI across the entire codebase. Do not use either.
 - Perform error checks as early as possible. Check application initialization, resource loading, and Vulkan object creation immediately. Avoid error checking after initialization; normal code should not fail.
-- Use asserts to catch code bugs. Use error codes and error messages only for invalid input data and initialization failures.
+- Use asserts to catch code bugs and documented API precondition violations. Use error codes and error messages only for invalid external input data and
+  initialization failures.
+- Treat the library as a low-level, thin wrapper, not as a validation layer. Document API preconditions and enforce programmer-error cases with asserts;
+  do not add runtime validation that duplicates the Vulkan validation layer.
 - Do not check for memory allocation failures. We cannot recover from running out of memory; managing memory usage properly is the user's responsibility.
 - Avoid lambdas and complex templates.
 - Avoid trivial single-line wrapper functions.
@@ -22,5 +25,12 @@
 - Always pass `Span`, `ByteSpan`, and `GpuRange` function parameters by value. This allows the compiler to pass their pointer-and-size fields in registers instead of forcing a memory store/load round trip. Review all code against this rule after every change.
 - Use C++20 designated initializers with named fields for structures.
 - Give public API structure fields useful default values. At call sites, initialize only the non-default fields and name every initialized field.
+- Vertex and pixel shaders and their variants share a shader source file. Put entirely different shaders in separate files. Do not combine unrelated shaders behind preprocessor conditionals.
 - Always review code for performance issues before considering work complete.
 - Line length is 160 characters. Please don't chop expressions to multiple lines if not needed.
+
+# Documentation Guidelines
+
+- Keep Markdown documentation short, precise, and focused on user-facing behavior and fidelity to the *No Graphics API* design. Emphasize GPU pointers,
+  the root ABI, and relevant Vulkan extensions. Avoid obvious C/C++ conventions, internal plumbing, exhaustive `Desc` or API catalogs, and sample-specific
+  asset or format details better left in source files. Keep example descriptions brief.

@@ -1,6 +1,5 @@
-// The cube mesh and presentation parameters are adapted from Vulkan-Tools'
-// vkcube sample and modified for NoGraphicsAPI. Copyright notices and the
-// Apache-2.0 license are in NOTICE.md and LICENSE-Apache-2.0.txt.
+// The texture map is adapted from Vulkan-Tools' vkcube sample. Copyright
+// notices and the Apache-2.0 license are in NOTICE.md and LICENSE-Apache-2.0.txt.
 
 #include "cube_shared.h"
 

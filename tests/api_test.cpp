@@ -301,9 +301,11 @@ constexpr gpu::DeviceInit default_device_init{};
 static_assert(default_device_init.device == nullptr &&
               default_device_init.error == gpu::Error::none);
 constexpr gpu::DeviceDesc default_device_desc{};
+static_assert(std::is_same_v<decltype(gpu::DeviceDesc::heap_memory_block_size), std::uint32_t>);
 static_assert(default_device_desc.window == nullptr &&
               default_device_desc.swapchain_format == gpu::Format::undefined &&
-              default_device_desc.desired_swapchain_image_count == 2);
+              default_device_desc.desired_swapchain_image_count == 2 &&
+              default_device_desc.heap_memory_block_size == 256u * 1024u * 1024u);
 constexpr gpu::DrawableExtent default_drawable_extent{};
 static_assert(default_drawable_extent.width == 0 && default_drawable_extent.height == 0);
 constexpr gpu::SwapchainFrame default_swapchain_frame{};
@@ -315,7 +317,10 @@ static_assert(default_texture.type == gpu::TextureType::two_d && default_texture
               default_texture.height == 1 && default_texture.depth == 1 &&
               default_texture.mip_levels == 1 && default_texture.layer_count == 1 &&
               default_texture.format == gpu::Format::rgba8_unorm &&
+              !default_texture.mutable_format &&
               default_texture.usage == gpu::TextureUsage::sampled);
+constexpr gpu::TextureDesc mutable_texture{.mutable_format = true};
+static_assert(mutable_texture.mutable_format);
 constexpr gpu::TextureDesc sized_texture{
     .width = 64,
     .height = 32,
@@ -417,6 +422,7 @@ static_assert(default_allocation.cpu == nullptr && default_allocation.gpu == nul
 static_assert(default_timeline_point.semaphore == nullptr && default_timeline_point.value == 0);
 
 using ByteFreeFunction = void (*)(const ByteAllocation&) noexcept;
+using GpuMallocFunction = ByteAllocation (*)(gpu::Device*, std::uint64_t, gpu::MemoryType) noexcept;
 using CreateDeviceFunction = gpu::DeviceInit (*)(const gpu::DeviceDesc&) noexcept;
 using DrawableExtentFunction = gpu::DrawableExtent (*)(gpu::Device*) noexcept;
 using AcquireFunction = gpu::SwapchainFrame (*)(gpu::Device*) noexcept;
@@ -449,6 +455,7 @@ using DispatchFunction = void (*)(gpu::CommandBuffer*, gpu::ByteSpan, std::uint3
                                   std::uint32_t) noexcept;
 using DispatchIndirectFunction = void (*)(gpu::CommandBuffer*, gpu::ByteSpan, gpu::GpuRange) noexcept;
 static_assert(std::is_same_v<decltype(static_cast<ByteFreeFunction>(&gpu::gpu_free)), ByteFreeFunction>);
+static_assert(std::is_same_v<decltype(static_cast<GpuMallocFunction>(&gpu::gpu_malloc)), GpuMallocFunction>);
 static_assert(std::is_same_v<decltype(&gpu::create_device), CreateDeviceFunction>);
 static_assert(std::is_same_v<decltype(&gpu::get_drawable_extent), DrawableExtentFunction>);
 static_assert(std::is_same_v<decltype(&gpu::acquire), AcquireFunction>);
@@ -482,6 +489,7 @@ static_assert(std::is_constructible_v<CommandBatch, std::initializer_list<gpu::C
         .window = descriptor,
         .swapchain_format = gpu::Format::bgra8_srgb,
         .desired_swapchain_image_count = 3,
+        .heap_memory_block_size = 64u * 1024u * 1024u,
     });
     const gpu::DeviceCaps& caps = gpu::get_device_caps(device);
     const bool supported = gpu::supports_texture_format(device, gpu::Format::rgba8_unorm, gpu::TextureUsage::sampled);
@@ -497,7 +505,7 @@ static_assert(std::is_constructible_v<CommandBatch, std::initializer_list<gpu::C
     gpu::submit_and_present(device, {commands}, {.semaphore = semaphore, .value = 2});
 
     ByteAllocation bytes = gpu::gpu_malloc(device, 64);
-    ByteAllocation aligned = gpu::gpu_malloc(device, 64, gpu::MemoryType::gpu_only, 256);
+    ByteAllocation gpu_only = gpu::gpu_malloc(device, 64, gpu::MemoryType::gpu_only);
     TypedAllocation typed = gpu::gpu_malloc<std::uint32_t>(device, 16);
     gpu::GpuRange range = gpu::gpu_range(typed);
     gpu::gpu_free(bytes);
@@ -549,7 +557,7 @@ static_assert(std::is_constructible_v<CommandBatch, std::initializer_list<gpu::C
     (void)completed;
     (void)drawable_extent;
     (void)frame;
-    (void)aligned;
+    (void)gpu_only;
 }
 
 int main()

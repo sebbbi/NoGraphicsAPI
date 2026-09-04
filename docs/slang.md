@@ -113,7 +113,8 @@ commands.
 GPU pointers are intentionally low level:
 
 - they carry no bounds and robust descriptor access does not protect an invalid dereference;
-- pointee alignment, range validity, synchronization, and lifetime belong to the application;
+- `gpu_malloc()` guarantees 16-byte alignment; stronger pointee and interior-pointer alignment, range validity, synchronization, and lifetime belong to the
+  application;
 - a GPU pointer must never be dereferenced by the CPU; and
 - opaque textures and samplers are represented by heap indices rather than pointers.
 

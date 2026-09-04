@@ -170,8 +170,9 @@ Normal image use stays in `GENERAL`, so applications do not track layouts.
 swapchain presentation transitions remain backend responsibilities. This preserves the post's
 simple synchronization surface at the cost of global dependencies that may cover unrelated work.
 
-The post's split GPU-address signal/wait operations are not implemented. The current API exposes
-only unsplit global barriers.
+The post's split barriers signal a token through a GPU pointer and wait on that address later, with
+configurable operations such as atomic maximum. Vulkan has neither that GPU-address signal/wait
+mechanism nor configurable token operations, so the current API exposes only unsplit global barriers.
 
 ## Commands, timelines, and indirect work
 
@@ -181,7 +182,7 @@ command buffers begun since the preceding submission, in the supplied order.
 Applications provide a monotonically increasing `TimelinePoint` with every submission. Polling or
 waiting that point controls reuse of application-owned allocations, descriptor slots, and readback
 data. Internal command-context and resource retirement uses a separate private timeline. This keeps
-normal frames asynchronous and matches the post's recommendation that completion be explicit.
+frames asynchronous and matches the post's recommendation that completion be explicit.
 
 `VK_KHR_device_address_commands` extends the GPU-pointer model into command processing. Index data,
 indirect argument records, and copy operands are supplied as `GpuRange` values and passed to Vulkan
@@ -203,24 +204,36 @@ Presentation is outside the post. The project adds a compact Win32 swapchain bou
 extent query, acquire, and present operations. WSI synchronization, transitions, and recreation stay
 internal. Other window systems are outside the current prototype.
 
-## Deliberate differences and scope limits
+## Deliberate adaptations and remaining gaps
 
-The important deliberate differences from the post are:
+The implementation deliberately uses CPU push-data roots, one shared graphics root, a separate
+sampler heap, and Vulkan stage/access masks. These preserve the post's main model while adapting it
+to `VK_EXT_descriptor_heap` and synchronization2.
 
-- CPU push-data roots instead of GPU root pointers;
-- one shared graphics root instead of independent vertex and pixel roots;
-- an explicit application-owned sampler heap instead of embedded sampler values;
-- internally placed textures instead of application-placed textures;
-- fixed render and attachment state baked into PSOs instead of the post's more dynamic model; and
-- global stage/access barriers instead of the post's smaller set of named hazard flags.
+**Prototype scope.** Vulkan already supports application-placed image memory, task shaders, public
+queue selection and multiple queues, GPU-addressed indirect draw counts through
+`vkCmdDraw*IndirectCount2KHR`, and optional BDA capture/replay address preservation. This backend does
+not expose them. Fixed render and attachment state in PSOs is also largely a current implementation
+choice.
 
-Not currently implemented are a GPU descriptor-construction intrinsic, static-constant structures,
-task shaders, split GPU-address signal/wait, GPU-root indirect draws, GPU draw-count pointers,
-public queues, multiple queues, or capture/replay allocation at a prescribed GPU virtual address.
+**Available through an additional extension.** GPU-root indirect work has an existing but heavier
+path: `VK_EXT_device_generated_commands` and its descriptor-heap push-data tokens can source
+per-sequence root data from GPU memory. That optional extension is outside this backend. Vulkan
+specialization constants already provide the optimization behind static constants; exposing the
+post's shared C-compatible structure ABI is library and Slang work rather than a missing Vulkan
+primitive.
 
-These are prototype scope limits, not retreats to legacy binding abstractions. Extensions should
-continue to preserve the defining invariants: GPU pointers for linear data, application-owned
-descriptor slots, pipelines without binding layouts, and synchronization without resource lists.
+**Vulkan limitations.** Two features from the post have no faithful Vulkan representation:
+
+- descriptor heaps are GPU-writable and copyable, but native descriptors can only be constructed by
+  host calls; a shader descriptor-construction intrinsic needs new Vulkan and SPIR-V support; and
+- Vulkan has no synchronization command that signals or waits on a token at a GPU address, or selects
+  atomic and comparison operations such as atomic maximum and greater-or-equal. The post's split
+  barrier model needs a new synchronization extension.
+
+These two Vulkan gaps are not prototype backlog. Future work should preserve the defining invariants:
+GPU pointers for linear data, application-owned descriptor slots, pipelines without binding layouts,
+and synchronization without resource lists.
 
 ## Related documentation
 

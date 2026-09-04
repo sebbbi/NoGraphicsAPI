@@ -1,6 +1,22 @@
 BasedOnStyle: Microsoft
 ColumnLimit: 160
+IndentWidth: 4
+ContinuationIndentWidth: 4
+TabWidth: 4
+UseTab: Never
+AlignAfterOpenBracket: BlockIndent
+BinPackArguments: false
+BinPackParameters: false
+AllowAllArgumentsOnNextLine: false
+AllowAllParametersOfDeclarationOnNextLine: false
 PointerAlignment: Left
 ReferenceAlignment: Left
 SpaceAfterTemplateKeyword: false
+Cpp11BracedListStyle: false
+SpaceBeforeCpp11BracedList: false
+BreakArrays: false
+NamespaceIndentation: All
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterNamespace: false
 AllowShortCaseLabelsOnASingleLine: true

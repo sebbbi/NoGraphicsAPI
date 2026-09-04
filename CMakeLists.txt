@@ -10,9 +10,11 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
 endif()
 
 include(FetchContent)
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
 
-option(NOGRAPHICSAPI_BUILD_EXAMPLES "Build NoGraphicsAPI examples" ON)
-option(NOGRAPHICSAPI_BUILD_TESTS "Build NoGraphicsAPI tests" ON)
+option(NOGRAPHICSAPI_BUILD_EXAMPLES "Build NoGraphicsAPI examples" OFF)
+option(NOGRAPHICSAPI_BUILD_TESTS "Build NoGraphicsAPI tests" OFF)
 
 include(cmake/NoGraphicsAPI_math.cmake)
 
@@ -43,7 +45,7 @@ add_library(NoGraphicsAPI_offset_allocator STATIC
     ${offsetallocator_SOURCE_DIR}/offsetAllocator.cpp
 )
 target_include_directories(NoGraphicsAPI_offset_allocator PUBLIC
-    ${offsetallocator_SOURCE_DIR}
+    $<BUILD_INTERFACE:${offsetallocator_SOURCE_DIR}>
 )
 target_compile_features(NoGraphicsAPI_offset_allocator PUBLIC cxx_std_20)
 NoGraphicsAPI_disable_exceptions(NoGraphicsAPI_offset_allocator)
@@ -55,6 +57,8 @@ add_library(NoGraphicsAPI STATIC
     src/NoGraphicsAPI.cpp
 )
 add_library(NoGraphicsAPI::NoGraphicsAPI ALIAS NoGraphicsAPI)
+set_target_properties(NoGraphicsAPI PROPERTIES EXPORT_NAME NoGraphicsAPI)
+set_target_properties(NoGraphicsAPI_offset_allocator PROPERTIES EXPORT_NAME offset_allocator)
 
 target_compile_features(NoGraphicsAPI PUBLIC cxx_std_20)
 target_link_libraries(NoGraphicsAPI
@@ -84,6 +88,48 @@ if(NOGRAPHICSAPI_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
+
+install(TARGETS
+        NoGraphicsAPI
+        NoGraphicsAPI_math
+        NoGraphicsAPI_offset_allocator
+    EXPORT NoGraphicsAPITargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
+install(DIRECTORY include/NoGraphicsAPI
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
+
+configure_package_config_file(
+    cmake/NoGraphicsAPIConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/NoGraphicsAPIConfig.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/NoGraphicsAPI
+)
+write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/NoGraphicsAPIConfigVersion.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+
+install(EXPORT NoGraphicsAPITargets
+    FILE NoGraphicsAPITargets.cmake
+    NAMESPACE NoGraphicsAPI::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/NoGraphicsAPI
+)
+install(FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/NoGraphicsAPIConfig.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/NoGraphicsAPIConfigVersion.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/NoGraphicsAPI
+)
+install(FILES
+        LICENSE
+        THIRD_PARTY_NOTICES.md
+        examples/cube/LICENSE-Apache-2.0.txt
+    DESTINATION ${CMAKE_INSTALL_DOCDIR}
+)
 
 if(CMAKE_GENERATOR MATCHES "^Visual Studio" AND NOGRAPHICSAPI_BUILD_EXAMPLES)
     cmake_path(GET Vulkan_INCLUDE_DIR PARENT_PATH vulkan_sdk_dir)

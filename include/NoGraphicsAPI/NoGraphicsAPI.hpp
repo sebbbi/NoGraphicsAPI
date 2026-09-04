@@ -494,6 +494,7 @@ struct DeviceDesc
     void* window = nullptr;
     Format swapchain_format = Format::undefined;
     uint32_t desired_swapchain_image_count = 2;
+    uint32_t heap_memory_block_size = 256u * 1024u * 1024u; // Bytes; must be a non-zero multiple of 16.
 };
 
 struct DeviceInit
@@ -524,6 +525,7 @@ struct TextureDesc
     uint32_t mip_levels = 1;
     uint32_t layer_count = 1; // Cube types count whole cubes, not faces.
     Format format = Format::rgba8_unorm;
+    bool mutable_format = false; // Allow format-compatible descriptor views.
     TextureUsage usage = TextureUsage::sampled;
 };
 
@@ -695,15 +697,15 @@ void wait_timeline(TimelinePoint point) noexcept;
 [[nodiscard]] SwapchainFrame acquire(Device* device) noexcept;
 void submit_and_present(Device* device, Span<CommandBuffer* const> commands, TimelinePoint completion) noexcept;
 
-[[nodiscard]] GpuAllocation<> gpu_malloc(Device* device, uint64_t byte_count,
-                                         MemoryType memory = MemoryType::cpu_visible,
-                                         uint64_t alignment = 16) noexcept;
+// Every non-null returned pointer is 16-byte aligned.
+[[nodiscard]] GpuAllocation<> gpu_malloc(Device* device, uint64_t byte_count, MemoryType memory = MemoryType::cpu_visible) noexcept;
 
 template<typename T>
 [[nodiscard]] GpuAllocation<T> gpu_malloc(Device* device, size_t count = 1,
                                           MemoryType memory = MemoryType::cpu_visible) noexcept
 {
-    const GpuAllocation<> bytes = gpu_malloc(device, count * sizeof(T), memory, alignof(T) > 16 ? alignof(T) : 16);
+    static_assert(alignof(T) <= 16, "gpu_malloc supports types aligned to at most 16 bytes");
+    const GpuAllocation<> bytes = gpu_malloc(device, count * sizeof(T), memory);
     return {
         .cpu = reinterpret_cast<T*>(bytes.cpu),
         .gpu = reinterpret_cast<T*>(bytes.gpu),
