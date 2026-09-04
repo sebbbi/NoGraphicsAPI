@@ -28,8 +28,8 @@ There is no public buffer object or owning memory class. `gpu_malloc<T>()` retur
 device-local, host-visible, and host-coherent, so ordinary GPU allocations expose both a
 persistently mapped CPU pointer and their GPU pointer. `MemoryType::readback` uses the same required
 memory properties and additionally prefers host-cached memory. `MemoryType::gpu_only` is
-non-host-visible, so its `cpu` pointer is null. `gpu_free(allocation)` takes the unchanged allocation
-by reference exactly once; the allocation carries the device bookkeeping needed to free itself.
+non-host-visible, so its `cpu` pointer is null. Pass the unchanged allocation to
+`gpu_free()` exactly once.
 Address-based command APIs take the separate `GpuRange {gpu, size}` aggregate by
 value, and `gpu_range()` converts
 an allocation to its full range. This lets a caller bind all or part of an allocation
@@ -48,11 +48,9 @@ handles rather than C++ ownership wrappers. Device and swapchain creation return
 functions return a handle directly. Matching `destroy_*()` functions release them, and applications
 destroy owned handles explicitly in reverse creation order. A submitted command-buffer batch is
 consumed by `submit()` or `submit_and_present()`. Every command buffer returned by
-`begin_commands()` must appear exactly once in the next submission or presentation span. `submit()`
-derives its device from the batch, while `submit_and_present()` takes the device first for its
-device-owned swapchain. Both take one explicit caller-owned `TimelinePoint` to signal.
-`write_texture_descriptor()` and `write_sampler_descriptor()` take their device first;
-texture descriptor writes additionally validate that the texture belongs to that device.
+`begin_commands()` must appear exactly once in the next submission or presentation span. Both
+submission functions take one explicit caller-owned `TimelinePoint` to signal. Texture descriptor
+writes validate texture/device ownership.
 `get_device_caps()` returns a reference into the device and does not copy the capability record;
 that reference remains valid until `destroy_device()`.
 
@@ -74,9 +72,7 @@ device support and window-system compatibility are recoverable startup results. 
 and swapchain format in `DeviceDesc` creates the device-owned swapchain; omitting them creates a
 headless device. `desired_swapchain_image_count` defaults to two and accepts one through eight. The
 request is clamped to the surface's FIFO-specific limits, and Vulkan may create more images than
-requested; an actual count above the backend capacity of eight is unsupported. The same value
-selects how many of the eight statically stored presentation contexts are active, bounding
-outstanding presentations independently of the actual image count. The native window must remain
+requested. The native window must remain
 valid until `destroy_device()` returns. A windowed device and all calls using it stay on the native
 window's message-pump thread; Win32 WSI entry points may otherwise synchronously wait for that
 thread to process a window message.
@@ -257,9 +253,8 @@ Ordinary value memory is suballocated from 256 MiB internal pages, with one full
 `VkBuffer` per page and separate pools for CPU-visible, GPU-only, and readback memory. Suballocation uses
 a pinned revision of [OffsetAllocator](https://github.com/sebbbi/OffsetAllocator). Allocation tries
 the pool's active page first, scans older pages only when that page cannot satisfy the request, and
-creates a new page only when none fit. A freed page becomes active. `GpuAllocation` carries opaque
-owner/token bookkeeping, so `gpu_free()` releases ordinary allocations directly in O(1) without a
-page or allocation-record search.
+creates a new page only when none fit. A freed page becomes active. `gpu_free()` releases ordinary
+allocations directly in O(1) without a page or allocation-record search.
 
 Every texture or sampler descriptor heap instead owns one descriptor-capable `VkBuffer` and
 one dedicated allocation from the same coherent mapped device-local memory used by CPU-visible
@@ -319,9 +314,8 @@ executing, the ring grows instead of waiting; that capacity is retained for late
 device starts with two contexts and therefore converges naturally on the application's peak number
 of simultaneously live command buffers.
 
-`submit({commands...}, point)` or `submit_and_present(device, {commands...}, point)` must receive
-every command buffer begun since the preceding batch exactly once. The span order defines execution
-order.
+`submit()` and `submit_and_present()` must receive every command buffer begun since the preceding
+batch exactly once. The span order defines execution order.
 The call ends the buffers, queues the whole batch in one `vkQueueSubmit2`, signals exactly
 `point.value`, consumes every submitted handle, and returns without waiting for execution. One
 private device timeline also advances once per batch; the resulting value retires every command

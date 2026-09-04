@@ -67,11 +67,10 @@ This difference has three practical reasons:
 must be copied unchanged and passed to `gpu_free(allocation)` exactly once, and are intentionally omitted from `GpuRange`. `GpuRange` is a non-owning view of GPU
 addressable bytes. Neither has RAII behavior, exposes a Vulkan handle, retains resources for a
 command buffer, or provides CPU dereference semantics for `gpu`. `gpu_free(allocation)` takes the
-unchanged aggregate and needs no separate device argument. Shader
+unchanged aggregate. Shader
 pointer dereferences remain raw and unbounded; a command-side `GpuRange` does not add bounds checks
-to shader code. `gpu_free()` dispatches through the opaque owner and passes the stored token
-directly to OffsetAllocator, so free is O(1) and no page-record vector exists. Command recording
-never reads either field and there is no separate address-translation path.
+to shader code. `gpu_free()` is O(1), and no page-record vector exists. Command recording never
+reads either opaque field and there is no separate address-translation path.
 
 Ordinary allocations are internally suballocated with OffsetAllocator from 256 MiB pages. Each
 page has one fully bound `VkBuffer` carrying every usage needed for shader addresses, index input,
@@ -363,11 +362,8 @@ interactive examples use the explicit extent, acquire, command-recording, and pr
 operations as needed; none waits for device idle per frame. The core does not add a combined
 synchronous convenience operation.
 
-Because the implementation exposes one queue and every command buffer retains its owning device,
-`submit()` derives the device from its command-buffer span and also takes the point to signal; the
-point's semaphore must belong to the same device and its value must strictly increase. Both
-descriptor writers take the device first. Texture descriptor writes additionally validate that the
-texture belongs to that device.
+The point's semaphore must belong to the submitted command buffers' device, and its value must
+strictly increase. Texture descriptor writes additionally validate texture/device ownership.
 
 This realizes the blog's transient-command and explicit GPU-to-CPU timeline recommendation while
 still hiding `GpuQueue`. `timeline_completed_value()` exposes a nonblocking progress query and

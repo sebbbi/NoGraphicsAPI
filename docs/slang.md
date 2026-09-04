@@ -235,8 +235,8 @@ device-memory allocation. Its private size includes any prefix alignment slack, 
 the hidden reserved region; descriptor heaps are not suballocated from the ordinary 256 MiB buffer
 pages.
 
-`write_texture_descriptor()` takes the device first and writes a sampled or storage descriptor to a
-caller-selected CPU address. `TextureDescriptorDesc` selects its format, mip range, and layer range.
+`write_texture_descriptor()` writes a sampled or storage descriptor to a caller-selected CPU
+address. `TextureDescriptorDesc` selects its format, mip range, and layer range.
 `Format::undefined` inherits the texture's creation format; a zero mip or layer count selects every
 remaining entry from its corresponding base. Cube and cube-array layer ranges count logical cubes,
 not individual faces. The backend automatically declares every compatible public view format while
@@ -358,9 +358,8 @@ the shared header simple.
 
 `gpu_malloc()` with `MemoryType::gpu_only` still returns the same aggregate, but `cpu`
 is null because the allocation is not host-visible; `gpu` and `size` remain
-valid. `gpu_free(allocation)` takes the complete, unchanged `GpuAllocation` by reference after it is
-returned by `gpu_malloc()`, not a `Device*`, one of the allocation's pointers, or a manually
-constructed range.
+valid. `gpu_free(allocation)` takes the complete, unchanged `GpuAllocation` returned by
+`gpu_malloc()`.
 Its opaque owner/token fields must also remain unchanged, and the allocation must be freed exactly once.
 
 Memory allocation failure is fatal and deliberately unchecked; `gpu_malloc()` does not return a
