@@ -11,8 +11,8 @@ implemented; [the Metal 4 design](docs/metal-porting.md) records the proposed ma
 
 ## How it maps to *No Graphics API*
 
-- **GPU pointers replace buffer objects and bindings.** `gpu_malloc()` returns a GPU address and,
-  for mapped memory, a CPU address. Address-based commands consume `GpuRange {gpu, size}` directly,
+- **GPU pointers replace buffer objects and bindings.** `gpu_malloc()` returns a GPU address and a
+  persistently mapped CPU address. Address-based commands consume `GpuRange {gpu, size}` directly,
   and shaders follow typed 64-bit pointers for vertex fetch and arbitrary data structures.
 - **Applications own descriptor heaps.** Texture and sampler heaps are ordinary mapped allocations.
   The application chooses slots, writes descriptors through the CPU address, binds the GPU range,
@@ -55,11 +55,11 @@ synchronization2, scalar block layout, and the remaining core features. See
 
 ## GPU memory and descriptor heaps
 
-There is no public buffer handle. `GpuAllocation<T>` exposes a CPU pointer when the memory is mapped,
-a GPU pointer, and a byte size. The ordinary memory classes are:
+There is no public buffer handle. `GpuAllocation<T>` exposes a CPU pointer, a GPU pointer, and a byte
+size. The ordinary memory classes are:
 
 - `cpu_visible`: coherent device-local memory for data written by the CPU;
-- `gpu_only`: non-mapped device-local memory;
+- `gpu_only`: device-local memory with no CPU mapping (`cpu` is null);
 - `readback`: coherent mapped memory with host-cached memory preferred;
 - `texture_heap` and `sampler_heap`: mapped application-owned descriptor storage.
 
@@ -70,6 +70,7 @@ reused. Texture and sampler descriptors are addressed in Slang through the stand
 ```slang
 Texture2D<float4> texture = ResourceDescriptorHeap[texture_index];
 SamplerState sampler = SamplerDescriptorHeap[sampler_index];
+float4 texel = texture.Sample(sampler, uv);
 ```
 
 ## Shared root ABI
@@ -80,26 +81,37 @@ Root structures are declared once and included by C++ and Slang:
 struct RootArguments
 {
     Vertex* vertices;
+    float4x4 mvp;
 };
 ```
 
-On the CPU, pointer fields receive GPU virtual addresses:
+On the CPU, pointer fields receive GPU virtual addresses while ordinary values are copied directly:
 
 ```cpp
-RootArguments root{.vertices = vertices.gpu};
+RootArguments root{
+    .vertices = vertices.gpu,
+    .mvp = mvp,
+};
 gpu::draw(commands, root, vertex_count);
 ```
 
+Slang declares the same root as push-constant data and reads both pointer and value fields directly:
+
+```slang
+[[vk::push_constant]] ConstantBuffer<RootArguments> root;
+
+Vertex vertex = root.vertices[vertex_id];
+float4x4 mvp = root.mvp;
+```
+
 The draw or dispatch copies the root bytes immediately through `vkCmdPushDataEXT`; the root does not
-need to outlive the call. Slang declares the same structure as push-constant data and dereferences its
-pointer fields in the device address space. Shared structures use C layout, and matrix-bearing roots
-use row-major matrix layout. Root values must be trivially copyable, have a size divisible by four,
-and be no larger than `DeviceCaps::max_push_data_size`.
+need to outlive the call. Shared structures use C layout, and matrix-bearing roots use row-major matrix
+layout. Root values must be trivially copyable, have a size divisible by four, and be no larger than
+`DeviceCaps::max_push_data_size`.
 
 Public descriptor structures have useful defaults. Call sites use C++20 designated initializers to
 name only fields that differ from those defaults. `Span` and `ByteSpan` are non-owning pointer/count
-views; backing arrays and temporary initializer lists only need to remain alive through a consuming
-call unless the API explicitly documents retention.
+views used for function inputs.
 
 The full shader-side contract is in the [Slang shader contract](docs/slang.md).
 
@@ -113,7 +125,8 @@ Requirements:
 - a Vulkan 1.4 loader and device exposing the required descriptor-heap, device-address-command,
   untyped-pointer, and mesh extensions above, plus their required BDA, synchronization, and
   16-bit/scalar-layout features;
-- coherent host-visible device-local memory and a separate non-host-visible device-local memory type;
+- coherent CPU-visible GPU memory (for example through PCIe Resizable BAR on a discrete GPU or UMA on
+  an integrated GPU), plus a separate non-host-visible device-local memory type;
 - Slang 2026.14.1+ and SPIRV-Tools 2026.3+ when building the examples.
 
 MSVC and clang-cl are supported on Windows. GNU and Clang can build the headless library on other
@@ -132,7 +145,8 @@ The Windows examples use the normal swapchain path:
 - [`cube`](examples/cube/cube.cpp): typed GPU-pointer vertex fetch plus application-owned texture and
   sampler heaps;
 - [`deferred_renderer`](examples/deferred_renderer/deferred_renderer.cpp): a large instanced,
-  multi-pass workload with pointer-based scene data and timeline-managed CPU/GPU overlap.
+  multi-pass workload with pointer-based scene data, barriers between passes, and timeline-managed
+  CPU/GPU overlap.
 
 They can be run from their corresponding directories under `build/examples`.
 
