@@ -313,24 +313,6 @@ Implementation must also settle:
 None of these decisions requires adding backend metadata to user root structures or inserting a
 resource-ID table into the direct texture path.
 
-## Validation plan
-
-Metal support remains unadvertised until representative Apple 7, 8, and 9 systems validate the
-applicable paths.
-
-The focused test plan is:
-
-- build and run the public surface on ARM64, then compare Vulkan and Metal output from shared Slang
-  sources and data structures;
-- prove typed GPU pointers, address-based commands, and copy-address lookup at allocation boundaries;
-- verify byte-exact roots plus direct texture and sampler indexing across encoder transitions;
-- exercise rendering, copy, compute, barrier, residency, and deferred-lifetime cases;
-- test grouped timelines, drawable acquisition, resizing, occlusion, and presentation order; and
-- measure the direct texture path before considering an optional indirection mode.
-
-Format coverage, alignment limits, and descriptor-view conformance should be generated from the
-implementation's tables and tests rather than duplicated as a second API specification here.
-
 ## Primary references
 
 Apple:
