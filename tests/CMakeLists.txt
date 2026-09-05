@@ -31,6 +31,12 @@ target_link_libraries(test_command_context PRIVATE NoGraphicsAPI::NoGraphicsAPI)
 add_test(NAME test_command_context COMMAND test_command_context)
 set_tests_properties(test_command_context PROPERTIES SKIP_RETURN_CODE 77)
 
+add_executable(test_copy_command copy_command_test.cpp)
+NoGraphicsAPI_disable_exceptions(test_copy_command)
+target_link_libraries(test_copy_command PRIVATE NoGraphicsAPI::NoGraphicsAPI)
+add_test(NAME test_copy_command COMMAND test_copy_command)
+set_tests_properties(test_copy_command PROPERTIES SKIP_RETURN_CODE 77)
+
 add_executable(test_placed_texture placed_texture_test.cpp)
 NoGraphicsAPI_disable_exceptions(test_placed_texture)
 target_link_libraries(test_placed_texture PRIVATE NoGraphicsAPIUtility::textures)
