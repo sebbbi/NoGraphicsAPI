@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <thread>
 #include <type_traits>
 #include <utility>
 
@@ -24,6 +25,7 @@ static_assert(std::is_same_v<decltype(std::declval<gpu::GpuCpuRange<std::uint32_
 static_assert(std::is_same_v<decltype(std::declval<gpu::GpuCpuRange<std::uint32_t>>().gpu), std::uint32_t*>);
 static_assert(std::is_same_v<decltype(std::declval<gpu::HeapAllocator&>().allocate<std::uint32_t>(1)), gpu::HeapAllocation<std::uint32_t>>);
 static_assert(std::is_same_v<decltype(std::declval<gpu::BumpAllocator&>().allocate<std::uint32_t>(1)), gpu::GpuCpuRange<std::uint32_t>>);
+static_assert(std::is_same_v<decltype(std::declval<gpu::BumpAllocator&>().allocate_atomic<std::uint32_t>(1)), gpu::GpuCpuRange<std::uint32_t>>);
 
 namespace
 {
@@ -236,6 +238,57 @@ bool check_bump_allocator() noexcept
     return true;
 }
 
+struct AtomicBumpThreadContext
+{
+    gpu::BumpAllocator* allocator = nullptr;
+    gpu::GpuCpuRange<gpu::byte>* allocations = nullptr;
+    std::uint32_t allocation_count = 0;
+};
+
+void allocate_atomic_ranges(AtomicBumpThreadContext* context) noexcept
+{
+    for (std::uint32_t index = 0; index != context->allocation_count; ++index)
+        context->allocations[index] = context->allocator->allocate_atomic(1);
+}
+
+bool check_atomic_bump_allocator() noexcept
+{
+    constexpr std::uint32_t thread_count = 8;
+    constexpr std::uint32_t allocations_per_thread = 64;
+    constexpr std::uint32_t allocation_count = thread_count * allocations_per_thread;
+    alignas(16) std::byte cpu[allocation_count * gpu::BumpAllocator::alignment]{};
+    alignas(16) std::byte gpu_address[sizeof(cpu)]{};
+    gpu::GpuCpuRange<gpu::byte> allocations[allocation_count]{};
+    AtomicBumpThreadContext contexts[thread_count]{};
+    std::thread threads[thread_count];
+    gpu::BumpAllocator allocator({.cpu = cpu, .gpu = gpu_address, .size = sizeof(cpu)});
+
+    for (std::uint32_t thread_index = 0; thread_index != thread_count; ++thread_index)
+    {
+        contexts[thread_index] = {
+            .allocator = &allocator,
+            .allocations = allocations + thread_index * allocations_per_thread,
+            .allocation_count = allocations_per_thread,
+        };
+        threads[thread_index] = std::thread(allocate_atomic_ranges, contexts + thread_index);
+    }
+    for (std::thread& thread : threads)
+        thread.join();
+
+    for (std::uint32_t index = 0; index != allocation_count; ++index)
+    {
+        const std::uintptr_t cpu_offset = reinterpret_cast<std::uintptr_t>(allocations[index].cpu) - reinterpret_cast<std::uintptr_t>(cpu);
+        const std::uintptr_t gpu_offset = reinterpret_cast<std::uintptr_t>(allocations[index].gpu) - reinterpret_cast<std::uintptr_t>(gpu_address);
+        CHECK(allocations[index].size == 1 && cpu_offset == gpu_offset && cpu_offset % gpu::BumpAllocator::alignment == 0 && cpu_offset < sizeof(cpu));
+        for (std::uint32_t other = 0; other != index; ++other)
+            CHECK(allocations[index].cpu != allocations[other].cpu && allocations[index].gpu != allocations[other].gpu);
+    }
+    CHECK(empty(allocator.allocate_atomic(1)));
+    allocator.reset();
+    CHECK(allocator.allocate_atomic(sizeof(cpu)).cpu == cpu);
+    return true;
+}
+
 bool check_maximum_heap_range() noexcept
 {
     std::byte* gpu_address = reinterpret_cast<std::byte*>(gpu::HeapAllocator::alignment);
@@ -252,7 +305,7 @@ int main()
 {
     if (!check_gpu_cpu_range_defaults() || !check_heap_allocator_basics() || !check_heap_allocator_address_domains() ||
         !check_heap_allocator_limit_and_move() || !check_typed_allocations() || !check_heap_allocator_fragmentation() || !check_bump_allocator() ||
-        !check_maximum_heap_range())
+        !check_atomic_bump_allocator() || !check_maximum_heap_range())
         return 1;
     return 0;
 }

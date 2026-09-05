@@ -22,7 +22,9 @@
 - Do not use PIMPL interfaces.
 - Avoid standard-library algorithms; prefer straightforward loops.
 - Do not use hash maps or ordered maps.
-- Do not use mutexes or atomics. The API is intentionally single-threaded and is not thread-safe yet.
+- Do not use mutexes or atomics in the graphics API. The API is intentionally single-threaded and is not thread-safe yet. The utility
+  `BumpAllocator::allocate_atomic()` is the sole exception: it supports relaxed-atomic reservation of disjoint mapped ranges while allocation
+  lifetime and GPU submission remain caller-synchronized.
 - Avoid copying large user data structures. Prefer references to structures, and use spans for array data in structures and function parameters.
 - Use a custom span type represented by a pointer and size. It must support construction from an initializer list so variable-length arguments remain concise. An initializer list passed as a function argument remains alive through that function call; do not retain a span backed by it after the call returns.
 - Always pass `Span`, `ByteSpan`, and `GpuRange` function parameters by value. This allows the compiler to pass their pointer-and-size fields in registers instead of forcing a memory store/load round trip. Review all code against this rule after every change.
