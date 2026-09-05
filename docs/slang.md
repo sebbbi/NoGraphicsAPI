@@ -1,11 +1,13 @@
 # Slang shader contract
 
-`NoGraphicsAPI` uses Slang to express the three data paths central to the
+`NoGraphicsAPI` uses Slang to express the shader contract behind the
 [*No Graphics API*](https://www.sebastianaaltonen.com/blog/no-graphics-api) model:
 
 - a small shared root structure for each draw or dispatch;
-- typed 64-bit GPU pointers for buffers and larger data structures; and
-- integer indices into application-owned texture and sampler heaps.
+- typed 64-bit GPU pointers for buffers and larger data structures;
+- integer indices into application-owned texture and sampler heaps; and
+- C-compatible layout for every POD structure shared by C++ and Slang, selected with
+  `-fvk-use-c-layout`.
 
 The Vulkan backend has no application-visible descriptor sets, descriptor pools, buffer bindings,
 or pipeline layouts.
@@ -32,14 +34,17 @@ slangc shader.slang \
   -o shader.frag.spv
 ```
 
-Only shaders that use shared matrices need `-matrix-layout-row-major`, and only shaders accessing a
-descriptor heap need `spvDescriptorHeapEXT`. The significant choices are:
+Every shader requires `-matrix-layout-row-major` and `spvDescriptorHeapEXT`. Matrices and descriptor
+heaps are part of the expected shader model, not opt-in cases. The significant choices are:
 
 - `spirv_1_5` is the project baseline;
 - the direct SPIR-V backend avoids an intermediate source-language translation;
 - entry-point names are preserved because PSO creation expects `vertexMain`, `fragmentMain`,
   `meshMain`, or `computeMain`;
-- C layout and row-major matrices establish the expected layout for supported shared types; and
+- `-fvk-use-c-layout` is required to give shared POD structures the C-compatible layout expected by
+  C++;
+- row-major matrix layout establishes the expected representation for matrix-bearing shared
+  structures; and
 - `spvDescriptorHeapEXT` enables native `ResourceDescriptorHeap` and `SamplerDescriptorHeap` syntax
   and brings in the required untyped-pointer capability.
 
@@ -123,11 +128,10 @@ descriptor-set declaration or manual `NonUniform` decoration is needed.
 
 Shared headers include `<NoGraphicsAPIUtility/shader_types.h>`, which provides matching plain
 scalar, vector, and matrix types for C++ and Slang. Both languages use `T*` for GPU-address fields.
-CPU-only math lives in `<NoGraphicsAPIUtility/math.hpp>` and is not part of the shared ABI.
 
-Compile every shader that reads a shared structure with `-fvk-use-c-layout`. Add
-`-matrix-layout-row-major` when matrices are present. Use the supplied types and explicit padding,
-and ensure every pointer field contains a GPU address rather than a host address.
+Compile every shader with the required `-fvk-use-c-layout` and `-matrix-layout-row-major` options.
+Use the supplied types and explicit padding, and ensure every pointer field contains a GPU address
+rather than a host address.
 
 Use integer fields for shared booleans; C++ and Slang boolean-vector layouts are not compatible. The
 runtime enables scalar block layout plus 16-bit arithmetic and storage for root and BDA data. The
@@ -140,8 +144,8 @@ members are not currently supported by the enabled Vulkan feature set.
 - Texture and sampler heaps use native `SPV_EXT_descriptor_heap`; conventional descriptor bindings
   are outside this shader model.
 - BDA pointers are unbounded and cannot point to opaque textures.
-- The API exposes no specialization-constant block. Per-draw variation belongs in the root; adding
-  scalar PSO constants would require a separate explicit ABI.
+- `NoGraphicsAPI` does not support specialization constants because Slang and Vulkan do not expose
+  them as a single C-compatible POD structure.
 - Mesh shaders are supported; task shaders are not.
 
 ## References
