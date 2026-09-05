@@ -40,9 +40,9 @@ The backend requires Vulkan 1.4 and four device extensions:
 texture model. The public API does not expose layouts either way.
 
 The Win32 presentation path additionally uses `VK_KHR_surface`, `VK_KHR_win32_surface`,
-`VK_KHR_get_surface_capabilities2`, `VK_EXT_surface_maintenance1`, `VK_KHR_swapchain`, and
-`VK_EXT_swapchain_maintenance1`. `VK_EXT_debug_utils` is enabled when available for validation
-diagnostics.
+`VK_KHR_get_surface_capabilities2`, `VK_KHR_surface_maintenance1`, `VK_KHR_swapchain`, and
+`VK_KHR_swapchain_maintenance1`, with the original EXT maintenance variants accepted as a paired
+fallback. `VK_EXT_debug_utils` is enabled when available for validation diagnostics.
 
 Vulkan core features provide buffer device addresses, dynamic rendering, synchronization2, and
 maintenance5. On the shader side, ordinary GPU pointers use the SPIR-V physical-storage-buffer

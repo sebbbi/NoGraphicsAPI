@@ -2019,7 +2019,7 @@ struct QueriedFeatures
     VkPhysicalDeviceShaderUntypedPointersFeaturesKHR untyped_pointers{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_UNTYPED_POINTERS_FEATURES_KHR};
     VkPhysicalDeviceUnifiedImageLayoutsFeaturesKHR unified_image_layouts{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_UNIFIED_IMAGE_LAYOUTS_FEATURES_KHR};
     VkPhysicalDeviceMeshShaderFeaturesEXT mesh_shader{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
-    VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT swapchain_maintenance1{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT};
+    VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR swapchain_maintenance1{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR};
 
     explicit QueriedFeatures(bool presentation, bool include_unified_image_layouts)
     {
@@ -2048,6 +2048,7 @@ struct Candidate
     bool texture_compression_astc = false;
     bool texture_compression_etc2 = false;
     bool storage_input_output16 = false;
+    bool khr_swapchain_maintenance1 = false;
     VkPhysicalDeviceDescriptorHeapPropertiesEXT heap_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_PROPERTIES_EXT};
     VkPhysicalDeviceVulkan11Properties vulkan11_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES};
     VkPhysicalDeviceVulkan12Properties vulkan12_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES};
@@ -2055,7 +2056,11 @@ struct Candidate
     VkPhysicalDeviceMeshShaderPropertiesEXT mesh_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT};
 };
 
-Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, Candidate& output) noexcept
+Error inspect_candidate(VkPhysicalDevice physical_device,
+                        VkSurfaceKHR surface,
+                        bool khr_surface_maintenance1,
+                        bool ext_surface_maintenance1,
+                        Candidate& output) noexcept
 {
     VkExtensionProperties extensions[max_device_extensions]{};
     uint32_t extension_count = 0;
@@ -2076,9 +2081,13 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
         if (!has_name({extensions, extension_count}, name))
             return Error::unsupported;
     }
+    const bool khr_swapchain_maintenance1 = khr_surface_maintenance1 &&
+                                            has_name({extensions, extension_count}, VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
+    const bool ext_swapchain_maintenance1 = ext_surface_maintenance1 &&
+                                            has_name({extensions, extension_count}, VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
     if (surface &&
         (!has_name({extensions, extension_count}, VK_KHR_SWAPCHAIN_EXTENSION_NAME) ||
-         !has_name({extensions, extension_count}, VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME)))
+         (!khr_swapchain_maintenance1 && !ext_swapchain_maintenance1)))
     {
         return Error::unsupported;
     }
@@ -2139,7 +2148,7 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
         features.mesh_shader.meshShader == VK_TRUE &&
         (features.core.features.textureCompressionBC == VK_TRUE ||
          features.core.features.textureCompressionASTC_LDR == VK_TRUE) &&
-        (!surface ||  features.swapchain_maintenance1.swapchainMaintenance1 == VK_TRUE);
+        (!surface || features.swapchain_maintenance1.swapchainMaintenance1 == VK_TRUE);
     if (!required_features)
         return Error::unsupported;
     result.unified_image_layouts = unified_image_layouts_extension && features.unified_image_layouts.unifiedImageLayouts == VK_TRUE;
@@ -2148,6 +2157,7 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
     result.texture_compression_astc = features.core.features.textureCompressionASTC_LDR == VK_TRUE;
     result.texture_compression_etc2 = features.core.features.textureCompressionETC2 == VK_TRUE;
     result.storage_input_output16 = features.vulkan11.storageInputOutput16 == VK_TRUE;
+    result.khr_swapchain_maintenance1 = khr_swapchain_maintenance1;
 
     uint32_t available_queue_count = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &available_queue_count, nullptr);
@@ -2262,6 +2272,12 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     if (error != Error::none)
         return fail_device_creation(state, error);
 #if defined(_WIN32)
+    const bool khr_surface_maintenance1 = presentation && has_name(
+        {instance_extensions, instance_extension_count},
+        VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
+    const bool ext_surface_maintenance1 = presentation && has_name(
+        {instance_extensions, instance_extension_count},
+        VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
     if (presentation &&
         (!has_name({instance_extensions, instance_extension_count},
                    VK_KHR_SURFACE_EXTENSION_NAME) ||
@@ -2269,11 +2285,13 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
                    VK_KHR_WIN32_SURFACE_EXTENSION_NAME) ||
          !has_name({instance_extensions, instance_extension_count},
                    VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME) ||
-         !has_name({instance_extensions, instance_extension_count},
-                   VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME)))
+         (!khr_surface_maintenance1 && !ext_surface_maintenance1)))
     {
         return fail_device_creation(state, Error::unsupported);
     }
+#else
+    constexpr bool khr_surface_maintenance1 = false;
+    constexpr bool ext_surface_maintenance1 = false;
 #endif
 #if !defined(NDEBUG)
     VkLayerProperties layers[max_instance_layers]{};
@@ -2285,7 +2303,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     const bool validation_available = has_name({layers, layer_count}, "VK_LAYER_KHRONOS_validation");
 #endif
 
-    const char* enabled_instance_extensions[5]{};
+    const char* enabled_instance_extensions[6]{};
     uint32_t enabled_instance_extension_count = 0;
     const char* enabled_layers[1]{};
     uint32_t enabled_layer_count = 0;
@@ -2299,7 +2317,10 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         enabled_instance_extensions[enabled_instance_extension_count++] = VK_KHR_SURFACE_EXTENSION_NAME;
         enabled_instance_extensions[enabled_instance_extension_count++] = VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
         enabled_instance_extensions[enabled_instance_extension_count++] = VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME;
-        enabled_instance_extensions[enabled_instance_extension_count++] = VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME;
+        if (khr_surface_maintenance1)
+            enabled_instance_extensions[enabled_instance_extension_count++] = VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME;
+        if (ext_surface_maintenance1)
+            enabled_instance_extensions[enabled_instance_extension_count++] = VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME;
     }
 #endif
 
@@ -2370,7 +2391,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     {
         const VkPhysicalDevice physical_device = physical_devices[index];
         Candidate candidate{};
-        error = inspect_candidate(physical_device, state->surface, candidate);
+        error = inspect_candidate(physical_device, state->surface, khr_surface_maintenance1, ext_surface_maintenance1, candidate);
         if (error == Error::unsupported)
             continue;
         if (error != Error::none)
@@ -2476,7 +2497,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         .meshShader = VK_TRUE,
     };
     enabled_features.swapchain_maintenance1 = {
-        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT,
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR,
         .swapchainMaintenance1 = VK_TRUE,
     };
 
@@ -2501,7 +2522,9 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     if (presentation)
     {
         enabled_device_extensions[enabled_device_extension_count++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
-        enabled_device_extensions[enabled_device_extension_count++] = VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
+        enabled_device_extensions[enabled_device_extension_count++] = selected.khr_swapchain_maintenance1
+            ? VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME
+            : VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
     }
 #endif
     const VkDeviceCreateInfo device_info{
@@ -2793,8 +2816,8 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept
 {
     Device& device = *swapchain.state;
     assert(!swapchain.acquired && !device.acquired_swapchain && device.active_command_buffers == 0);
-    const VkSurfacePresentModeEXT present_mode_info{
-        .sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_EXT,
+    const VkSurfacePresentModeKHR present_mode_info{
+        .sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_KHR,
         .presentMode = swapchain_present_mode,
     };
     const VkPhysicalDeviceSurfaceInfo2KHR surface_info{
@@ -2858,8 +2881,8 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept
 
     const VkCompositeAlphaFlagBitsKHR composite_alpha = choose_composite_alpha(capabilities.supportedCompositeAlpha);
     const VkSwapchainKHR old_handle = swapchain.handle;
-    const VkSwapchainPresentModesCreateInfoEXT present_modes_info{
-        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODES_CREATE_INFO_EXT,
+    const VkSwapchainPresentModesCreateInfoKHR present_modes_info{
+        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODES_CREATE_INFO_KHR,
         .presentModeCount = 1,
         .pPresentModes = &swapchain_present_mode,
     };
@@ -3890,8 +3913,8 @@ void submit_and_present(Device* device, Span<CommandBuffer* const> commands, Tim
     submit_commands(commands, command_device, completion, present_context.acquired, present_context.rendered);
     swapchain->initialized[swapchain->image_index] = true;
 
-    const VkSwapchainPresentFenceInfoEXT fence_info{
-        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT,
+    const VkSwapchainPresentFenceInfoKHR fence_info{
+        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_KHR,
         .swapchainCount = 1,
         .pFences = &present_context.presented,
     };

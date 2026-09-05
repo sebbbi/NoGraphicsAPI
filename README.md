@@ -45,13 +45,68 @@ or `VkPipelineLayout`. Its central extensions are:
 - `VK_EXT_mesh_shader` for mesh pipelines and dispatch.
 
 Win32 presentation uses `VK_KHR_surface`, `VK_KHR_win32_surface`,
-`VK_KHR_get_surface_capabilities2`, `VK_EXT_surface_maintenance1`, `VK_KHR_swapchain`, and
-`VK_EXT_swapchain_maintenance1`.
+`VK_KHR_get_surface_capabilities2`, `VK_KHR_surface_maintenance1`, `VK_KHR_swapchain`, and
+`VK_KHR_swapchain_maintenance1`, with the original EXT maintenance extensions accepted as a fallback.
 Debug builds also enable `VK_EXT_debug_utils` and the Khronos validation layer when available.
 
 Vulkan 1.4 supplies buffer device addresses, timeline semaphores, dynamic rendering,
 synchronization2, scalar block layout, and the remaining core features. See
 [Vulkan support](docs/vulkan-support.md) for the concise feature and command mapping.
+
+## Hardware support
+
+Driver support was checked on 5 September 2026 against the latest available packages and recent
+capability reports. These are API compatibility floors, not performance recommendations. `create_device()`
+remains authoritative because it also requires suitable queues and a coherent, host-visible device-local
+memory type, typically backed by a PCIe BAR aperture. Vulkan 1.4 alone is insufficient, and
+`VK_KHR_unified_image_layouts` remains optional.
+
+The latest available Windows drivers are [AMD Adrenalin 26.9.1](https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-9-1.html)
+and [NVIDIA 616.64 WHQL](https://us.download.nvidia.com/Windows/616.64/616.64-win11-win10-release-notes.pdf).
+
+The floors below are the lowest qualifying models checked for each driver path; the linked capability
+reports are representative architecture checks.
+
+| Architecture | Driver path | Product family | Hardware floor | Current result |
+| --- | --- | --- | --- | --- |
+| AMD RDNA 2 | Windows / Adrenalin 26.9.1 | Radeon RX 6000 | None | Unsupported |
+| AMD RDNA 2 | Linux / Mesa RADV 26.2+ | Steam Deck (Van Gogh) | Steam Deck | Supported |
+| AMD RDNA 3 | Windows / Adrenalin 26.9.1 | Radeon RX 7000 | Radeon RX 7600 | Supported |
+| AMD RDNA 4 | Windows / Adrenalin 26.9.1 | Radeon RX 9000 | Radeon RX 9050 | Supported |
+| NVIDIA Turing | Windows / NVIDIA 616.64 | GeForce RTX 20 | GeForce RTX 2060 | Supported |
+| NVIDIA Ampere | Windows / NVIDIA 616.64 | GeForce RTX 30 | GeForce RTX 3050 | Supported |
+| NVIDIA Ada Lovelace | Windows / NVIDIA 616.64 | GeForce RTX 40 | GeForce RTX 4060 | Supported |
+| NVIDIA Blackwell | Windows / NVIDIA 616.64 | GeForce RTX 50 | GeForce RTX 5050 | Supported |
+
+AMD limits `VK_EXT_descriptor_heap` to RDNA 3 and RDNA 4 on Windows, so no Radeon RX 6000 GPU qualifies
+there. With Mesa [RADV 26.2 or newer](https://docs.mesa3d.org/relnotes/26.2.0.html), Steam Deck has all
+required device extensions. Linux/SteamOS window presentation is not implemented yet and is planned
+for a near-term update.
+
+Reports for [RDNA 3 on Adrenalin 26.8.1](https://vulkan.gpuinfo.org/displayreport.php?id=51443)
+and [RDNA 4 on Adrenalin 26.7.1](https://vulkan.gpuinfo.org/displayreport.php?id=51293) advertise all
+required device functionality. AMD exposes the promoted `VK_KHR_surface_maintenance1` and
+`VK_KHR_swapchain_maintenance1` names; the backend accepts these as well as the original EXT names.
+Both KHR extensions are no-functional-change promotions:
+[surface](https://docs.vulkan.org/features/latest/features/proposals/VK_KHR_surface_maintenance1.html) and
+[swapchain](https://docs.vulkan.org/features/latest/features/proposals/VK_KHR_swapchain_maintenance1.html).
+AMD's [Vulkan extension history](https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-VULKAN.html)
+and [RDNA 2 descriptor-heap status](https://github.com/GPUOpen-Drivers/AMD-Gfx-Drivers/issues/90#issuecomment-3889407307)
+provide current driver details.
+
+Current reports advertise every Win32 backend requirement on
+[Turing](https://vulkan.gpuinfo.org/displayreport.php?id=51475),
+[Ampere](https://vulkan.gpuinfo.org/displayreport.php?id=51549),
+[Ada](https://vulkan.gpuinfo.org/displayreport.php?id=51469), and
+[Blackwell](https://vulkan.gpuinfo.org/displayreport.php?id=51573) NVIDIA GPUs.
+
+Intel's [current Windows package](https://www.intel.com/content/www/us/en/download/785597/intel-arc-graphics-windows.html)
+is 32.0.101.8992, but support is not verified. The latest public
+[Arc Windows report](https://vulkan.gpuinfo.org/displayreport.php?id=51355), for 32.0.101.8991, lacks the
+descriptor-heap, device-address-command, and shader-untyped-pointer extensions. Mesa ANV
+[26.2 or newer](https://docs.mesa3d.org/relnotes/26.2.0.html)
+exposes the required device functionality on verified Arc A-series and B-series hardware, but this
+repository currently supports only headless use outside Windows.
 
 ## GPU memory and descriptor heaps
 

@@ -38,8 +38,9 @@ conventional feature checked by device creation.
 | Win32 WSI | `VK_KHR_surface`, `VK_KHR_win32_surface`, `VK_KHR_swapchain`, and the maintenance extensions listed below. |
 
 Windowed devices also require `VK_KHR_get_surface_capabilities2`,
-`VK_EXT_surface_maintenance1`, and [`VK_EXT_swapchain_maintenance1`][swapchain-maintenance].
-The last extension supplies a completion fence for each presentation.
+`VK_KHR_surface_maintenance1`, and [`VK_KHR_swapchain_maintenance1`][swapchain-maintenance]. The
+original EXT variants are accepted as a paired fallback. Swapchain maintenance supplies a completion
+fence for each presentation.
 Debug builds enable `VK_EXT_debug_utils` and the Khronos validation layer when available.
 
 ## GPU heaps and application-side allocation
@@ -227,8 +228,9 @@ application allocator entries or descriptor slots; `wait_idle()` remains an inte
 drain.
 
 For presentation, `acquire()` returns a swapchain-owned `RenderView` and extent, or an empty frame
-while the drawable extent is zero. Binary WSI semaphores remain private, while `VK_EXT_swapchain_maintenance1` present fences support safe reuse
-and swapchain replacement without draining unrelated queue work.
+while the drawable extent is zero. Binary WSI semaphores remain private, while
+`VK_KHR_swapchain_maintenance1` present fences support safe reuse and swapchain replacement without
+draining unrelated queue work.
 
 ## Validation
 
@@ -244,5 +246,5 @@ of direct matches, Vulkan adaptations, and intentionally unsupported areas.
 [address-commands]: https://docs.vulkan.org/refpages/latest/refpages/source/VK_KHR_device_address_commands.html
 [unified-layouts]: https://docs.vulkan.org/refpages/latest/refpages/source/VK_KHR_unified_image_layouts.html
 [mesh-shader]: https://docs.vulkan.org/refpages/latest/refpages/source/VK_EXT_mesh_shader.html
-[swapchain-maintenance]: https://docs.vulkan.org/refpages/latest/refpages/source/VK_EXT_swapchain_maintenance1.html
+[swapchain-maintenance]: https://docs.vulkan.org/refpages/latest/refpages/source/VK_KHR_swapchain_maintenance1.html
 [spirv-heap]: https://github.khronos.org/SPIRV-Registry/extensions/EXT/SPV_EXT_descriptor_heap.html
