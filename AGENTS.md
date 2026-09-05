@@ -5,10 +5,12 @@
 - Avoid `auto` for local variables. Do not use it for ordinary value or structure types.
 - Disable C++ exceptions and RTTI across the entire codebase. Do not use either.
 - Perform error checks as early as possible. Check application initialization, resource loading, and Vulkan object creation immediately. Avoid error checking after initialization; normal code should not fail.
-- Use asserts to catch code bugs and documented API precondition violations. Use error codes and error messages only for invalid external input data and
-  initialization failures.
-- Treat the library as a low-level, thin wrapper, not as a validation layer. Document API preconditions and enforce programmer-error cases with asserts;
-  do not add runtime validation that duplicates the Vulkan validation layer.
+- Treat the library as a low-level, thin wrapper, not as a validation layer. Validate only inputs and state whose misuse could make the wrapper itself crash.
+  Document those preconditions and enforce programmer errors with asserts.
+- Data and parameters passed directly from the user to Vulkan are the user's responsibility. Do not duplicate Vulkan validation or maintain shadow state
+  solely to validate them; users should enable the Vulkan validation layer during development.
+- Do not abort for programming errors. Enforce their documented preconditions with asserts and leave release builds free of those checks.
+- Use error codes and error messages only for invalid external input data and initialization failures.
 - Do not check for memory allocation failures. We cannot recover from running out of memory; managing memory usage properly is the user's responsibility.
 - Avoid lambdas and complex templates.
 - Avoid trivial single-line wrapper functions.

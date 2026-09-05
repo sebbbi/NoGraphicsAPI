@@ -1,11 +1,13 @@
+#include <NoGraphicsAPIUtility/delete_queue.hpp>
 #include <NoGraphicsAPIUtility/texture_allocator.hpp>
 
 #include <cstdint>
 #include <type_traits>
-#include <utility>
 
-static_assert(!std::is_copy_constructible_v<gpu::PlacedTexture>);
-static_assert(std::is_nothrow_move_constructible_v<gpu::PlacedTexture>);
+static_assert(std::is_aggregate_v<gpu::PlacedTexture>);
+static_assert(std::is_standard_layout_v<gpu::PlacedTexture>);
+static_assert(std::is_trivial_v<gpu::PlacedTexture>);
+static_assert(std::is_trivially_copyable_v<gpu::PlacedTexture>);
 static_assert(!std::is_move_constructible_v<gpu::TextureAllocator>);
 
 namespace
@@ -48,23 +50,6 @@ int main()
         return 1;
     }
 
-    gpu::PlacedTexture moved(std::move(texture));
-    if (texture.texture || !moved.texture)
-    {
-        allocator.free(moved);
-        gpu::destroy_texture_heap(texture_heap);
-        gpu::destroy_device(device);
-        return 1;
-    }
-    texture = std::move(moved);
-    if (moved.texture || !texture.texture)
-    {
-        allocator.free(texture);
-        gpu::destroy_texture_heap(texture_heap);
-        gpu::destroy_device(device);
-        return 1;
-    }
-
     allocator.free(texture);
     texture = allocator.allocate(desc);
     if (!texture.texture)
@@ -74,8 +59,49 @@ int main()
         return 1;
     }
 
-    allocator.free(texture);
+    gpu::TimelineSemaphore* timeline = gpu::create_timeline_semaphore(device);
+    bool valid = true;
+    uint32_t callback_count = 0;
+    {
+        gpu::DeleteQueue delete_queue(timeline, 2);
+        gpu::CommandBuffer* commands = gpu::begin_commands(device);
+        delete_queue.defer(1, [&allocator, &texture]() noexcept { allocator.free(texture); });
+        delete_queue.defer(2, [&callback_count]() noexcept { ++callback_count; });
+
+        delete_queue.tick();
+        exhausted = allocator.allocate(desc);
+        if (exhausted.texture)
+        {
+            valid = false;
+            allocator.free(exhausted);
+        }
+
+        gpu::submit({commands}, {.semaphore = timeline, .value = 1});
+        gpu::wait_timeline({.semaphore = timeline, .value = 1});
+        exhausted = allocator.allocate(desc);
+        if (exhausted.texture)
+        {
+            valid = false;
+            allocator.free(exhausted);
+        }
+
+        delete_queue.tick();
+        texture = allocator.allocate(desc);
+        valid &= texture.texture != nullptr && callback_count == 0;
+
+        commands = gpu::begin_commands(device);
+        gpu::submit({commands}, {.semaphore = timeline, .value = 2});
+        gpu::wait_timeline({.semaphore = timeline, .value = 2});
+        delete_queue.tick();
+        delete_queue.defer(2, [&callback_count]() noexcept { ++callback_count; });
+        delete_queue.defer(2, [&callback_count]() noexcept { ++callback_count; });
+        delete_queue.tick();
+        valid &= callback_count == 3;
+        allocator.free(texture);
+    }
+
+    gpu::destroy_timeline_semaphore(timeline);
     gpu::destroy_texture_heap(texture_heap);
     gpu::destroy_device(device);
-    return 0;
+    return valid ? 0 : 1;
 }

@@ -54,10 +54,9 @@ This is an unusually direct Vulkan realization of the post: the implementation c
 
 ## GPU pointers are the primary data model
 
-The most important match is the absence of public buffer objects. `create_gpu_heap()` returns a raw
-`GpuHeap` containing those addresses and the exact requested byte size in `GpuHeap::range`. The
-application partitions that `GpuCpuRange<byte>` and places typed GPU pointers directly in shared C++/Slang
-structures:
+The most important match is the absence of public buffer objects. `create_gpu_heap()` returns raw
+CPU/GPU address storage for application-side partitioning. The application places typed GPU pointers
+directly in shared C++/Slang structures:
 
 ```cpp
 struct RootArguments
@@ -76,16 +75,13 @@ both an address and an extent, so copies, index binding, and indirect operations
 without reintroducing buffer handles. A subrange is expressed by adjusting the address and size.
 
 `MemoryType` selects mapped CPU-visible memory, GPU-only memory, readback, or one of the two
-descriptor-heap usages. Each call creates one whole backing buffer and memory allocation; the backend
-has no suballocator. Applications can pass `heap.range` to the companion utility library's fixed
-16-byte `BumpAllocator` or `HeapAllocator`. Raw allocation returns `GpuCpuRange<byte>`, while
-`allocate<T>(element_count)` returns a range with typed CPU and GPU pointers.
-Applications may also supply their own policy.
+descriptor-heap usages. The backend has no data suballocator. The optional utility library provides
+fixed-16-byte bump and reusable allocation policies, or applications may supply their own. Every
+`GpuCpuRange<T>::size` is measured in bytes.
 
 As in the post, GPU pointers are raw capabilities rather than tracked references. The application
-must keep their backing heaps live while recording and must synchronize suballocation mutation or
-reuse. Whole-heap destruction after submission is deferred by the backend; a `GpuRange` does not add
-shader bounds checking or ownership.
+must synchronize suballocation mutation or reuse. A heap may be destroyed after its final use is
+recorded; the backend retires it after completion. A `GpuRange` adds neither bounds checking nor ownership.
 
 ## Application-owned descriptor heaps
 
@@ -98,8 +94,9 @@ The texture descriptor heap preserves the post's ownership model:
 
 There are no descriptor sets, descriptor tables, binding layouts, or backend-managed descriptor
 caches. Buffers never occupy texture-descriptor slots because shaders reach them through GPU pointers.
-Vulkan defines the native descriptor bytes and alignment; the API exposes descriptor sizes and
-strides so the application can lay out its own heap.
+Vulkan defines the native descriptor bytes; the API exposes texture and sampler descriptor sizes for
+slot addressing. Texture descriptors can select a format, mip/layer range, and color, depth, or
+stencil aspect.
 
 `VK_EXT_descriptor_heap` separates resource and sampler heaps. `NoGraphicsAPI` creates exact-sized,
 mapped `GpuHeap` values with `MemoryType::texture_descriptor_heap` and
@@ -114,19 +111,9 @@ dispatch supplies a compute root pointer. This permits large roots, GPU-generate
 GPU-selected roots without command-buffer rewriting.
 
 `NoGraphicsAPI` instead gives every draw or dispatch one `ByteSpan` of CPU data. Immediately before
-the native command, the backend copies the bytes with `vkCmdPushDataEXT`. Shaders read the root
-fields directly from push-data state:
-
-```cpp
-RootArguments root{
-    .vertices = vertex_gpu,
-    .objects = object_gpu,
-};
-gpu::draw(commands, root, vertex_count);
-```
-
-The CPU value only needs to live through the API call. GPU pointers stored inside it retain their
-normal GPU-execution lifetime requirements.
+the native command, the backend copies those bytes with `vkCmdPushDataEXT`. The CPU value only needs
+to live through the API call; GPU pointers stored inside it retain their normal GPU-execution lifetime
+requirements.
 
 The exact root contract is:
 
@@ -204,13 +191,11 @@ from the post is only partially present.
 ## Textures and presentation
 
 Textures remain opaque objects because Vulkan images need creation metadata, binding, views, and
-lifetime management, but their storage placement is application-owned. A `TextureHeap` value owns
-one raw allocation of a device-selected GPU-only image-memory type, separate from the texture descriptor
-heap. `DeviceCaps::texture_heap_alignment` is a worst-case alignment for every supported texture, so
-the utility `TextureAllocator` can suballocate without leading alignment padding. It owns the placement
-policy for one texture heap: `allocate()` queries `SizeAlign` and hides element rounding and the Vulkan
-offset, while `free()` destroys the `PlacedTexture` and returns its range. The backend contains no
-texture suballocator.
+lifetime management, but their storage placement is application-owned. A `TextureHeap` owns one raw
+allocation of the device-selected GPU-only image-memory type, separate from the texture descriptor
+heap. `DeviceCaps::texture_heap_alignment` is the common allocator granularity selected for the
+supported texture profile. The optional `TextureAllocator` hides placement rounding; the backend
+contains no texture suballocator or dependency tracking.
 
 There are no CPU-visible or readback texture heaps. Texture upload and readback use
 `copy_memory_to_texture()` and `copy_texture_to_memory()` with buffer-backed `GpuRange` storage.

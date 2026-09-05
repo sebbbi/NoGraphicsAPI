@@ -116,8 +116,8 @@ int main() {
 	memcpy(index_allocation.cpu, cube_indices, sizeof(cube_indices));
     read_binary_file(NOGRAPHICSAPI_CUBE_TEXTURE_PATH, Span<byte>(upload_allocation.cpu, texture_byte_count));
 
-	GpuHeap texture_descriptor_heap = create_gpu_heap(device, caps.texture_descriptor_stride, MemoryType::texture_descriptor_heap);
-	GpuHeap sampler_descriptor_heap = create_gpu_heap(device, caps.sampler_descriptor_stride, MemoryType::sampler_descriptor_heap);
+	GpuHeap texture_descriptor_heap = create_gpu_heap(device, caps.texture_descriptor_size, MemoryType::texture_descriptor_heap);
+	GpuHeap sampler_descriptor_heap = create_gpu_heap(device, caps.sampler_descriptor_size, MemoryType::sampler_descriptor_heap);
 	TextureHeap texture_heap = create_texture_heap(device, texture_heap_size);
     TextureAllocator texture_allocator(device, texture_heap, 16);
 
@@ -156,6 +156,8 @@ int main() {
 	while (pump_example_window(window))
 	{
         const SwapchainFrame frame = acquire(device);
+        if (!frame.render_view)
+            continue;
 
         // Window resize?
         if (frame.extent.x != depth_extent.x || frame.extent.y != depth_extent.y)
@@ -175,8 +177,8 @@ int main() {
 
 		// Render
 		CommandBuffer* commands = begin_commands(device);
-        set_texture_heap(commands, gpu_range(texture_descriptor_heap));
-        set_sampler_heap(commands, gpu_range(sampler_descriptor_heap));
+        set_texture_descriptor_heap(commands, gpu_range(texture_descriptor_heap));
+        set_sampler_descriptor_heap(commands, gpu_range(sampler_descriptor_heap));
 
 		barrier(commands, 
 			Stage::depth_stencil_tests, Access::depth_stencil_write, 

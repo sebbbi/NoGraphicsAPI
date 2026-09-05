@@ -26,9 +26,8 @@ implemented; [the Metal 4 design](docs/metal-porting.md) records the proposed ma
 - **Pipeline binding state stays small.** There are no public buffer objects, descriptor sets,
   descriptor layouts, pipeline layouts, or sampler objects. PSOs contain shader and fixed-function
   state, while data arrives through the root and descriptor heaps.
-- **Submission is explicit and asynchronous.** Applications provide timeline points for their own
-  data reuse. Submitted command buffers are one-shot, and destruction after submission is retired
-  without a device-wide idle wait.
+- **Submission is explicit and asynchronous.** Applications provide timeline points for reuse and
+  deferred destruction. Submitted command buffers are one-shot.
 
 The [design comparison](docs/no-graphics-api-comparison.md) separates faithful mappings, Vulkan-driven
 differences, and features that remain outside the prototype.
@@ -56,37 +55,12 @@ synchronization2, scalar block layout, and the remaining core features. See
 
 ## GPU memory and descriptor heaps
 
-There is no public buffer handle or internal suballocator. `GpuHeap::range` is a `GpuCpuRange<byte>` with
-`byte* cpu`, `byte* gpu`, and `uint64_t size`; the heap's opaque `owner` field must be preserved for
-destruction. Copies alias the same heap, so destroy one unchanged copy exactly once and then discard
-every copy and range. Every non-null returned pointer is 16-byte aligned. The raw heap API is:
+There are no public buffer objects or internal suballocators. Applications own data and descriptor
+heaps; optimal-tiled textures use separate GPU-only heaps. The optional utility library provides
+application-side data and texture allocation policies.
 
-```cpp
-[[nodiscard]] GpuHeap create_gpu_heap(Device* device, uint64_t byte_count, MemoryType memory = MemoryType::cpu_visible) noexcept;
-void destroy_gpu_heap(const GpuHeap& heap) noexcept;
-template<typename T>
-[[nodiscard]] constexpr GpuRange gpu_range(GpuCpuRange<T> range) noexcept;
-[[nodiscard]] constexpr GpuRange gpu_range(const GpuHeap& heap) noexcept;
-```
-
-Each call creates one whole heap for application-side partitioning. The memory types are:
-
-- `cpu_visible`: coherent device-local memory for data written by the CPU;
-- `gpu_only`: device-local memory with no CPU mapping (`range.cpu` is null);
-- `readback`: coherent mapped memory with host-cached memory preferred;
-- `texture_descriptor_heap` and `sampler_descriptor_heap`: mapped descriptor storage.
-
-Textures use a separate `TextureHeap` value backed by GPU-only image memory. The utility
-`TextureAllocator` captures its device and heap, using the heap's size and the requested maximum
-allocation count. Its `allocate()` method queries `SizeAlign` and places a `PlacedTexture` using the
-device's common worst-case texture alignment, so callers handle neither byte offsets nor alignment
-padding. The application owns every resource lifetime and returns placements through the allocating
-allocator's `free()`; neither library tracks dependencies between resources. `PlacedTexture` is
-move-only.
-
-`GpuRange` is the non-owning GPU address/size view used by commands. The application owns allocation,
-descriptor-slot, and pointed-to data lifetimes; timeline points mark when mutable storage can be
-reused. Texture and sampler descriptors are addressed in Slang through the standard heap syntax:
+`GpuRange` is the non-owning address/size view used by commands. Texture and sampler descriptors are
+addressed in Slang through the standard heap syntax:
 
 ```slang
 Texture2D<float4> texture = ResourceDescriptorHeap[texture_index];
@@ -110,7 +84,7 @@ struct RootArguments
 On the CPU, pointer fields receive GPU virtual addresses while ordinary values are copied directly:
 
 ```cpp
-GpuCpuRange<Vertex> vertex_memory = data_allocator.allocate<Vertex>(vertex_count);
+GpuCpuRange<Vertex> vertex_memory = bump_allocator.allocate<Vertex>(vertex_count);
 RootArguments root{
     .vertices = vertex_memory.gpu,
     .mvp = mvp,
@@ -176,13 +150,10 @@ target_link_libraries(my_application PRIVATE
     NoGraphicsAPIUtility::textures)
 ```
 
-`NoGraphicsAPIUtility::types` provides the shared C++/Slang types, `::math` adds the header-only math
-API and its AVX2/FMA compile options, and `::allocators` provides fixed-16-byte `gpu::BumpAllocator`
-and `gpu::HeapAllocator` policies. Both accept a non-owning `GpuCpuRange<byte>`. Raw allocation returns
-that same type, while `allocate<T>(element_count)` returns a `GpuCpuRange<T>` with typed CPU and GPU pointers;
-`GpuHeap::range` can be passed directly. `::textures` adds
-`TextureAllocator` and `PlacedTexture`. NoGraphicsAPI itself does not use these helpers or propagate
-the math target's AVX2/FMA requirements.
+NoGraphicsAPIUtility provides shared C++/Slang types, math, data and texture suballocation, and a
+timeline-driven `DeleteQueue`. These are optional application-side policies; NoGraphicsAPI does not
+depend on them. The queue delays allocator reuse and resource destruction until the application
+timeline completes.
 
 For repository development on Windows, enable the examples and tests explicitly. Building examples
 requires the Slang and SPIR-V Tools versions listed above.

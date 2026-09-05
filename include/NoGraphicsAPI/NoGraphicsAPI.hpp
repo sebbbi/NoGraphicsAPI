@@ -127,17 +127,19 @@ struct GpuCpuRange
 {
     T* cpu = nullptr;
     T* gpu = nullptr;
-    uint64_t size = 0;
+    uint64_t size = 0; // Bytes, independent of T.
 };
 
 struct GpuHeap
 {
+    // Copies alias the same allocation. Pass one unchanged copy to destroy_gpu_heap exactly once.
     GpuCpuRange<byte> range{};
     const GpuHeapOwner* owner = nullptr;
 };
 
 struct TextureHeap
 {
+    // Copies alias the same allocation. Pass one unchanged copy to destroy_texture_heap exactly once.
     uint64_t size = 0;
     const TextureHeapOwner* owner = nullptr;
 };
@@ -335,6 +337,14 @@ enum class TextureDescriptorType : uint8_t
     storage,
 };
 
+enum class TextureAspect : uint8_t
+{
+    automatic,
+    color,
+    depth,
+    stencil,
+};
+
 constexpr TextureUsage operator|(TextureUsage lhs, TextureUsage rhs) noexcept
 {
     return static_cast<TextureUsage>(static_cast<uint32_t>(lhs) |  static_cast<uint32_t>(rhs));
@@ -482,10 +492,8 @@ struct DeviceCaps
     uint64_t max_push_data_size = 0;
     // Common element size for suballocating TextureHeap storage; every SizeAlign::align divides this value.
     uint64_t texture_heap_alignment = 0;
-    uint64_t texture_descriptor_size = 0;
-    uint64_t texture_descriptor_stride = 0;
-    uint64_t sampler_descriptor_size = 0;
-    uint64_t sampler_descriptor_stride = 0;
+    uint64_t texture_descriptor_size = 0; // Bytes per descriptor slot.
+    uint64_t sampler_descriptor_size = 0; // Bytes per descriptor slot.
     bool texture_compression_bc = false;
     bool texture_compression_astc = false;
     bool storage_input_output16 = false;
@@ -532,6 +540,7 @@ struct RenderViewDesc
 struct TextureDescriptorDesc
 {
     Format format = Format::undefined; // Undefined inherits the texture format.
+    TextureAspect aspect = TextureAspect::automatic; // Automatic selects color, or depth before stencil.
     uint32_t base_mip = 0;
     uint32_t mip_count = 0; // Zero selects every remaining mip level.
     uint32_t base_layer = 0; // Vulkan array layer; cube faces are individual layers.
@@ -685,7 +694,7 @@ void destroy_timeline_semaphore(TimelineSemaphore* semaphore) noexcept;
 void wait_timeline(TimelinePoint point) noexcept;
 void wait_idle(Device* device) noexcept;
 
-[[nodiscard]] SwapchainFrame acquire(Device* device) noexcept;
+[[nodiscard]] SwapchainFrame acquire(Device* device) noexcept; // Empty while the drawable extent is zero.
 void submit_and_present(Device* device, Span<CommandBuffer* const> commands, TimelinePoint completion) noexcept;
 
 // Every non-null returned pointer is 16-byte aligned. Descriptor heaps are exact allocations;
@@ -730,8 +739,8 @@ void destroy_pso(PSO* pso) noexcept;
 [[nodiscard]] CommandBuffer* begin_commands(Device* device) noexcept;
 void submit(Span<CommandBuffer* const> commands, TimelinePoint completion) noexcept;
 
-void set_texture_heap(CommandBuffer* commands, GpuRange heap) noexcept; // Heap range must be full GpuHeap range
-void set_sampler_heap(CommandBuffer* commands, GpuRange heap) noexcept; // Heap range must be full GpuHeap range
+void set_texture_descriptor_heap(CommandBuffer* commands, GpuRange heap) noexcept; // Heap range must be full GpuHeap range
+void set_sampler_descriptor_heap(CommandBuffer* commands, GpuRange heap) noexcept; // Heap range must be full GpuHeap range
 
 void copy_memory(CommandBuffer* commands, GpuRange source, GpuRange destination) noexcept;
 void copy_memory_to_texture(CommandBuffer* commands, GpuRange source, Texture* destination, const TextureCopyDesc& copy = {}) noexcept;

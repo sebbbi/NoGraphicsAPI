@@ -49,24 +49,19 @@ heaps, plus compatible device-local memory for GPU-only heaps and textures. GPU-
 prefer a non-host-visible type, but can use a host-visible UMA type without mapping or exposing it.
 There is no host-only or non-coherent fallback path.
 
-`create_gpu_heap()` creates one owning `GpuHeap` whose embedded `GpuCpuRange<byte>` has exactly the
-requested byte count. `cpu_visible`, `gpu_only`, and `readback` create raw addressable buffer storage;
-`texture_descriptor_heap` and `sampler_descriptor_heap` create mapped descriptor storage. A
-GPU-only heap has no CPU mapping. Descriptor backing includes any alignment padding and reserved
-range required by Vulkan, but those bytes are not part of the exposed heap. The returned value,
-including its opaque owner field, is preserved and passed exactly once to `destroy_gpu_heap()`.
+`create_gpu_heap()` returns one application-sized block. `cpu_visible`, `gpu_only`, and `readback`
+provide addressable data storage; the two descriptor memory types provide mapped descriptor storage.
+`GpuCpuRange<T>::size` is always bytes, regardless of `T`, and a GPU-only heap has a null CPU pointer.
 
-There is no internal pool or suballocator and no device-wide block-size setting. Applications may,
-for example, create a 256 MiB heap and partition it themselves. The companion
-`NoGraphicsAPIUtility::allocators` target provides fixed-16-byte `BumpAllocator` and `HeapAllocator`
-policies. Both accept `GpuHeap::range` directly. Their raw overloads return `GpuCpuRange<byte>`, and
-`allocate<T>(element_count)` returns `GpuCpuRange<T>`. The graphics API does not depend on them.
+The backend has no data suballocator. The optional utility library provides fixed-16-byte
+`BumpAllocator` and reusable `HeapAllocator` policies over `GpuHeap::range`; the graphics API does not
+depend on either policy.
 
 ## GPU pointers
 
-GPU pointers are the central departure from conventional graphics APIs. `GpuHeap::range` exposes a
-byte CPU pointer, a byte GPU pointer, and its byte size; the application derives typed pointers and command
-`GpuRange` values from its own suballocations. Every non-null returned pointer is 16-byte aligned.
+GPU pointers are the central departure from conventional graphics APIs. The application derives
+typed pointers and command `GpuRange` values from its heap suballocations. Every non-null returned
+pointer is 16-byte aligned.
 Types or interior ranges requiring stronger alignment must be placed accordingly by the application.
 The same pointer type can appear in a C++ root structure and its Slang counterpart:
 
@@ -83,8 +78,8 @@ struct Root
 The shared ABI requires a 64-bit pointer target. The GPU dereferences pointers through the
 `SPV_KHR_physical_storage_buffer` model, while the CPU treats GPU addresses as opaque values.
 Pointer targets need valid, stable storage through GPU completion. Destroying a whole `GpuHeap`
-after submission defers its physical Vulkan destruction, but reuse of an application-managed
-suballocation remains the application's timeline responsibility.
+after its final use is recorded defers physical Vulkan destruction, but reuse of an
+application-managed suballocation remains the application's timeline responsibility.
 
 Commands that need an address and byte count accept `GpuRange`. The backend passes that numeric
 address directly to Vulkan; command recording does not recover a public buffer object or retain its
@@ -109,19 +104,19 @@ in root data; indexed draws bind only the index address range required by Vulkan
 
 Texture and sampler descriptors live in separate mapped `GpuHeap` values created with
 `MemoryType::texture_descriptor_heap` and `MemoryType::sampler_descriptor_heap`. The application
-decides their exact sizes and uses the descriptor strides reported in `DeviceCaps` to address slots.
+decides their sizes and addresses slots with `DeviceCaps::texture_descriptor_size` and
+`DeviceCaps::sampler_descriptor_size`.
 
 `write_texture_descriptor()` and `write_sampler_descriptor()` ask Vulkan to encode one descriptor
-directly at the selected CPU address. `set_texture_heap()` and `set_sampler_heap()` bind the
-unchanged full `gpu_range()` from the corresponding descriptor heap. Interior or shortened ranges
-do not contain the backing allocation's reserved tail. Shaders then index Slang's
-`ResourceDescriptorHeap` and `SamplerDescriptorHeap`; heap-using shaders compile for
-[`SPV_EXT_descriptor_heap`][spirv-heap].
+at the selected CPU address. `set_texture_descriptor_heap()` and `set_sampler_descriptor_heap()` bind
+the corresponding GPU ranges. Shaders index Slang's `ResourceDescriptorHeap` and
+`SamplerDescriptorHeap`; heap-using shaders compile for [`SPV_EXT_descriptor_heap`][spirv-heap].
 
 Texture views can select a compatible format only when `TextureDesc::mutable_format` is enabled;
-they can always select a mip/layer range. Sampler descriptors are encoded directly, so there is no
-public sampler object. Texture and view layer ranges use Vulkan array-layer units, so each cube uses
-six layers. Buffers use GPU pointers instead of resource-heap entries.
+they can select a mip/layer range and color, depth, or stencil aspect. The default
+`TextureAspect::automatic` preserves format-derived selection. Sampler descriptors are encoded
+directly, so there is no public sampler object. Buffers use GPU pointers instead of resource-heap
+entries.
 
 The application owns descriptor-slot reuse. A slot cannot be overwritten while in-flight work may
 read it. This is intentionally the same explicit lifetime model used for mapped heap suballocations.
@@ -132,22 +127,16 @@ read it. This is intentionally the same explicit lifetime model used for mapped 
 device's single selected GPU-only texture memory type; it has no CPU mapping or GPU pointer.
 There are no CPU-visible or readback texture-heap variants.
 
-Device initialization intersects Vulkan's common optimal-tiled color-image memory mask with the
-mask for every supported depth/stencil format, then selects one device-local type, preferring a
-non-host-visible type when available. A host-visible UMA type remains opaque and unmapped. The
-device is unsupported when no common type exists. This fixed choice lets texture heaps be created
-eagerly; `SizeAlign` deliberately exposes no memory-type bits.
+Device initialization selects one device-local type compatible with the backend's supported
+optimal-tiled texture profile. A host-visible UMA type remains opaque and unmapped. This fixed choice
+allows eager heap creation, so `SizeAlign` deliberately exposes no memory-type bits.
 
-Before reserving space, the application calls `get_texture_size_align()` for the complete
-`TextureDesc`. `DeviceCaps::texture_heap_alignment` is a common worst-case alignment for every
-supported texture. Initialization derives it from representative DCC-capable color, broad 3D, and
-sampled depth layouts; each concrete texture requirement is checked against it. Utility
-`TextureAllocator` captures the device and texture heap, takes its capacity from `TextureHeap::size`,
-and reserves metadata for the requested maximum allocation count. Its `allocate()` method queries
-`SizeAlign`, reserves whole common-alignment elements, and passes the private byte offset to
-`create_texture()`. Exact alignments divide the common alignment, so placements need no leading
-padding. `free()` destroys a `PlacedTexture` and returns its range. The application follows Vulkan
-resource-lifetime rules; the API does not track dependencies between textures and their heap.
+`get_texture_size_align()` reports a concrete texture's placement requirement.
+`DeviceCaps::texture_heap_alignment` is the common allocator granularity selected for the supported
+profile; it is not a Vulkan guarantee for arbitrary image create descriptions. Utility
+`TextureAllocator` uses that granularity and returns a POD `PlacedTexture`. Pass the aggregate back to
+the same allocator after GPU use has completed. The API does not track texture-to-heap or
+texture-to-descriptor dependencies.
 
 Texture upload and readback go through buffer-backed `GpuRange` values with
 `copy_memory_to_texture()` and `copy_texture_to_memory()`. Destroying a texture defers the Vulkan
@@ -226,14 +215,19 @@ Public timeline semaphores are the application's reuse mechanism. Poll or wait f
 last used mutable upload data, readback storage, a texture placement, indirect argument memory, or a
 descriptor slot before modifying or recycling it.
 
-After every begun command buffer has been submitted, objects and whole heaps no longer needed by a
-future recording may be destroyed without waiting for GPU completion. Their public values become
-invalid immediately, while the backend defers physical Vulkan destruction on a private retirement
-timeline. It does not retire or recycle application allocator entries. `wait_idle()` is available
-for an intentional whole-device drain.
+The optional utility `DeleteQueue` runs deferred callbacks once their nondecreasing application
+timeline values complete. Applications normally tick it once per frame and destroy directly after
+draining the GPU at shutdown.
 
-For presentation, `acquire()` returns a swapchain-owned `RenderView` and extent. Binary WSI
-semaphores remain private, while `VK_EXT_swapchain_maintenance1` present fences support safe reuse
+After an object's final use has been recorded, it may be destroyed even before that command buffer
+is submitted. Its public value becomes invalid immediately, while the backend keeps the Vulkan
+object alive for the recorded work and retires it after completion. The same rule applies to whole
+heaps once no future recording or live suballocation needs them. The backend does not recycle
+application allocator entries or descriptor slots; `wait_idle()` remains an intentional whole-device
+drain.
+
+For presentation, `acquire()` returns a swapchain-owned `RenderView` and extent, or an empty frame
+while the drawable extent is zero. Binary WSI semaphores remain private, while `VK_EXT_swapchain_maintenance1` present fences support safe reuse
 and swapchain replacement without draining unrelated queue work.
 
 ## Validation

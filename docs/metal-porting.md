@@ -80,8 +80,9 @@ Metal 4 accepts raw addresses for the command operands that matter most to the d
 - mesh indirect arguments on supported families;
 - compute dispatch indirect arguments.
 
-These commands consume `GpuRange::gpu` directly after ordinary bounds and alignment validation.
-Multiple indirect commands may be encoded without reading their argument contents on the CPU.
+These commands consume `GpuRange::gpu` directly under the caller's normal bounds and alignment
+contract. Multiple indirect commands may be encoded without reading their argument contents on the
+CPU.
 
 Native Metal copy commands are the exception. They take an `MTLBuffer` and byte offset rather than
 an arbitrary GPU address. The backend therefore keeps an internal address-range index for its
@@ -158,9 +159,8 @@ not portable in this design. A separately named compatibility mode could store r
 ordinary buffer and add shader indirection. It is optional, slower by construction, and not part of
 the first Metal backend.
 
-View format, mip, layer, sampled/storage role, and referenced-texture lifetime are still validated
-when a slot is written. Exhaustive format and view rules belong in the implementation and tests,
-not in this design overview.
+Each slot still describes its view format, mip/layer range, aspect, and sampled/storage role. The API
+does not retain or track the referenced texture; its lifetime remains the application's responsibility.
 
 ## Sampler heap
 
@@ -271,7 +271,7 @@ Required changes are limited to:
 1. Adapt Vulkan descriptor-heap buffers to Metal texture and sampler indexing while preserving the
    application-owned logical namespaces.
 2. Replace SPIR-V-only PSO inputs with backend-neutral shader-stage artifacts.
-3. Remove or deprecate texture descriptor byte-size/stride capabilities once descriptor heaps are
+3. Remove or deprecate texture descriptor byte-size capabilities once descriptor heaps are
    opaque.
 
 A fourth change is conditional: expose indirect-mesh support as a capability if the initial backend
@@ -320,7 +320,7 @@ The focused test plan is:
 - test grouped timelines, drawable acquisition, resizing, occlusion, and presentation order; and
 - measure the direct texture path before considering an optional indirection mode.
 
-Format coverage, alignment limits, and detailed descriptor validation should be generated from the
+Format coverage, alignment limits, and descriptor-view conformance should be generated from the
 implementation's tables and tests rather than duplicated as a second API specification here.
 
 ## Primary references

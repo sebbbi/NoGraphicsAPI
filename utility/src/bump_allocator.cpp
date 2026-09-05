@@ -4,15 +4,16 @@
 
 namespace gpu
 {
+using std::uintptr_t;
 
 namespace
 {
 
-std::byte* offset_pointer(std::byte* pointer, std::uint64_t offset) noexcept
+byte* offset_pointer(byte* pointer, uint64_t offset) noexcept
 {
     if (!pointer)
         return nullptr;
-    return reinterpret_cast<std::byte*>(reinterpret_cast<std::uintptr_t>(pointer) + offset);
+    return reinterpret_cast<byte*>(reinterpret_cast<uintptr_t>(pointer) + offset);
 }
 
 } // namespace
@@ -22,8 +23,8 @@ BumpAllocator::BumpAllocator(GpuCpuRange<byte> storage) noexcept
 {
     assert(storage.size != 0);
     assert(storage.cpu || storage.gpu);
-    assert((!storage.cpu || reinterpret_cast<std::uintptr_t>(storage.cpu) % alignment == 0) &&
-           (!storage.gpu || reinterpret_cast<std::uintptr_t>(storage.gpu) % alignment == 0));
+    assert((!storage.cpu || reinterpret_cast<uintptr_t>(storage.cpu) % alignment == 0) &&
+           (!storage.gpu || reinterpret_cast<uintptr_t>(storage.gpu) % alignment == 0));
 }
 
 BumpAllocator::BumpAllocator(BumpAllocator&& other) noexcept
@@ -45,7 +46,7 @@ BumpAllocator& BumpAllocator::operator=(BumpAllocator&& other) noexcept
     return *this;
 }
 
-GpuCpuRange<byte> BumpAllocator::allocate(std::uint64_t byte_size) noexcept
+GpuCpuRange<byte> BumpAllocator::allocate(uint64_t byte_size) noexcept
 {
     assert(byte_size != 0);
     if (byte_size == 0 || offset_ > storage_.size || byte_size > storage_.size - offset_)
@@ -56,8 +57,8 @@ GpuCpuRange<byte> BumpAllocator::allocate(std::uint64_t byte_size) noexcept
         .gpu = offset_pointer(storage_.gpu, offset_),
         .size = byte_size,
     };
-    const std::uint64_t remaining = storage_.size - offset_;
-    const std::uint64_t aligned_size = byte_size <= std::numeric_limits<std::uint64_t>::max() - (alignment - 1)
+    const uint64_t remaining = storage_.size - offset_;
+    const uint64_t aligned_size = byte_size <= std::numeric_limits<uint64_t>::max() - (alignment - 1)
                                            ? (byte_size + alignment - 1) & ~(alignment - 1)
                                            : remaining;
     offset_ += aligned_size < remaining ? aligned_size : remaining;

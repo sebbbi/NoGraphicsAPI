@@ -39,6 +39,8 @@ int main()
     while (pump_example_window(window))
     {
         const SwapchainFrame frame = acquire(device);
+        if (!frame.render_view)
+            continue;
         CommandBuffer* commands = begin_commands(device);
         begin_render_pass(commands, {
             .colors = { { .render_view = frame.render_view, .load = LoadOp::clear } },

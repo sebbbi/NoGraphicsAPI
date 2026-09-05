@@ -155,6 +155,7 @@ static_assert(std::is_same_v<std::underlying_type_t<gpu::Error>, std::uint8_t> &
               std::is_same_v<std::underlying_type_t<gpu::TextureType>, std::uint8_t> &&
               std::is_same_v<std::underlying_type_t<gpu::TextureUsage>, std::uint32_t> &&
               std::is_same_v<std::underlying_type_t<gpu::TextureDescriptorType>, std::uint8_t> &&
+              std::is_same_v<std::underlying_type_t<gpu::TextureAspect>, std::uint8_t> &&
               std::is_same_v<std::underlying_type_t<gpu::Filter>, std::uint8_t> &&
               std::is_same_v<std::underlying_type_t<gpu::AddressMode>, std::uint8_t> &&
               std::is_same_v<std::underlying_type_t<gpu::CompareOp>, std::uint8_t> &&
@@ -310,9 +311,7 @@ constexpr gpu::DeviceCaps default_caps{};
 static_assert(default_caps.device_name == nullptr && default_caps.max_push_data_size == 0 &&
               default_caps.texture_heap_alignment == 0 &&
               default_caps.texture_descriptor_size == 0 &&
-              default_caps.texture_descriptor_stride == 0 &&
-              default_caps.sampler_descriptor_size == 0 &&
-              default_caps.sampler_descriptor_stride == 0 && !default_caps.texture_compression_bc &&
+              default_caps.sampler_descriptor_size == 0 && !default_caps.texture_compression_bc &&
               !default_caps.texture_compression_astc && !default_caps.storage_input_output16);
 constexpr gpu::DeviceInit default_device_init{};
 static_assert(default_device_init.device == nullptr &&
@@ -349,6 +348,7 @@ constexpr gpu::RenderViewDesc default_render_view{};
 static_assert(default_render_view.mip_level == 0 && default_render_view.slice == 0);
 constexpr gpu::TextureDescriptorDesc default_texture_descriptor{};
 static_assert(default_texture_descriptor.format == gpu::Format::undefined &&
+              default_texture_descriptor.aspect == gpu::TextureAspect::automatic &&
               default_texture_descriptor.base_mip == 0 &&
               default_texture_descriptor.mip_count == 0 &&
               default_texture_descriptor.base_layer == 0 &&
@@ -495,8 +495,8 @@ static_assert(std::is_same_v<decltype(&gpu::acquire), AcquireFunction>);
 static_assert(std::is_same_v<decltype(&gpu::create_compute_pso), CreateComputePSOFunction>);
 static_assert(std::is_same_v<decltype(&gpu::submit), SubmitFunction>);
 static_assert(std::is_same_v<decltype(&gpu::submit_and_present), SubmitAndPresentFunction>);
-static_assert(std::is_same_v<decltype(&gpu::set_texture_heap), SetHeapFunction>);
-static_assert(std::is_same_v<decltype(&gpu::set_sampler_heap), SetHeapFunction>);
+static_assert(std::is_same_v<decltype(&gpu::set_texture_descriptor_heap), SetHeapFunction>);
+static_assert(std::is_same_v<decltype(&gpu::set_sampler_descriptor_heap), SetHeapFunction>);
 static_assert(std::is_same_v<decltype(&gpu::copy_memory), CopyMemoryFunction>);
 static_assert(std::is_same_v<decltype(&gpu::copy_memory_to_texture), CopyMemoryToTextureFunction>);
 static_assert(std::is_same_v<decltype(&gpu::copy_texture_to_memory), CopyTextureToMemoryFunction>);
@@ -567,8 +567,8 @@ static_assert(std::is_constructible_v<CommandBatch, std::initializer_list<gpu::C
     gpu::CommandBuffer* a = gpu::begin_commands(device);
     gpu::CommandBuffer* b = gpu::begin_commands(device);
     gpu::bind_pso(a, pso);
-    gpu::set_texture_heap(a, range);
-    gpu::set_sampler_heap(a, range);
+    gpu::set_texture_descriptor_heap(a, range);
+    gpu::set_sampler_descriptor_heap(a, range);
     gpu::begin_render_pass(a, {
                                   .colors = {{.render_view = render_view}},
                               });

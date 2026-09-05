@@ -3,7 +3,6 @@
 #include <NoGraphicsAPI/NoGraphicsAPI.hpp>
 
 #include <cassert>
-#include <cstdint>
 #include <limits>
 
 namespace gpu
@@ -12,9 +11,9 @@ namespace gpu
 class BumpAllocator
 {
 public:
-    static constexpr std::uint64_t alignment = 16;
+    static constexpr uint64_t alignment = 16;
 
-    // Storage must be nonempty, with at least one 16-byte-aligned address domain present.
+    // Storage must be nonempty, expose at least one address, and align every exposed address to 16 bytes.
     explicit BumpAllocator(GpuCpuRange<byte> storage) noexcept;
 
     BumpAllocator(const BumpAllocator&) = delete;
@@ -23,13 +22,13 @@ public:
     BumpAllocator& operator=(BumpAllocator&& other) noexcept;
 
     // The request must be nonzero. Reservations are rounded up to 16 bytes; an empty allocation reports exhausted storage.
-    [[nodiscard]] GpuCpuRange<byte> allocate(std::uint64_t byte_size) noexcept;
+    [[nodiscard]] GpuCpuRange<byte> allocate(uint64_t byte_size) noexcept;
 
     template<typename T>
-    [[nodiscard]] GpuCpuRange<T> allocate(std::uint64_t element_count) noexcept
+    [[nodiscard]] GpuCpuRange<T> allocate(uint64_t element_count) noexcept
     {
         static_assert(alignof(T) <= alignment);
-        if (element_count > std::numeric_limits<std::uint64_t>::max() / sizeof(T))
+        if (element_count > std::numeric_limits<uint64_t>::max() / sizeof(T))
         {
             assert(false && "typed allocation byte size overflows uint64_t");
             return {};
@@ -43,7 +42,7 @@ public:
 
 private:
     GpuCpuRange<byte> storage_{};
-    std::uint64_t offset_ = 0;
+    uint64_t offset_ = 0;
 };
 
 } // namespace gpu

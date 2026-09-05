@@ -55,16 +55,16 @@ bool test_gpu_heaps(gpu::Device* device) noexcept
 bool test_descriptor_heaps(gpu::Device* device, const gpu::DeviceCaps& caps, gpu::TimelineSemaphore* timeline,
                            std::uint64_t& next_timeline_value) noexcept
 {
-    const gpu::GpuHeap texture_heap = gpu::create_gpu_heap(device, caps.texture_descriptor_stride, gpu::MemoryType::texture_descriptor_heap);
-    if (!texture_heap.range.cpu || !texture_heap.range.gpu || texture_heap.range.size != caps.texture_descriptor_stride ||
+    const gpu::GpuHeap texture_heap = gpu::create_gpu_heap(device, caps.texture_descriptor_size, gpu::MemoryType::texture_descriptor_heap);
+    if (!texture_heap.range.cpu || !texture_heap.range.gpu || texture_heap.range.size != caps.texture_descriptor_size ||
         !texture_heap.owner || reinterpret_cast<std::uintptr_t>(texture_heap.range.cpu) % 16 != 0 ||
         reinterpret_cast<std::uintptr_t>(texture_heap.range.gpu) % 16 != 0)
     {
         return false;
     }
     const gpu::GpuHeap sampler_heap =
-        gpu::create_gpu_heap(device, caps.sampler_descriptor_stride, gpu::MemoryType::sampler_descriptor_heap);
-    if (!sampler_heap.range.cpu || !sampler_heap.range.gpu || sampler_heap.range.size != caps.sampler_descriptor_stride ||
+        gpu::create_gpu_heap(device, caps.sampler_descriptor_size, gpu::MemoryType::sampler_descriptor_heap);
+    if (!sampler_heap.range.cpu || !sampler_heap.range.gpu || sampler_heap.range.size != caps.sampler_descriptor_size ||
         !sampler_heap.owner || reinterpret_cast<std::uintptr_t>(sampler_heap.range.cpu) % 16 != 0 ||
         reinterpret_cast<std::uintptr_t>(sampler_heap.range.gpu) % 16 != 0)
     {
@@ -84,8 +84,8 @@ bool test_descriptor_heaps(gpu::Device* device, const gpu::DeviceCaps& caps, gpu
                                   });
 
     gpu::CommandBuffer* commands = gpu::begin_commands(device);
-    gpu::set_texture_heap(commands, gpu::gpu_range(texture_heap));
-    gpu::set_sampler_heap(commands, gpu::gpu_range(sampler_heap));
+    gpu::set_texture_descriptor_heap(commands, gpu::gpu_range(texture_heap));
+    gpu::set_sampler_descriptor_heap(commands, gpu::gpu_range(sampler_heap));
     const gpu::TimelinePoint completion{
         .semaphore = timeline,
         .value = ++next_timeline_value,
@@ -283,13 +283,16 @@ bool test_placed_textures(gpu::Device* device,
 
     const gpu::Format depth_stencil_format = combined_depth_stencil_format(device);
     const bool has_depth_stencil = depth_stencil_format != gpu::Format::undefined;
+    constexpr gpu::TextureUsage sampled_depth_stencil_usage =
+        gpu::TextureUsage::sampled | gpu::TextureUsage::depth_stencil_attachment;
+    const bool sampled_depth_stencil = has_depth_stencil && gpu::supports_texture_format(device, depth_stencil_format, sampled_depth_stencil_usage);
     const gpu::TextureDesc depth_stencil_desc{
         .type = gpu::TextureType::two_d_array,
         .extent = {.x = 8, .y = 8, .z = 1},
         .mip_levels = 3,
         .layer_count = 2,
         .format = depth_stencil_format,
-        .usage = gpu::TextureUsage::depth_stencil_attachment,
+        .usage = sampled_depth_stencil ? sampled_depth_stencil_usage : gpu::TextureUsage::depth_stencil_attachment,
     };
     gpu::SizeAlign depth_stencil_size_align{};
     std::uint64_t depth_stencil_offset = 0;
@@ -312,11 +315,22 @@ bool test_placed_textures(gpu::Device* device,
     gpu::Texture* color = has_color ? gpu::create_texture(device, color_desc, texture_heap, color_offset) : nullptr;
     gpu::Texture* depth_stencil =
         has_depth_stencil ? gpu::create_texture(device, depth_stencil_desc, texture_heap, depth_stencil_offset) : nullptr;
+#if defined(NDEBUG)
+    if (sampled_depth_stencil)
+    {
+        const gpu::GpuHeap descriptor_heap =
+            gpu::create_gpu_heap(device, caps.texture_descriptor_size, gpu::MemoryType::texture_descriptor_heap);
+        gpu::write_texture_descriptor(device, descriptor_heap.range.cpu, depth_stencil, gpu::TextureDescriptorType::sampled);
+        gpu::write_texture_descriptor(device, descriptor_heap.range.cpu, depth_stencil, gpu::TextureDescriptorType::sampled,
+                                      {.aspect = gpu::TextureAspect::stencil});
+        gpu::destroy_gpu_heap(descriptor_heap);
+    }
+#endif
+    gpu::CommandBuffer* commands = gpu::begin_commands(device);
+    gpu::TextureHeap recording_heap = gpu::create_texture_heap(device, first_size_align.size);
     gpu::RenderView* color_render_view = color ? gpu::create_render_view(color, {.mip_level = 2, .slice = 5}) : nullptr;
     gpu::RenderView* depth_stencil_render_view =
         depth_stencil ? gpu::create_render_view(depth_stencil, {.mip_level = 1, .slice = 1}) : nullptr;
-
-    gpu::CommandBuffer* commands = gpu::begin_commands(device);
     record_attachment_subresource_passes(commands, color_render_view, depth_stencil_render_view);
     final_completion = {
         .semaphore = timeline,
@@ -331,6 +345,7 @@ bool test_placed_textures(gpu::Device* device,
     gpu::destroy_texture(broad_3d);
     gpu::destroy_texture(second);
     gpu::destroy_texture(first);
+    gpu::destroy_texture_heap(recording_heap);
     gpu::destroy_texture_heap(texture_heap);
     gpu::submit({commands}, final_completion);
     gpu::wait_timeline(final_completion);
@@ -352,9 +367,7 @@ int main()
     if (caps.texture_heap_alignment == 0 ||
         (caps.texture_heap_alignment & (caps.texture_heap_alignment - 1)) != 0 ||
         caps.texture_descriptor_size == 0 ||
-        caps.texture_descriptor_stride < caps.texture_descriptor_size ||
         caps.sampler_descriptor_size == 0 ||
-        caps.sampler_descriptor_stride < caps.sampler_descriptor_size ||
         !test_gpu_heaps(device))
     {
         gpu::destroy_device(device);

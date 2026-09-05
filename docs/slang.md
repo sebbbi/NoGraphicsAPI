@@ -59,16 +59,7 @@ struct RootArguments
 ```
 
 The CPU fills pointer fields with GPU virtual addresses and passes the structure directly to a draw
-or dispatch:
-
-```cpp
-GpuCpuRange<Vertex> vertex_memory = data_allocator.allocate<Vertex>(vertex_count);
-RootArguments root{
-    .vertices = vertex_memory.gpu,
-    .transform = transform,
-};
-gpu::draw(commands, root, vertex_count);
-```
+or dispatch.
 
 The shader declares the same structure in push-constant storage:
 
@@ -92,56 +83,28 @@ Root structures must be trivially copyable, use a byte size divisible by four, a
 
 ## Typed GPU pointers
 
-`create_gpu_heap()` returns both address domains in `GpuHeap::range` when the heap is CPU-visible.
-The application can pass that `GpuCpuRange<byte>` directly to `gpu::BumpAllocator` or reusable
-`gpu::HeapAllocator`. For example:
-
-```cpp
-gpu::GpuHeap data = gpu::create_gpu_heap(device, data_size);
-gpu::BumpAllocator allocator(data.range);
-gpu::GpuCpuRange<Vertex> vertices = allocator.allocate<Vertex>(vertex_count);
-initialize_vertices(vertices.cpu, vertex_count);
-RootArguments root{.vertices = vertices.gpu};
-```
-
-The CPU writes through `vertices.cpu` but treats `vertices.gpu` only as GPU address bits. Slang sees
-the shared field as an ordinary typed pointer:
+CPU-visible `GpuCpuRange<T>` values provide typed CPU and GPU addresses; their `size` remains a byte
+count. The CPU writes through the CPU address and copies the GPU address into shared data. Slang sees
+that field as an ordinary typed pointer:
 
 ```slang
 Vertex vertex = root.vertices[vertex_id];
 ```
 
-Slang lowers the pointer to SPIR-V physical-storage-buffer addressing. This is the project's buffer
-model: there is no public buffer handle or shader buffer descriptor. Index buffers, indirect
-arguments, and copies similarly use `GpuRange {gpu, size}`, which maps to Vulkan device-address
-commands.
-
-GPU pointers are intentionally low level:
-
-- they carry no bounds and robust descriptor access does not protect an invalid dereference;
-- heap bases and allocator suballocations are 16-byte aligned; stronger pointee and interior-pointer
-  alignment, range validity, synchronization, and lifetime belong to the application;
-- a GPU pointer must never be dereferenced by the CPU; and
-- opaque textures and samplers are represented by heap indices rather than pointers.
+Slang lowers the pointer to SPIR-V physical-storage-buffer addressing. There is no public buffer
+handle or shader buffer descriptor. GPU pointers carry no bounds, must not be dereferenced by the
+CPU, and remain the application's alignment, range, synchronization, and lifetime responsibility.
+Opaque textures and samplers use heap indices instead.
 
 Use typed pointer fields instead of round-tripping addresses through `uint64_t`; the latter can add
 an unnecessary `shaderInt64` requirement.
 
 ## Application-owned descriptor heaps
 
-Texture and sampler descriptor heaps are exact mapped `GpuHeap` allocations. The application
-chooses slots, passes each mapped slot to the descriptor writer, and binds the GPU ranges as command
-state:
-
-```cpp
-gpu::GpuHeap texture_heap = gpu::create_gpu_heap(device, texture_heap_size, gpu::MemoryType::texture_descriptor_heap);
-gpu::GpuHeap sampler_heap = gpu::create_gpu_heap(device, sampler_heap_size, gpu::MemoryType::sampler_descriptor_heap);
-gpu::set_texture_heap(commands, gpu::gpu_range(texture_heap));
-gpu::set_sampler_heap(commands, gpu::gpu_range(sampler_heap));
-```
-
-Each bind takes the unchanged full range of the matching descriptor heap. Interior or shortened
-ranges do not contain the Vulkan-reserved tail and are invalid.
+The application chooses slots in separate mapped texture and sampler descriptor heaps, writes them,
+and binds their GPU ranges with `set_texture_descriptor_heap()` and
+`set_sampler_descriptor_heap()`. Slot addresses use the corresponding descriptor size from
+`DeviceCaps`.
 
 Shaders index the heaps directly:
 
@@ -150,15 +113,11 @@ Texture2D<float4> texture = ResourceDescriptorHeap[texture_index];
 SamplerState sampler = SamplerDescriptorHeap[sampler_index];
 ```
 
-Texture and sampler indices are separate 32-bit namespaces. Buffer descriptors are unnecessary
-because buffer data uses GPU pointers. The texture declaration must match the descriptor's texture
-shape, while descriptor creation selects the view needed by the application.
-
-Heap sizing, slot allocation, and slot reuse are application policy. Heap and texture handles remain
-live through submission, and mutable slots are not overwritten until the application's timeline
-point completes. Destruction after submission uses deferred retirement. `SPV_EXT_descriptor_heap`
-treats resource access as non-uniform by default; no conventional descriptor-set declaration or
-manual `NonUniform` decoration is needed.
+Texture and sampler indices are separate 32-bit namespaces. The texture declaration must match the
+descriptor view; `TextureDescriptorDesc` selects its format, mip/layer range, and aspect. Buffer data
+uses GPU pointers and needs no descriptor entry. Slot lifetime and reuse remain application policy.
+`SPV_EXT_descriptor_heap` treats resource access as non-uniform by default, so no conventional
+descriptor-set declaration or manual `NonUniform` decoration is needed.
 
 ## Shared data layout
 

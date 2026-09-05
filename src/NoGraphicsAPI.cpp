@@ -217,21 +217,13 @@ VkFormat to_vk(Format format)
     case Format::undefined: break;
     }
     assert(false && "unknown NoGraphicsAPI format");
-    std::abort();
+    return {};
 }
 
 uint64_t divide_up(uint64_t value, uint64_t divisor) noexcept
 {
     assert(divisor != 0);
     return value / divisor + (value % divisor != 0 ? 1u : 0u);
-}
-
-uint64_t
-base_level_byte_size(Format format, uint32_t width, uint32_t height, uint32_t depth)
-{
-    const TextureFormatInfo info = get_texture_format_info(format);
-    assert(info.bytes_per_block != 0 && info.block_extent.x != 0 && info.block_extent.y != 0);
-    return static_cast<uint64_t>(info.bytes_per_block) * divide_up(width, info.block_extent.x) * divide_up(height, info.block_extent.y) * depth;
 }
 
 enum class FormatCompatibility : uint8_t
@@ -351,13 +343,6 @@ VkImageAspectFlags image_aspects(Format format) noexcept
     return result;
 }
 
-uint64_t format_bit(Format format) noexcept
-{
-    assert(format != Format::undefined && "undefined has no texture format bit");
-    static_assert(format_count <= 64);
-    return uint64_t{1} << static_cast<uint32_t>(format);
-}
-
 VkImageType to_vk(TextureType type) noexcept
 {
     switch (type)
@@ -370,7 +355,7 @@ VkImageType to_vk(TextureType type) noexcept
     case TextureType::cube_array: return VK_IMAGE_TYPE_2D;
     }
     assert(false && "unknown NoGraphicsAPI texture type");
-    std::abort();
+    return {};
 }
 
 VkImageViewType to_vk_view(TextureType type) noexcept
@@ -385,23 +370,7 @@ VkImageViewType to_vk_view(TextureType type) noexcept
     case TextureType::cube_array: return VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
     }
     assert(false && "unknown NoGraphicsAPI texture type");
-    std::abort();
-}
-
-uint64_t image_resource_byte_size(const TextureDesc& desc, uint32_t layer_count)
-{
-    uint64_t total = 0;
-    uint32_t width = desc.extent.x;
-    uint32_t height = desc.extent.y;
-    uint32_t depth = desc.extent.z;
-    for (uint32_t mip = 0; mip < desc.mip_levels; ++mip)
-    {
-        total += base_level_byte_size(desc.format, width, height, depth) * layer_count;
-        width = width > 1 ? width / 2 : 1;
-        height = height > 1 ? height / 2 : 1;
-        depth = depth > 1 ? depth / 2 : 1;
-    }
-    return total;
+    return {};
 }
 
 VkFormatFeatureFlags2 required_format_features(TextureUsage usage)
@@ -483,7 +452,7 @@ VkFilter to_vk(Filter filter)
     case Filter::linear: return VK_FILTER_LINEAR;
     }
     assert(false && "unknown texture filter");
-    std::abort();
+    return {};
 }
 
 VkSamplerAddressMode to_vk(AddressMode mode)
@@ -495,7 +464,7 @@ VkSamplerAddressMode to_vk(AddressMode mode)
     case AddressMode::clamp_to_edge: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     }
     assert(false && "unknown sampler address mode");
-    std::abort();
+    return {};
 }
 
 VkCullModeFlags to_vk(CullMode cull)
@@ -507,7 +476,7 @@ VkCullModeFlags to_vk(CullMode cull)
     case CullMode::counter_clockwise: return VK_CULL_MODE_BACK_BIT;
     }
     assert(false && "unknown cull mode");
-    std::abort();
+    return {};
 }
 
 VkBlendFactor to_vk(BlendFactor factor)
@@ -527,7 +496,7 @@ VkBlendFactor to_vk(BlendFactor factor)
     case BlendFactor::source_alpha_saturate: return VK_BLEND_FACTOR_SRC_ALPHA_SATURATE;
     }
     assert(false && "unknown blend factor");
-    std::abort();
+    return {};
 }
 
 VkBlendOp to_vk(BlendOp operation)
@@ -541,7 +510,7 @@ VkBlendOp to_vk(BlendOp operation)
     case BlendOp::maximum: return VK_BLEND_OP_MAX;
     }
     assert(false && "unknown blend operation");
-    std::abort();
+    return {};
 }
 
 VkAttachmentLoadOp to_vk(LoadOp op)
@@ -553,7 +522,7 @@ VkAttachmentLoadOp to_vk(LoadOp op)
     case LoadOp::discard: return VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     }
     assert(false && "unknown attachment load operation");
-    std::abort();
+    return {};
 }
 
 VkAttachmentStoreOp to_vk(StoreOp op)
@@ -564,7 +533,7 @@ VkAttachmentStoreOp to_vk(StoreOp op)
     case StoreOp::discard: return VK_ATTACHMENT_STORE_OP_DONT_CARE;
     }
     assert(false && "unknown attachment store operation");
-    std::abort();
+    return {};
 }
 
 VkCompareOp to_vk(CompareOp op)
@@ -581,7 +550,7 @@ VkCompareOp to_vk(CompareOp op)
     case CompareOp::always: return VK_COMPARE_OP_ALWAYS;
     }
     assert(false && "unknown depth/stencil comparison operation");
-    std::abort();
+    return {};
 }
 
 VkStencilOp to_vk(StencilOp op)
@@ -598,7 +567,7 @@ VkStencilOp to_vk(StencilOp op)
     case StencilOp::decrement_wrap: return VK_STENCIL_OP_DECREMENT_AND_WRAP;
     }
     assert(false && "unknown stencil operation");
-    std::abort();
+    return {};
 }
 
 constexpr VkPipelineStageFlags2 to_vk(Stage stages)
@@ -667,36 +636,6 @@ VkAccessFlags2 to_vk(Access accesses)
     if (has_flag(accesses, Access::host_read)) result |= VK_ACCESS_2_HOST_READ_BIT;
     if (has_flag(accesses, Access::descriptor_read)) result |= VK_ACCESS_2_SAMPLER_HEAP_READ_BIT_EXT | VK_ACCESS_2_RESOURCE_HEAP_READ_BIT_EXT;
     return result;
-}
-
-void validate_stage_access(Stage stages, Access accesses)
-{
-    if (accesses == Access::none)
-        return;
-    assert(stages != Stage::none &&
-           "a non-zero access mask requires a non-zero pipeline stage mask");
-
-    const bool all_commands = has_flag(stages, Stage::all_commands);
-    const bool has_shader_stage = all_commands ||
-                                  has_flag(stages, Stage::vertex) ||
-                                  has_flag(stages, Stage::mesh) ||
-                                  has_flag(stages, Stage::fragment) ||
-                                  has_flag(stages, Stage::compute);
-    const bool transfer_stage = all_commands || has_flag(stages, Stage::transfer);
-    const bool compatible =
-        (!has_flag(accesses, Access::transfer_read) || transfer_stage) &&
-        (!has_flag(accesses, Access::transfer_write) || transfer_stage) &&
-        (!has_flag(accesses, Access::shader_read) || has_shader_stage) &&
-        (!has_flag(accesses, Access::shader_write) || has_shader_stage) &&
-        (!has_flag(accesses, Access::descriptor_read) || has_shader_stage) &&
-        (!has_flag(accesses, Access::color_read) || all_commands || has_flag(stages, Stage::color_output)) &&
-        (!has_flag(accesses, Access::color_write) || all_commands || has_flag(stages, Stage::color_output)) &&
-        (!has_flag(accesses, Access::depth_stencil_read) || all_commands || has_flag(stages, Stage::depth_stencil_tests)) &&
-        (!has_flag(accesses, Access::depth_stencil_write) || all_commands || has_flag(stages, Stage::depth_stencil_tests)) &&
-        (!has_flag(accesses, Access::indirect_read) || all_commands || has_flag(stages, Stage::indirect)) &&
-        (!has_flag(accesses, Access::index_read) || all_commands || has_flag(stages, Stage::index_input)) &&
-        (!has_flag(accesses, Access::host_read) || has_flag(stages, Stage::host));
-    assert(compatible && "access is incompatible with the stage mask");
 }
 
 constexpr VkBufferUsageFlags universal_buffer_usage =
@@ -837,7 +776,7 @@ struct DeferredDeletion
     FixedFunction8 callback;
 };
 
-struct DeletionQueue
+struct DeleteQueue
 {
     template<typename Callback>
     void push(uint64_t retire_value, uint64_t payload, const Callback& callback) noexcept
@@ -898,7 +837,6 @@ struct TextureInitialization
     VkImageAspectFlags aspect_mask = 0;
     uint32_t mip_levels = 0;
     uint32_t array_layers = 0;
-    bool initialized = false;
     TextureInitialization* previous = nullptr;
     TextureInitialization* next = nullptr;
     struct TextureInitializationList* owner = nullptr;
@@ -970,7 +908,6 @@ struct TimelineSemaphore
 {
     Device* state = nullptr;
     VkSemaphore semaphore = VK_NULL_HANDLE;
-    uint64_t last_signal = 0;
 };
 
 struct CommandBuffer
@@ -1031,7 +968,6 @@ struct Device
     detail::DeviceFunctions fn;
     DeviceCaps caps;
     VkFormatFeatureFlags2 format_features[format_count]{};
-    bool image_cube_array = false;
     bool texture_compression_etc2 = false;
     detail::TextureInitializationList pending_texture_initializations;
     detail::CommandContext* next_command_context = nullptr;
@@ -1039,7 +975,7 @@ struct Device
     VkSemaphore command_retirement = VK_NULL_HANDLE;
     uint64_t command_retirement_value = 0;
     uint64_t completed_command_retirement = 0;
-    detail::DeletionQueue deletion_queue;
+    detail::DeleteQueue delete_queue;
     detail::PresentContext present_contexts[max_swapchain_images]{};
     detail::RetiredSwapchain retired_swapchains[max_swapchain_images]{};
     Swapchain* swapchain = nullptr;
@@ -1205,11 +1141,10 @@ struct Device
     template<typename Callback>
     void defer_delete(const Callback& callback, uint64_t payload = 0) noexcept
     {
-        poll_command_retirement();
         assert(active_command_buffers == 0 || command_retirement_value != std::numeric_limits<uint64_t>::max());
         const uint64_t retire_value = active_command_buffers != 0 ? command_retirement_value + 1 : command_retirement_value;
-        deletion_queue.push(retire_value, payload, callback);
-        deletion_queue.collect(*this, completed_command_retirement);
+        delete_queue.push(retire_value, payload, callback);
+        delete_queue.collect(*this, completed_command_retirement);
     }
     [[nodiscard]] Error create_present_context(detail::PresentContext& context) noexcept;
     void destroy_present_context(detail::PresentContext& context) noexcept;
@@ -1257,7 +1192,16 @@ bool supports_gpu_heap_memory(Device& device) noexcept
     return device.find_memory_type(descriptor.memoryTypeBits, cpu_visible_memory_properties, 0, descriptor.size, memory_type);
 }
 
-bool supports_image_create_info(Device& device, const VkImageCreateInfo& image_info) noexcept
+bool fits_image_format_properties(const VkImageCreateInfo& image_info, const VkImageFormatProperties& properties) noexcept
+{
+    return image_info.extent.width <= properties.maxExtent.width &&
+           image_info.extent.height <= properties.maxExtent.height &&
+           image_info.extent.depth <= properties.maxExtent.depth &&
+           image_info.mipLevels <= properties.maxMipLevels &&
+           image_info.arrayLayers <= properties.maxArrayLayers;
+}
+
+bool supports_image_create_info(Device& device, const VkImageCreateInfo& image_info, VkImageFormatProperties* output = nullptr) noexcept
 {
     const VkPhysicalDeviceImageFormatInfo2 format_info{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2,
@@ -1274,11 +1218,9 @@ bool supports_image_create_info(Device& device, const VkImageCreateInfo& image_i
     if (result == VK_ERROR_FORMAT_NOT_SUPPORTED)
         return false;
     require_vk(result);
-    return image_info.extent.width <= properties.imageFormatProperties.maxExtent.width &&
-           image_info.extent.height <= properties.imageFormatProperties.maxExtent.height &&
-           image_info.extent.depth <= properties.imageFormatProperties.maxExtent.depth &&
-           image_info.mipLevels <= properties.imageFormatProperties.maxMipLevels &&
-           image_info.arrayLayers <= properties.imageFormatProperties.maxArrayLayers;
+    if (output)
+        *output = properties.imageFormatProperties;
+    return fits_image_format_properties(image_info, properties.imageFormatProperties);
 }
 
 VkMemoryRequirements image_memory_requirements(Device& device, const VkImageCreateInfo& image_info) noexcept
@@ -1309,7 +1251,7 @@ bool select_texture_memory_type(Device& device) noexcept
     const VkFormatFeatureFlags2 color_features = device.format_features[static_cast<uint32_t>(Format::rgba8_unorm)];
     if ((color_features & VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT) == 0)
         return false;
-    // Probes cover DCC-capable color, broad 3D, and sampled depth layouts. Concrete texture requirements are hard-checked before use.
+    // Probes cover DCC-capable color, broad 3D, and sampled depth layouts.
     // Resource Memory Association makes the color mask common to ordinary optimal-tiled images. Intersect every public depth/stencil format below.
     const uint32_t probe_2d_size = device.physical_properties.limits.maxImageDimension2D < 2048
                                        ? device.physical_properties.limits.maxImageDimension2D
@@ -1382,22 +1324,31 @@ bool select_texture_memory_type(Device& device) noexcept
             image_info.extent = {.width = 1, .height = 1, .depth = 1};
             image_info.mipLevels = 1;
             image_info.usage = compatibility_usage;
-            if (supports_image_create_info(device, image_info))
+            VkImageFormatProperties compatibility_properties{};
+            if (supports_image_create_info(device, image_info, &compatibility_properties))
             {
+                image_info.extent = {.width = 512, .height = 512, .depth = 1};
+                if ((features & VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT) != 0 && (features & VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT) != 0)
+                    image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+
+                bool supported = image_info.usage == compatibility_usage
+                                     ? fits_image_format_properties(image_info, compatibility_properties)
+                                     : supports_image_create_info(device, image_info);
+                if (!supported && image_info.usage != compatibility_usage)
+                {
+                    image_info.usage = compatibility_usage;
+                    supported = fits_image_format_properties(image_info, compatibility_properties);
+                }
+                if (!supported)
+                {
+                    image_info.extent = {.width = 1, .height = 1, .depth = 1};
+                    image_info.usage = compatibility_usage;
+                }
+
                 const VkMemoryRequirements requirements = image_memory_requirements(device, image_info);
                 memory_type_bits &= requirements.memoryTypeBits;
                 include_texture_heap_alignment(device, requirements);
             }
-
-            image_info.extent = {.width = 512, .height = 512, .depth = 1};
-            if ((features & VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT) != 0 && (features & VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT) != 0)
-            {
-                image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-            }
-            if (!supports_image_create_info(device, image_info) && image_info.usage != compatibility_usage)
-                image_info.usage = compatibility_usage;
-            if (supports_image_create_info(device, image_info))
-                include_texture_heap_alignment(device, image_memory_requirements(device, image_info));
         }
     }
     return device.find_memory_type(memory_type_bits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, 1, device.texture_memory_type,
@@ -1428,7 +1379,6 @@ struct GpuHeapRecord
     GpuHeapOwner owner;
     Device* state = nullptr;
     BackingBuffer backing;
-    GpuHeap value{};
 };
 
 } // namespace detail
@@ -1448,8 +1398,8 @@ Device::~Device()
     {
         drain_contexts();
         destroy_owned_swapchain(*this);
-        deletion_queue.collect(*this, completed_command_retirement);
-        assert(deletion_queue.count == 0);
+        delete_queue.collect(*this, completed_command_retirement);
+        assert(delete_queue.count == 0);
     }
     destroy_command_contexts();
     for (uint32_t index = 0; index < present_context_count; ++index)
@@ -1590,7 +1540,8 @@ detail::CommandContext& Device::acquire_command_context() noexcept
 {
     detail::CommandContext* context = next_command_context;
     assert(context);
-    if (active_command_buffers == 0) poll_command_retirement();
+    if (active_command_buffers == 0 && context->retire_value > completed_command_retirement)
+        poll_command_retirement();
     if (context->active || context->retire_value > completed_command_retirement)
     {
         require_error(grow_command_context_pool());
@@ -1618,15 +1569,16 @@ uint64_t query_timeline_value(const TimelineSemaphore& semaphore) noexcept
 
 void Device::poll_command_retirement() noexcept
 {
-    if (command_retirement && completed_command_retirement != command_retirement_value)
-    {
-        uint64_t completed = 0;
-        require_vk(vkGetSemaphoreCounterValue(device, command_retirement, &completed));
-        assert(completed >= completed_command_retirement && completed <= command_retirement_value);
-        completed_command_retirement = completed;
-    }
+    if (!command_retirement || completed_command_retirement == command_retirement_value)
+        return;
+    uint64_t completed = 0;
+    require_vk(vkGetSemaphoreCounterValue(device, command_retirement, &completed));
+    assert(completed >= completed_command_retirement && completed <= command_retirement_value);
+    if (completed == completed_command_retirement)
+        return;
+    completed_command_retirement = completed;
     reset_retired_command_contexts();
-    deletion_queue.collect(*this, completed_command_retirement);
+    delete_queue.collect(*this, completed_command_retirement);
 }
 
 void Device::wait_command_retirement(uint64_t value) noexcept
@@ -1635,7 +1587,7 @@ void Device::wait_command_retirement(uint64_t value) noexcept
     if (value <= completed_command_retirement)
     {
         reset_retired_command_contexts();
-        deletion_queue.collect(*this, completed_command_retirement);
+        delete_queue.collect(*this, completed_command_retirement);
         return;
     }
     const VkSemaphoreWaitInfo wait_info{
@@ -1647,7 +1599,7 @@ void Device::wait_command_retirement(uint64_t value) noexcept
     require_vk(vkWaitSemaphores(device, &wait_info, std::numeric_limits<uint64_t>::max()));
     completed_command_retirement = value;
     reset_retired_command_contexts();
-    deletion_queue.collect(*this, completed_command_retirement);
+    delete_queue.collect(*this, completed_command_retirement);
 }
 
 uint64_t Device::next_command_retirement() noexcept
@@ -1658,12 +1610,9 @@ uint64_t Device::next_command_retirement() noexcept
         next - completed_command_retirement > max_timeline_value_difference)
     {
         poll_command_retirement();
-        const bool within_timeline_limit = next - completed_command_retirement <= max_timeline_value_difference;
-        assert(within_timeline_limit && "private retirement timeline capacity exhausted");
-        if (!within_timeline_limit)
-        {
-            std::abort();
-        }
+        if (next - completed_command_retirement > max_timeline_value_difference)
+            wait_command_retirement(next - max_timeline_value_difference);
+        assert(next - completed_command_retirement <= max_timeline_value_difference);
     }
     command_retirement_value = next;
     return next;
@@ -1775,7 +1724,7 @@ void Device::drain_contexts() noexcept
     {
         assert(!retired.handle);
     }
-    deletion_queue.collect(*this, completed_command_retirement);
+    delete_queue.collect(*this, completed_command_retirement);
 }
 
 GpuHeap Device::allocate_gpu_heap(VkDeviceSize size, MemoryType memory) noexcept
@@ -1801,12 +1750,12 @@ GpuHeap Device::allocate_gpu_heap(VkDeviceSize size, MemoryType memory) noexcept
         break;
     default:
         assert(false && "create_gpu_heap received an invalid memory type");
-        std::abort();
+        return {};
     }
 
     detail::GpuHeapRecord* heap = new detail::GpuHeapRecord(this);
     create_backing_buffer(heap->backing, size, universal_buffer_usage, required, preferred, avoided);
-    heap->value = {
+    return {
         .range = {
             .cpu = static_cast<byte*>(heap->backing.mapped),
             .gpu = reinterpret_cast<byte*>(static_cast<uintptr_t>(heap->backing.address)),
@@ -1814,7 +1763,6 @@ GpuHeap Device::allocate_gpu_heap(VkDeviceSize size, MemoryType memory) noexcept
         },
         .owner = &heap->owner,
     };
-    return heap->value;
 }
 
 GpuHeap Device::allocate_descriptor_heap(VkDeviceSize size, MemoryType memory) noexcept
@@ -1829,38 +1777,46 @@ GpuHeap Device::allocate_descriptor_heap(VkDeviceSize size, MemoryType memory) n
     const VkDeviceSize reserved_size = texture_heap ? heap_properties.minResourceHeapReservedRange : heap_properties.minSamplerHeapReservedRange;
     const VkDeviceSize maximum_size = texture_heap ? heap_properties.maxResourceHeapSize : heap_properties.maxSamplerHeapSize;
 
-    assert(size <= maximum_size);
-
+    assert(reserved_alignment != 0);
+    assert(reserved_size <= maximum_size && size <= maximum_size - reserved_size && "descriptor heap size exceeds the device limit");
+    assert(size <= std::numeric_limits<VkDeviceSize>::max() - (reserved_alignment - 1));
     const VkDeviceSize reserved_offset = align_up(size, reserved_alignment);
-    assert(reserved_offset + reserved_size <= maximum_size);
+    assert(reserved_offset <= maximum_size - reserved_size && "descriptor heap size exceeds the device limit after alignment");
     const VkDeviceSize bind_size = reserved_offset + reserved_size;
     const VkDeviceSize allocation_alignment = heap_alignment > gpu_allocation_alignment ? heap_alignment : gpu_allocation_alignment;
     const VkDeviceSize alignment_padding = allocation_alignment - 1;
-    assert(bind_size + alignment_padding <= vulkan13_properties.maxBufferSize);
+    assert(bind_size <= vulkan13_properties.maxBufferSize && "descriptor heap backing exceeds maxBufferSize");
+    assert(alignment_padding <= vulkan13_properties.maxBufferSize - bind_size && "descriptor heap backing alignment overflows maxBufferSize");
     const VkDeviceSize backing_size = bind_size + alignment_padding;
 
     detail::GpuHeapRecord* heap = new detail::GpuHeapRecord(this);
     create_backing_buffer(heap->backing, backing_size, universal_buffer_usage | VK_BUFFER_USAGE_DESCRIPTOR_HEAP_BIT_EXT, cpu_visible_memory_properties, 0);
 
+    const bool valid_base_address = heap->backing.address <= std::numeric_limits<VkDeviceAddress>::max() - alignment_padding;
+    assert(valid_base_address && "descriptor heap GPU address cannot be aligned without overflow");
+    if (!valid_base_address)
+        std::abort();
     const VkDeviceAddress gpu_address = align_up(heap->backing.address, allocation_alignment);
     const VkDeviceSize allocation_offset = gpu_address - heap->backing.address;
-    const uintptr_t cpu_address = reinterpret_cast<uintptr_t>(heap->backing.mapped) + allocation_offset;
-    assert(heap->backing.mapped);
-    assert(gpu_address % heap_alignment == 0);
-    assert(gpu_address % gpu_allocation_alignment == 0);
-    assert(cpu_address % gpu_allocation_alignment == 0);
-    assert(allocation_offset <= heap->backing.size);
-    assert(bind_size <= heap->backing.size - allocation_offset);
+    const bool valid_range = heap->backing.mapped && gpu_address % heap_alignment == 0 && gpu_address % gpu_allocation_alignment == 0 &&
+                             allocation_offset <= heap->backing.size && bind_size <= heap->backing.size - allocation_offset;
+    assert(valid_range && "descriptor heap backing range is invalid");
+    if (!valid_range)
+        std::abort();
+    byte* cpu_address = static_cast<byte*>(heap->backing.mapped) + allocation_offset;
+    const bool valid_cpu_address = reinterpret_cast<uintptr_t>(cpu_address) % gpu_allocation_alignment == 0;
+    assert(valid_cpu_address && "descriptor heap CPU address is misaligned");
+    if (!valid_cpu_address)
+        std::abort();
 
-    heap->value = {
+    return {
         .range = {
-            .cpu = reinterpret_cast<byte*>(cpu_address),
+            .cpu = cpu_address,
             .gpu = reinterpret_cast<byte*>(static_cast<uintptr_t>(gpu_address)),
             .size = size,
         },
         .owner = &heap->owner,
     };
-    return heap->value;
 }
 
 void Device::release_gpu_heap(const GpuHeap& heap) noexcept
@@ -1874,12 +1830,8 @@ void Device::release_gpu_heap(const GpuHeap& heap) noexcept
     const GpuHeapOwner* owner = heap.owner;
     assert(owner && owner->state == this && owner->object && "destroy_gpu_heap requires a live heap returned by create_gpu_heap");
     detail::GpuHeapRecord* record = static_cast<detail::GpuHeapRecord*>(owner->object);
-    assert(&record->owner == owner && record->state == this &&
-           record->value.range.cpu == heap.range.cpu && record->value.range.gpu == heap.range.gpu &&
-           record->value.range.size == heap.range.size && record->value.owner == owner &&
-           "destroy_gpu_heap fields do not match the original create_gpu_heap result");
+    assert(&record->owner == owner && record->state == this && "destroy_gpu_heap owner does not match its device");
     record->owner = {};
-    record->value = {};
     defer_delete([record](Device&, uint64_t) noexcept { delete record; });
 }
 
@@ -1892,11 +1844,8 @@ struct Texture
     uint32_t depth = 0;
     uint32_t mip_levels = 0;
     uint32_t layer_count = 0;
-    uint64_t sampled_view_format_mask = 0;
-    uint64_t storage_view_format_mask = 0;
     TextureType type = TextureType::two_d;
     Format format = Format::rgba8_unorm;
-    TextureUsage usage = TextureUsage::none;
     bool owns_image = true;
     bool swapchain_image = false;
     detail::TextureInitialization initialization;
@@ -1916,8 +1865,6 @@ struct RenderView
     VkImageView view = VK_NULL_HANDLE;
     uint32_t width = 0;
     uint32_t height = 0;
-    Format format = Format::undefined;
-    TextureUsage usage = TextureUsage::none;
     bool swapchain_view = false;
 };
 
@@ -1939,7 +1886,6 @@ struct Swapchain
     CommandBuffer* transition_commands = nullptr;
     bool acquired = false;
     bool recreate_required = false;
-    bool extent_queried = false;
 
     Swapchain() = default;
     Swapchain(const Swapchain&) = delete;
@@ -1980,23 +1926,17 @@ void record_image_barriers(VkCommandBuffer command_buffer, Span<const VkImageMem
 }
 
 void make_heap_bind_info(GpuRange heap,
-                         VkDeviceSize heap_alignment,
                          VkDeviceSize reserved_alignment,
                          VkDeviceSize reserved_size,
-                         VkDeviceSize maximum_size,
                          VkBindHeapInfoEXT& output) noexcept
 {
-    assert(heap.gpu && heap.size != 0 && "descriptor heap range must be non-empty");
-    const VkDeviceAddress address = static_cast<VkDeviceAddress>(reinterpret_cast<uintptr_t>(heap.gpu));
+    assert(heap.gpu && heap.size != 0);
     const VkDeviceSize reserved_offset = align_up<VkDeviceSize>(heap.size, reserved_alignment);
-    assert(reserved_offset + reserved_size <= maximum_size && "descriptor heap size exceeds the implementation limit");
-    const VkDeviceSize total_size = reserved_offset + reserved_size;
-    assert(address % heap_alignment == 0 && "descriptor heap address is misaligned");
     output = {
         .sType = VK_STRUCTURE_TYPE_BIND_HEAP_INFO_EXT,
         .heapRange = {
-            .address = address,
-            .size = total_size,
+            .address = static_cast<VkDeviceAddress>(reinterpret_cast<uintptr_t>(heap.gpu)),
+            .size = reserved_offset + reserved_size,
         },
         .reservedRangeOffset = reserved_offset,
         .reservedRangeSize = reserved_size,
@@ -2104,7 +2044,13 @@ struct Candidate
     VkPhysicalDevice physical_device = VK_NULL_HANDLE;
     uint32_t queue_family = 0;
     VkPhysicalDeviceProperties properties{};
+    VkPhysicalDeviceMemoryProperties memory_properties{};
     bool unified_image_layouts = false;
+    bool image_cube_array = false;
+    bool texture_compression_bc = false;
+    bool texture_compression_astc = false;
+    bool texture_compression_etc2 = false;
+    bool storage_input_output16 = false;
     VkPhysicalDeviceDescriptorHeapPropertiesEXT heap_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_PROPERTIES_EXT};
     VkPhysicalDeviceVulkan11Properties vulkan11_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES};
     VkPhysicalDeviceVulkan12Properties vulkan12_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES};
@@ -2114,9 +2060,6 @@ struct Candidate
 
 Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, Candidate& output) noexcept
 {
-    VkPhysicalDeviceProperties properties{};
-    vkGetPhysicalDeviceProperties(physical_device, &properties);
-
     VkExtensionProperties extensions[max_device_extensions]{};
     uint32_t extension_count = 0;
     const Error extension_error = enumerate_device_extensions(physical_device, {extensions, max_device_extensions}, extension_count);
@@ -2142,14 +2085,31 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
     {
         return Error::unsupported;
     }
-    if (properties.apiVersion < VK_API_VERSION_1_4)
+
+    Candidate result{
+        .physical_device = physical_device,
+    };
+    result.heap_properties.pNext = &result.vulkan11_properties;
+    result.vulkan11_properties.pNext = &result.vulkan12_properties;
+    result.vulkan12_properties.pNext = &result.vulkan13_properties;
+    result.vulkan13_properties.pNext = &result.mesh_properties;
+    VkPhysicalDeviceProperties2 properties2{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+        .pNext = &result.heap_properties,
+    };
+    vkGetPhysicalDeviceProperties2(physical_device, &properties2);
+    result.properties = properties2.properties;
+    result.heap_properties.pNext = nullptr;
+    result.vulkan11_properties.pNext = nullptr;
+    result.vulkan12_properties.pNext = nullptr;
+    result.vulkan13_properties.pNext = nullptr;
+    if (result.properties.apiVersion < VK_API_VERSION_1_4)
         return Error::unsupported;
 
-    VkPhysicalDeviceMemoryProperties memory_properties{};
-    vkGetPhysicalDeviceMemoryProperties(physical_device, &memory_properties);
-    if (!has_cpu_visible_device_memory(memory_properties))
+    vkGetPhysicalDeviceMemoryProperties(physical_device, &result.memory_properties);
+    if (!has_cpu_visible_device_memory(result.memory_properties))
         return Error::unsupported;
-    if (!has_device_local_memory(memory_properties))
+    if (!has_device_local_memory(result.memory_properties))
         return Error::unsupported;
 
     QueriedFeatures features(surface != VK_NULL_HANDLE, unified_image_layouts_extension);
@@ -2185,6 +2145,12 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
         (!surface ||  features.swapchain_maintenance1.swapchainMaintenance1 == VK_TRUE);
     if (!required_features)
         return Error::unsupported;
+    result.unified_image_layouts = unified_image_layouts_extension && features.unified_image_layouts.unifiedImageLayouts == VK_TRUE;
+    result.image_cube_array = features.core.features.imageCubeArray == VK_TRUE;
+    result.texture_compression_bc = features.core.features.textureCompressionBC == VK_TRUE;
+    result.texture_compression_astc = features.core.features.textureCompressionASTC_LDR == VK_TRUE;
+    result.texture_compression_etc2 = features.core.features.textureCompressionETC2 == VK_TRUE;
+    result.storage_input_output16 = features.vulkan11.storageInputOutput16 == VK_TRUE;
 
     uint32_t available_queue_count = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &available_queue_count, nullptr);
@@ -2197,6 +2163,8 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
     constexpr VkQueueFlags required_queue_flags = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT;
     for (uint32_t index = 0; index < queue_count; ++index)
     {
+        if (queues[index].queueCount == 0 || (queues[index].queueFlags & required_queue_flags) != required_queue_flags)
+            continue;
         VkBool32 presentation_supported = VK_TRUE;
         if (surface)
         {
@@ -2204,7 +2172,7 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
             if (presentation_error != Error::none)
                 return presentation_error;
         }
-        if (queues[index].queueCount != 0 && (queues[index].queueFlags & required_queue_flags) == required_queue_flags && presentation_supported == VK_TRUE)
+        if (presentation_supported == VK_TRUE)
         {
             queue_family = index;
             break;
@@ -2213,26 +2181,7 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
     if (queue_family == queue_count)
         return Error::unsupported;
 
-    Candidate result{
-        .physical_device = physical_device,
-        .queue_family = queue_family,
-        .properties = properties,
-        .unified_image_layouts = unified_image_layouts_extension && features.unified_image_layouts.unifiedImageLayouts == VK_TRUE,
-    };
-
-    result.heap_properties.pNext = &result.vulkan11_properties;
-    result.vulkan11_properties.pNext = &result.vulkan12_properties;
-    result.vulkan12_properties.pNext = &result.vulkan13_properties;
-    result.vulkan13_properties.pNext = &result.mesh_properties;
-    VkPhysicalDeviceProperties2 properties2{
-        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
-        .pNext = &result.heap_properties,
-    };
-    vkGetPhysicalDeviceProperties2(physical_device, &properties2);
-    result.heap_properties.pNext = nullptr;
-    result.vulkan11_properties.pNext = nullptr;
-    result.vulkan12_properties.pNext = nullptr;
-    result.vulkan13_properties.pNext = nullptr;
+    result.queue_family = queue_family;
     const VkPhysicalDeviceDescriptorHeapPropertiesEXT& heap = result.heap_properties;
     const VkDeviceSize resource_descriptor_alignment = heap.imageDescriptorAlignment > heap.bufferDescriptorAlignment
                                                        ? heap.imageDescriptorAlignment
@@ -2451,7 +2400,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     state->heap_properties.pNext = nullptr;
     state->vulkan13_properties.pNext = nullptr;
     state->mesh_properties.pNext = nullptr;
-    vkGetPhysicalDeviceMemoryProperties(state->physical_device, &state->memory_properties);
+    state->memory_properties = selected.memory_properties;
     for (uint32_t value = 0; value < format_count; ++value)
     {
         state->format_features[value] = optimal_format_features(
@@ -2459,24 +2408,15 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     }
 
     QueriedFeatures enabled_features(presentation, selected.unified_image_layouts);
-    vkGetPhysicalDeviceFeatures2(state->physical_device, &enabled_features.core);
-    const VkBool32 image_cube_array = enabled_features.core.features.imageCubeArray;
-    const VkBool32 sampler_anisotropy = enabled_features.core.features.samplerAnisotropy;
-    const VkBool32 texture_compression_bc = enabled_features.core.features.textureCompressionBC;
-    const VkBool32 texture_compression_astc = enabled_features.core.features.textureCompressionASTC_LDR;
-    const VkBool32 texture_compression_etc2 = enabled_features.core.features.textureCompressionETC2;
-    const VkBool32 storage_input_output16 = enabled_features.vulkan11.storageInputOutput16;
-    state->image_cube_array = image_cube_array == VK_TRUE;
-    state->texture_compression_etc2 = texture_compression_etc2 == VK_TRUE;
-    enabled_features.core.features = {};
-    enabled_features.core.features.imageCubeArray = image_cube_array;
-    enabled_features.core.features.samplerAnisotropy = sampler_anisotropy;
+    state->texture_compression_etc2 = selected.texture_compression_etc2;
+    enabled_features.core.features.imageCubeArray = selected.image_cube_array;
+    enabled_features.core.features.samplerAnisotropy = VK_TRUE;
     enabled_features.core.features.shaderInt16 = VK_TRUE;
     enabled_features.core.features.depthBiasClamp = VK_TRUE;
     enabled_features.core.features.independentBlend = VK_TRUE;
-    enabled_features.core.features.textureCompressionBC = texture_compression_bc;
-    enabled_features.core.features.textureCompressionASTC_LDR = texture_compression_astc;
-    enabled_features.core.features.textureCompressionETC2 = texture_compression_etc2;
+    enabled_features.core.features.textureCompressionBC = selected.texture_compression_bc;
+    enabled_features.core.features.textureCompressionASTC_LDR = selected.texture_compression_astc;
+    enabled_features.core.features.textureCompressionETC2 = selected.texture_compression_etc2;
     enabled_features.core.features.fragmentStoresAndAtomics = VK_TRUE;
     enabled_features.core.features.vertexPipelineStoresAndAtomics = VK_TRUE;
     enabled_features.core.features.shaderStorageImageReadWithoutFormat = VK_TRUE;
@@ -2488,7 +2428,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         .pNext = &enabled_features.vulkan12,
         .storageBuffer16BitAccess = VK_TRUE,
         .storagePushConstant16 = VK_TRUE,
-        .storageInputOutput16 = storage_input_output16,
+        .storageInputOutput16 = selected.storage_input_output16,
         .shaderDrawParameters = VK_TRUE,
     };
     enabled_features.vulkan12 = {
@@ -2625,12 +2565,10 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         .max_push_data_size = state->heap_properties.maxPushDataSize,
         .texture_heap_alignment = state->texture_heap_alignment,
         .texture_descriptor_size = state->heap_properties.imageDescriptorSize,
-        .texture_descriptor_stride = align_up(state->heap_properties.imageDescriptorSize, state->heap_properties.imageDescriptorAlignment),
         .sampler_descriptor_size = state->heap_properties.samplerDescriptorSize,
-        .sampler_descriptor_stride = align_up(state->heap_properties.samplerDescriptorSize, state->heap_properties.samplerDescriptorAlignment),
-        .texture_compression_bc = texture_compression_bc == VK_TRUE,
-        .texture_compression_astc = texture_compression_astc == VK_TRUE,
-        .storage_input_output16 = storage_input_output16 == VK_TRUE,
+        .texture_compression_bc = selected.texture_compression_bc,
+        .texture_compression_astc = selected.texture_compression_astc,
+        .storage_input_output16 = selected.storage_input_output16,
     };
     if (presentation)
     {
@@ -2662,7 +2600,6 @@ TimelineSemaphore* create_timeline_semaphore(Device* device,
     };
     TimelineSemaphore* result = new TimelineSemaphore{
         .state = device,
-        .last_signal = initial_value,
     };
     require_vk(vkCreateSemaphore(device->device, &create_info, nullptr, &result->semaphore));
     return result;
@@ -2695,8 +2632,8 @@ uint64_t timeline_completed_value(const TimelineSemaphore* semaphore) noexcept
 void wait_timeline(TimelinePoint point) noexcept
 {
     TimelineSemaphore* semaphore = point.semaphore;
-    const bool valid = semaphore && semaphore->state && semaphore->semaphore && point.value <= semaphore->last_signal;
-    assert(valid && "wait_timeline received an invalid or unsignaled point");
+    const bool valid = semaphore && semaphore->state && semaphore->semaphore;
+    assert(valid && "wait_timeline requires a live timeline semaphore");
 
     const VkSemaphore handle = semaphore->semaphore;
     const VkSemaphoreWaitInfo wait_info{
@@ -2716,7 +2653,6 @@ GpuHeap create_gpu_heap(Device* device, uint64_t byte_count, MemoryType memory) 
 {
     assert(device && "create_gpu_heap called with a null device");
     assert(byte_count != 0 && "create_gpu_heap byte count must be non-zero");
-    device->poll_command_retirement();
     switch (memory)
     {
     case MemoryType::cpu_visible:
@@ -2724,7 +2660,7 @@ GpuHeap create_gpu_heap(Device* device, uint64_t byte_count, MemoryType memory) 
     case MemoryType::readback:
     case MemoryType::texture_descriptor_heap:
     case MemoryType::sampler_descriptor_heap: return device->allocate_gpu_heap(byte_count, memory);
-    default: assert(false && "create_gpu_heap received an invalid memory type"); std::abort();
+    default: assert(false && "create_gpu_heap received an invalid memory type"); return {};
     }
 }
 
@@ -2797,8 +2733,13 @@ void retire_swapchain_handle(Swapchain& swapchain) noexcept
             return;
         }
     }
-    assert(false && "retired swapchain generation storage exhausted");
-    std::abort();
+    for (uint32_t index = 0; index < device->present_context_count; ++index)
+    {
+        detail::PresentContext& context = device->present_contexts[index];
+        if (context.present_pending && context.swapchain == retired.handle)
+            device->wait_present_context(context);
+    }
+    device->queue_retired_swapchain(retired);
 }
 
 void destroy_owned_swapchain(Device& device) noexcept
@@ -2839,8 +2780,7 @@ VkCompositeAlphaFlagBitsKHR choose_composite_alpha(
 {
     VkSurfaceCapabilitiesKHR capabilities{};
     const Error error = error_from_vk(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(swapchain.state->physical_device, swapchain.state->surface, &capabilities));
-    if (error != Error::none)
-        require_error(error);
+    require_error(error);
 
     const VkExtent2D extent = capabilities.currentExtent;
     const uint32_t variable_extent = std::numeric_limits<uint32_t>::max();
@@ -3015,7 +2955,6 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept
         texture.layer_count = 1;
         texture.type = TextureType::two_d;
         texture.format = swapchain.format;
-        texture.usage = TextureUsage::color_attachment;
         texture.owns_image = false;
         texture.swapchain_image = true;
         swapchain.render_views[index] = {
@@ -3023,8 +2962,6 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept
             .view = views[index],
             .width = extent.width,
             .height = extent.height,
-            .format = swapchain.format,
-            .usage = TextureUsage::color_attachment,
             .swapchain_view = true,
         };
     }
@@ -3039,15 +2976,12 @@ uint32x2 get_drawable_extent(Device* device) noexcept
     assert(device->active_command_buffers == 0 &&
            !device->acquired_swapchain &&
            "get_drawable_extent must be called outside command recording and presentation");
-    device->poll_command_retirement();
-    device->poll_present_contexts();
     if (!device->swapchain)
         return {};
 
     VkSurfaceCapabilitiesKHR capabilities{};
     const Error error = error_from_vk(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device->physical_device, device->surface, &capabilities));
-    if (error != Error::none)
-        require_error(error);
+    require_error(error);
     const VkExtent2D extent = capabilities.currentExtent;
     if (extent.width == std::numeric_limits<uint32_t>::max() || extent.height == std::numeric_limits<uint32_t>::max())
     {
@@ -3055,7 +2989,6 @@ uint32x2 get_drawable_extent(Device* device) noexcept
     }
 
     Swapchain& swapchain = *device->swapchain;
-    swapchain.extent_queried = true;
     if (swapchain.handle && (swapchain.width != extent.width || swapchain.height != extent.height))
     {
         swapchain.recreate_required = true;
@@ -3076,10 +3009,6 @@ SwapchainFrame acquire(Device* device) noexcept
     assert(valid && "acquire received a device without an available swapchain");
 
     Swapchain* swapchain = device->swapchain;
-    const bool extent_queried = swapchain->extent_queried;
-    swapchain->extent_queried = false;
-    if (!extent_queried) device->poll_command_retirement();
-    device->poll_present_contexts();
     detail::PresentContext* present_context = nullptr;
 
     for (;;)
@@ -3087,11 +3016,10 @@ SwapchainFrame acquire(Device* device) noexcept
         if (!swapchain->handle || swapchain->recreate_required)
         {
             const Error error = recreate_swapchain(*swapchain);
-            if (error != Error::none) require_error(error);
+            require_error(error);
             const bool drawable = swapchain->handle && swapchain->width != 0 && swapchain->height != 0;
-            assert(drawable && "acquire requires a non-zero drawable extent");
             if (!drawable)
-                std::abort();
+                return {};
         }
 
         if (!present_context)
@@ -3143,8 +3071,6 @@ struct PreparedTexture
     VkImageCreateInfo image_info{
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
     };
-    uint64_t sampled_view_format_mask = 0;
-    uint64_t storage_view_format_mask = 0;
 };
 
 void prepare_texture(Device& device, const TextureDesc& desc, PreparedTexture& output) noexcept
@@ -3152,73 +3078,8 @@ void prepare_texture(Device& device, const TextureDesc& desc, PreparedTexture& o
     output = {};
     output.format_list.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO;
     output.image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    const bool valid_format = is_concrete_format(desc.format);
-    const bool valid_dimensions = desc.extent.x != 0 && desc.extent.y != 0 && desc.extent.z != 0 && desc.layer_count != 0;
-    bool valid_type = true;
-    bool valid_shape = valid_dimensions;
-    switch (desc.type)
-    {
-    case TextureType::one_d:
-        valid_shape = valid_shape && desc.extent.y == 1 && desc.extent.z == 1 && desc.layer_count == 1;
-        break;
-    case TextureType::two_d:
-        valid_shape = valid_shape && desc.extent.z == 1 && desc.layer_count == 1;
-        break;
-    case TextureType::three_d:
-        valid_shape = valid_shape && desc.layer_count == 1;
-        break;
-    case TextureType::cube:
-        valid_shape = valid_shape && desc.extent.z == 1 && desc.extent.x == desc.extent.y && desc.layer_count == 6;
-        break;
-    case TextureType::two_d_array:
-        valid_shape = valid_shape && desc.extent.z == 1;
-        break;
-    case TextureType::cube_array:
-        valid_shape = valid_shape && desc.extent.z == 1 && desc.extent.x == desc.extent.y && desc.layer_count % 6u == 0;
-        break;
-    default:
-        valid_type = false;
-        valid_shape = false;
-        break;
-    }
-    assert(valid_type && "texture type is invalid");
-    assert(valid_format && "texture format must not be undefined");
-    assert(valid_dimensions && "texture dimensions and layer count must be non-zero");
-    assert(valid_shape && "texture dimensions or layer count do not match its type");
-    assert(desc.mip_levels != 0 && "texture mip count must be non-zero");
-    uint32_t maximum_dimension = desc.extent.x > desc.extent.y ? desc.extent.x : desc.extent.y;
-    if (desc.extent.z > maximum_dimension) maximum_dimension = desc.extent.z;
-    const uint32_t maximum_mip_levels = static_cast<uint32_t>(std::bit_width(maximum_dimension));
-    assert(desc.mip_levels <= maximum_mip_levels && "texture mip count exceeds the maximum for its dimensions");
-    const bool supported_texture_type = desc.type != TextureType::cube_array || device.image_cube_array;
-    assert(supported_texture_type && "texture type requires an unsupported optional core feature");
-    const bool depth_stencil_format = has_depth_aspect(desc.format) || has_stencil_aspect(desc.format);
-    assert((!depth_stencil_format || !has_flag(desc.usage, TextureUsage::color_attachment)) && "a depth/stencil format cannot be used as a color attachment");
-    assert((depth_stencil_format || !has_flag(desc.usage, TextureUsage::depth_stencil_attachment)) &&
-           "a color format cannot be used as a depth/stencil attachment");
-    const TextureFormatInfo texture_format_info = get_texture_format_info(desc.format);
-    const bool combined_transfer = texture_format_info.depth && texture_format_info.stencil &&
-                                   (has_flag(desc.usage, TextureUsage::transfer_source) ||
-                                    has_flag(desc.usage, TextureUsage::transfer_destination));
-    assert(!combined_transfer && "combined depth/stencil transfers require an aspect selector");
-    const bool attachment = has_flag(desc.usage, TextureUsage::color_attachment) || has_flag(desc.usage, TextureUsage::depth_stencil_attachment);
-    const bool attachment_shape = !attachment || (desc.type != TextureType::one_d && desc.type != TextureType::three_d);
-    assert(attachment_shape && "render attachments must have a 2D, array, or cube texture type");
-    assert(desc.usage != TextureUsage::none && "texture must have at least one usage");
-    const bool valid_usage_bits = has_valid_texture_usage_bits(desc.usage);
-    assert(valid_usage_bits && "texture usage mask contains unknown bits");
-    const VkPhysicalDeviceLimits& limits = device.physical_properties.limits;
-    assert(!attachment || (desc.extent.x <= limits.maxFramebufferWidth && desc.extent.y <= limits.maxFramebufferHeight));
-    if (has_flag(desc.usage, TextureUsage::color_attachment) || has_flag(desc.usage, TextureUsage::depth_stencil_attachment))
-    {
-        const float viewport_width = static_cast<float>(desc.extent.x);
-        const float viewport_height = static_cast<float>(desc.extent.y);
-        assert(desc.extent.x <= limits.maxViewportDimensions[0] &&
-               desc.extent.y <= limits.maxViewportDimensions[1] &&
-               limits.viewportBoundsRange[0] <= 0.0f &&
-               viewport_width <= limits.viewportBoundsRange[1] &&
-               viewport_height <= limits.viewportBoundsRange[1]);
-    }
+    assert(is_concrete_format(desc.format) && "texture format must not be undefined");
+    assert(has_valid_texture_usage_bits(desc.usage) && "texture usage mask contains unknown bits");
 
     VkImageUsageFlags usage = 0;
     if (has_flag(desc.usage, TextureUsage::sampled)) usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -3231,14 +3092,10 @@ void prepare_texture(Device& device, const TextureDesc& desc, PreparedTexture& o
 
     const VkImageType image_type = to_vk(desc.type);
     const VkFormat format = to_vk(desc.format);
-    assert(supports_texture_format(&device, desc.format, desc.usage));
     const VkFormatFeatureFlags2 sampled_features = required_format_features(TextureUsage::sampled);
     const VkFormatFeatureFlags2 storage_features = required_format_features(TextureUsage::storage);
     uint32_t view_format_count = 1;
     output.view_formats[0] = format;
-    const uint64_t base_format_bit = format_bit(desc.format);
-    output.sampled_view_format_mask = has_flag(desc.usage, TextureUsage::sampled) ? base_format_bit : 0;
-    output.storage_view_format_mask = has_flag(desc.usage, TextureUsage::storage) ? base_format_bit : 0;
     for (uint32_t value = 0; desc.mutable_format && value < format_count; ++value)
     {
         const Format view_format = static_cast<Format>(value);
@@ -3251,9 +3108,6 @@ void prepare_texture(Device& device, const TextureDesc& desc, PreparedTexture& o
             continue;
         assert(view_format_count < format_count);
         output.view_formats[view_format_count++] = to_vk(view_format);
-        const uint64_t bit = format_bit(view_format);
-        if (sampled) output.sampled_view_format_mask |= bit;
-        if (storage) output.storage_view_format_mask |= bit;
     }
 
     VkImageCreateFlags image_flags = 0;
@@ -3262,28 +3116,6 @@ void prepare_texture(Device& device, const TextureDesc& desc, PreparedTexture& o
 
     output.format_list.viewFormatCount = view_format_count;
     output.format_list.pViewFormats = output.view_formats;
-    const VkPhysicalDeviceImageFormatInfo2 format_info{
-        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2,
-        .pNext = view_format_count > 1 ? &output.format_list : nullptr,
-        .format = format,
-        .type = image_type,
-        .tiling = VK_IMAGE_TILING_OPTIMAL,
-        .usage = usage,
-        .flags = image_flags,
-    };
-    VkImageFormatProperties2 image_properties2{
-        .sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2,
-    };
-    const VkResult format_result = vkGetPhysicalDeviceImageFormatProperties2(device.physical_device, &format_info, &image_properties2);
-    require_vk(format_result);
-    const VkImageFormatProperties& image_properties = image_properties2.imageFormatProperties;
-    assert(desc.extent.x <= image_properties.maxExtent.width &&
-           desc.extent.y <= image_properties.maxExtent.height &&
-           desc.extent.z <= image_properties.maxExtent.depth &&
-           desc.mip_levels <= image_properties.maxMipLevels &&
-           desc.layer_count <= image_properties.maxArrayLayers &&
-           image_resource_byte_size(desc, desc.layer_count) <= image_properties.maxResourceSize);
-
     output.image_info = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .pNext = view_format_count > 1 ? &output.format_list : nullptr,
@@ -3312,14 +3144,12 @@ VkMemoryRequirements texture_memory_requirements(Device& device, const PreparedT
     assert(valid_requirements);
     if (!valid_requirements)
         std::abort();
-    const bool compatible_alignment = device.caps.texture_heap_alignment != 0 && requirements.alignment <= device.caps.texture_heap_alignment &&
-                                      device.caps.texture_heap_alignment % requirements.alignment == 0;
-    assert(compatible_alignment && "texture alignment exceeds the device texture heap alignment");
-    const bool compatible_memory_type = device.texture_memory_type < device.memory_properties.memoryTypeCount &&
-                                        (requirements.memoryTypeBits & (1u << device.texture_memory_type)) != 0;
-    assert(compatible_memory_type && "texture is incompatible with the device texture heap type");
-    if (!compatible_alignment || !compatible_memory_type)
-        std::abort();
+    assert(device.caps.texture_heap_alignment != 0 && requirements.alignment <= device.caps.texture_heap_alignment &&
+           device.caps.texture_heap_alignment % requirements.alignment == 0 &&
+           "texture alignment exceeds the device texture heap alignment");
+    assert(device.texture_memory_type < device.memory_properties.memoryTypeCount &&
+           (requirements.memoryTypeBits & (1u << device.texture_memory_type)) != 0 &&
+           "texture is incompatible with the device texture heap type");
     return requirements;
 }
 
@@ -3329,7 +3159,6 @@ TextureHeap create_texture_heap(Device* device, uint64_t byte_count) noexcept
 {
     assert(device && "create_texture_heap called with a null device");
     assert(byte_count != 0 && "create_texture_heap byte count must be non-zero");
-    assert(device->active_command_buffers == 0 && "create_texture_heap is not allowed while a command buffer is recording");
     assert(device->texture_memory_type < device->memory_properties.memoryTypeCount);
     const uint32_t memory_heap = device->memory_properties.memoryTypes[device->texture_memory_type].heapIndex;
     assert(memory_heap < device->memory_properties.memoryHeapCount &&
@@ -3384,12 +3213,8 @@ Texture* create_texture(Device* device, const TextureDesc& desc, const TextureHe
     const TextureHeapOwner* owner = heap.owner;
     assert(device && owner && owner->state == device && owner->memory && "create_texture requires a texture heap from the same device");
     assert(device->active_command_buffers == 0 && "create_texture is not allowed while a command buffer is recording");
-    device->poll_command_retirement();
     PreparedTexture texture{};
     prepare_texture(*device, desc, texture);
-    const VkMemoryRequirements requirements = texture_memory_requirements(*device, texture);
-    const bool valid_placement = offset % requirements.alignment == 0 && offset <= heap.size && requirements.size <= heap.size - offset;
-    assert(valid_placement && "texture placement is misaligned or outside its texture heap");
 
     Texture* result = new Texture{
         .state = device,
@@ -3398,11 +3223,8 @@ Texture* create_texture(Device* device, const TextureDesc& desc, const TextureHe
         .depth = desc.extent.z,
         .mip_levels = desc.mip_levels,
         .layer_count = desc.layer_count,
-        .sampled_view_format_mask = texture.sampled_view_format_mask,
-        .storage_view_format_mask = texture.storage_view_format_mask,
         .type = desc.type,
         .format = desc.format,
-        .usage = desc.usage,
     };
     require_vk(vkCreateImage(device->device, &texture.image_info, nullptr, &result->image));
     require_vk(vkBindImageMemory(device->device, result->image, owner->memory, offset));
@@ -3422,15 +3244,7 @@ Texture* create_texture(Device* device, const TextureDesc& desc, const TextureHe
 RenderView* create_render_view(Texture* texture, const RenderViewDesc& desc) noexcept
 {
     const bool valid_texture = texture && texture->state;
-    const bool commands_recording = valid_texture && texture->state->active_command_buffers != 0;
-    assert(!commands_recording && "create_render_view is not allowed while a command buffer is recording");
-    const bool valid_usage = valid_texture &&
-        (has_flag(texture->usage, TextureUsage::color_attachment) ||
-         has_flag(texture->usage, TextureUsage::depth_stencil_attachment));
-    const bool valid_type = valid_texture && texture->type != TextureType::one_d && texture->type != TextureType::three_d;
     const bool valid_subresource = valid_texture && desc.mip_level < texture->mip_levels && desc.slice < texture->layer_count;
-    assert(valid_usage && "render view texture must support attachment use");
-    assert(valid_type && "render views require a 2D, array, or cube texture");
     assert(valid_subresource && "render view subresource is invalid");
 
     uint32_t width = texture->width >> desc.mip_level;
@@ -3441,8 +3255,6 @@ RenderView* create_render_view(Texture* texture, const RenderViewDesc& desc) noe
         .state = texture->state,
         .width = width,
         .height = height,
-        .format = texture->format,
-        .usage = texture->usage,
     };
     const VkImageViewCreateInfo view_info{
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
@@ -3472,34 +3284,26 @@ void write_texture_descriptor(Device* device,
 
     const bool valid_type = type == TextureDescriptorType::sampled ||
                             type == TextureDescriptorType::storage;
-    const TextureUsage required_usage = type == TextureDescriptorType::sampled ? TextureUsage::sampled : TextureUsage::storage;
-    const bool valid_usage = valid_type && has_flag(texture->usage, required_usage);
-    const bool valid_base_mip = desc.base_mip < texture->mip_levels;
-    const uint32_t mip_count = valid_base_mip ? (desc.mip_count == 0 ? texture->mip_levels - desc.base_mip : desc.mip_count) : 0;
-    const bool valid_mips = valid_base_mip && mip_count != 0 && mip_count <= texture->mip_levels - desc.base_mip;
-    const bool valid_base_layer = desc.base_layer < texture->layer_count;
-    const uint32_t layer_count = valid_base_layer ? (desc.layer_count == 0 ? texture->layer_count - desc.base_layer : desc.layer_count) : 0;
-    const bool valid_layers = valid_base_layer && layer_count != 0 && layer_count <= texture->layer_count - desc.base_layer;
-    const bool valid_cube_layers = texture->type == TextureType::cube ? layer_count == 6 : texture->type != TextureType::cube_array || layer_count % 6u == 0;
+    assert(valid_type && "texture descriptor type is invalid");
+    const uint32_t mip_count = desc.mip_count == 0 ? texture->mip_levels - desc.base_mip : desc.mip_count;
+    const uint32_t layer_count = desc.layer_count == 0 ? texture->layer_count - desc.base_layer : desc.layer_count;
     const Format view_format = desc.format == Format::undefined ? texture->format : desc.format;
-    const bool valid_view_format = is_concrete_format(view_format) && compatible_view_formats(texture->format, view_format);
-    const uint64_t view_format_bit = valid_view_format ? format_bit(view_format) : 0;
-    const uint64_t descriptor_view_format_mask =
-        type == TextureDescriptorType::sampled ? texture->sampled_view_format_mask : texture->storage_view_format_mask;
-    const bool valid_descriptor_format = valid_view_format && (descriptor_view_format_mask & view_format_bit) != 0;
-    assert(valid_usage && "texture was not created for this descriptor type");
-    assert(valid_mips && "texture descriptor mip range is invalid");
-    assert(valid_layers && "texture descriptor layer range is invalid");
-    assert(valid_cube_layers && "cube texture descriptor layer count must contain whole cubes");
-    assert(valid_view_format && "texture descriptor format is incompatible with this texture");
-    assert(valid_descriptor_format && "texture descriptor format does not support this descriptor type");
 
     const VkImageUsageFlags descriptor_usage = static_cast<VkImageUsageFlags>(
         type == TextureDescriptorType::sampled ? VK_IMAGE_USAGE_SAMPLED_BIT : VK_IMAGE_USAGE_STORAGE_BIT);
 
-    VkImageAspectFlags descriptor_aspect = VK_IMAGE_ASPECT_COLOR_BIT;
-    if (has_depth_aspect(texture->format)) descriptor_aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
-    else if (has_stencil_aspect(texture->format)) descriptor_aspect = VK_IMAGE_ASPECT_STENCIL_BIT;
+    VkImageAspectFlags descriptor_aspect = 0;
+    switch (desc.aspect)
+    {
+    case TextureAspect::automatic:
+        descriptor_aspect = has_depth_aspect(texture->format) ? VK_IMAGE_ASPECT_DEPTH_BIT :
+                            has_stencil_aspect(texture->format) ? VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+        break;
+    case TextureAspect::color: descriptor_aspect = VK_IMAGE_ASPECT_COLOR_BIT; break;
+    case TextureAspect::depth: descriptor_aspect = VK_IMAGE_ASPECT_DEPTH_BIT; break;
+    case TextureAspect::stencil: descriptor_aspect = VK_IMAGE_ASPECT_STENCIL_BIT; break;
+    }
+    assert(descriptor_aspect != 0 && "texture descriptor aspect is invalid");
     const VkImageViewUsageCreateInfo view_usage{
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO,
         .usage = descriptor_usage,
@@ -3851,7 +3655,7 @@ CommandBuffer* begin_commands(Device* device) noexcept
              initialization;
              initialization = initialization->next)
         {
-            assert(initialization && !initialization->initialized);
+            assert(initialization);
             assert(initialization->owner == &result->pending_texture_initializations);
             barriers[barrier_count++] = {
                 .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
@@ -3919,9 +3723,8 @@ void complete_texture_initializations(CommandBuffer& commands) noexcept
     while (initialization)
     {
         detail::TextureInitialization* next = initialization->next;
-        const bool valid = !initialization->initialized && initialization->owner == &commands.pending_texture_initializations;
+        const bool valid = initialization->owner == &commands.pending_texture_initializations;
         assert(valid && "submitted texture initialization state is invalid");
-        initialization->initialized = true;
         initialization->owner = nullptr;
         initialization->previous = nullptr;
         initialization->next = nullptr;
@@ -3939,22 +3742,11 @@ void submit_commands(Span<CommandBuffer* const> commands,
     TimelineSemaphore* completion_semaphore = completion.semaphore;
     const bool valid_completion = completion_semaphore &&
                                   completion_semaphore->state == device &&
-                                  completion_semaphore->semaphore &&
-                                  completion.value > completion_semaphore->last_signal;
-    assert(valid_completion && "submission completion must monotonically advance a timeline owned by the device");
+                                  completion_semaphore->semaphore;
+    assert(valid_completion && "submission completion requires a live timeline semaphore owned by the device");
     assert(commands.data && commands.size != 0 && commands.size <= std::numeric_limits<uint32_t>::max());
     assert(device->active_command_buffers == commands.size && "submit must consume every begun command buffer");
     assert(!device->pending_texture_initializations.first && !device->pending_texture_initializations.last && "pending texture transitions were not recorded");
-#if !defined(NDEBUG)
-    if (device->max_timeline_value_difference != std::numeric_limits<uint64_t>::max())
-    {
-        const uint64_t completed_value = query_timeline_value(*completion_semaphore);
-        const bool valid_completed_value = completed_value <= completion_semaphore->last_signal;
-        const bool valid_difference = valid_completed_value && completion.value - completed_value <= device->max_timeline_value_difference;
-        assert(valid_difference && "submission timeline value exceeds the device's maximum value difference");
-    }
-#endif
-
     assert(device->command_submit_infos.size() >= commands.size);
     for (size_t index = 0; index < commands.size; ++index)
     {
@@ -4030,7 +3822,6 @@ void submit_commands(Span<CommandBuffer* const> commands,
         context->retire_value = retirement;
         *current = {};
     }
-    completion_semaphore->last_signal = completion.value;
 }
 
 } // namespace
@@ -4265,12 +4056,6 @@ AddressRange validate_range(CommandBuffer* commands, GpuRange range) noexcept
     };
 }
 
-void validate_texture(CommandBuffer* commands, Texture* texture) noexcept
-{
-    const bool valid = texture && texture->state == commands->state;
-    assert(valid && "texture is empty or belongs to a different device");
-}
-
 VkDeviceMemoryImageCopyKHR make_texture_copy_region(
     const Texture& texture,
     const TextureCopyDesc& copy,
@@ -4377,35 +4162,31 @@ void emit_root_data(CommandBuffer* commands, ByteSpan root) noexcept
     commands->state->fn.cmd_push_data(commands->command_buffer, &info);
 }
 
-void set_texture_heap(CommandBuffer* commands, GpuRange heap) noexcept
+void set_texture_descriptor_heap(CommandBuffer* commands, GpuRange heap) noexcept
 {
     const bool valid = commands && commands->recording;
-    assert(valid && "set_texture_heap requires a recording command buffer");
+    assert(valid && "set_texture_descriptor_heap requires a recording command buffer");
     const VkPhysicalDeviceDescriptorHeapPropertiesEXT& properties = commands->state->heap_properties;
     VkBindHeapInfoEXT bind_info{};
     make_heap_bind_info(
         heap,
-        properties.resourceHeapAlignment,
         properties.imageDescriptorAlignment > properties.bufferDescriptorAlignment
             ? properties.imageDescriptorAlignment
             : properties.bufferDescriptorAlignment,
         properties.minResourceHeapReservedRange,
-        properties.maxResourceHeapSize,
         bind_info);
     commands->state->fn.cmd_bind_texture_heap(commands->command_buffer, &bind_info);
 }
 
-void set_sampler_heap(CommandBuffer* commands, GpuRange heap) noexcept
+void set_sampler_descriptor_heap(CommandBuffer* commands, GpuRange heap) noexcept
 {
     const bool valid = commands && commands->recording;
-    assert(valid && "set_sampler_heap requires a recording command buffer");
+    assert(valid && "set_sampler_descriptor_heap requires a recording command buffer");
     const VkPhysicalDeviceDescriptorHeapPropertiesEXT& properties = commands->state->heap_properties;
     VkBindHeapInfoEXT bind_info{};
     make_heap_bind_info(heap,
-                        properties.samplerHeapAlignment,
                         properties.samplerDescriptorAlignment,
                         properties.minSamplerHeapReservedRange,
-                        properties.maxSamplerHeapSize,
                         bind_info);
     commands->state->fn.cmd_bind_sampler_heap(commands->command_buffer, &bind_info);
 }
@@ -4424,18 +4205,13 @@ void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc) noexc
     {
         const ColorAttachment& attachment = desc.colors.data[index];
         RenderView* render_view = attachment.render_view;
-        const bool valid_color = render_view &&
-            render_view->state == commands->state && render_view->view &&
-            has_flag(render_view->usage, TextureUsage::color_attachment) &&
-            is_color_format(render_view->format);
-        assert(valid_color && "every color render target must belong to the device and support color attachments");
+        const bool valid_color = render_view && render_view->state == commands->state && render_view->view;
+        assert(valid_color && "every color render target must be a live view from the device");
         if (width == 0)
         {
             width = render_view->width;
             height = render_view->height;
         }
-        const bool matching = render_view->width == width && render_view->height == height;
-        assert(matching && "rendering attachment dimensions differ");
         color_attachments[index] = {
             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
             .imageView = render_view->view,
@@ -4461,46 +4237,28 @@ void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc) noexc
     assert(has_attachment && "begin_render_pass requires at least one attachment");
     if (depth_view)
     {
-        const bool valid_depth = depth_view->state == commands->state &&
-            depth_view->view &&
-            has_flag(depth_view->usage, TextureUsage::depth_stencil_attachment) &&
-            has_depth_aspect(depth_view->format);
-        assert(valid_depth && "depth render target must belong to the device and have a depth aspect");
+        const bool valid_depth = depth_view->state == commands->state && depth_view->view;
+        assert(valid_depth && "depth render target must be a live view from the device");
         if (width == 0)
         {
             width = depth_view->width;
             height = depth_view->height;
         }
-        const bool matching = depth_view->width == width && depth_view->height == height;
-        const bool valid_clear = desc.depth.load != LoadOp::clear || (desc.depth.clear >= 0.0f && desc.depth.clear <= 1.0f);
-        assert(matching && "depth attachment dimensions differ");
-        assert(valid_clear && "clear depth must be in the [0, 1] range");
     }
     if (stencil_view)
     {
-        const bool valid_stencil = stencil_view->state == commands->state &&
-            stencil_view->view &&
-            has_flag(stencil_view->usage, TextureUsage::depth_stencil_attachment) &&
-            has_stencil_aspect(stencil_view->format);
-        assert(valid_stencil && "stencil render target must belong to the device and have a stencil aspect");
+        const bool valid_stencil = stencil_view->state == commands->state && stencil_view->view;
+        assert(valid_stencil && "stencil render target must be a live view from the device");
         if (width == 0)
         {
             width = stencil_view->width;
             height = stencil_view->height;
         }
-        const bool matching = stencil_view->width == width && stencil_view->height == height;
-        const bool same_depth_stencil_view = !depth_view || depth_view == stencil_view;
-        assert(matching && "stencil attachment dimensions differ");
-        assert(same_depth_stencil_view && "depth and stencil attachments must reference the same render view");
     }
-
-    VkImageView depth_stencil_view = VK_NULL_HANDLE;
-    if (depth_view) depth_stencil_view = depth_view->view;
-    else if (stencil_view) depth_stencil_view = stencil_view->view;
 
     const VkRenderingAttachmentInfo depth_attachment{
         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-        .imageView = depth_view ? depth_stencil_view : VK_NULL_HANDLE,
+        .imageView = depth_view ? depth_view->view : VK_NULL_HANDLE,
         .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
         .loadOp = to_vk(desc.depth.load),
         .storeOp = to_vk(desc.depth.store),
@@ -4512,7 +4270,7 @@ void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc) noexc
     };
     const VkRenderingAttachmentInfo stencil_attachment{
         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-        .imageView = stencil_view ? depth_stencil_view : VK_NULL_HANDLE,
+        .imageView = stencil_view ? stencil_view->view : VK_NULL_HANDLE,
         .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
         .loadOp = to_vk(desc.stencil.load),
         .storeOp = to_vk(desc.stencil.store),
@@ -4771,9 +4529,8 @@ void copy_memory_to_texture(CommandBuffer* commands, GpuRange source, Texture* d
 {
     const bool valid = commands && commands->recording && !commands->rendering && destination;
     assert(valid && "copy_memory_to_texture received an empty object or active rendering scope");
-    const bool valid_texture = destination->state == commands->state && has_flag(destination->usage, TextureUsage::transfer_destination);
-    assert(valid_texture && "texture must belong to the device and support transfer destination use");
-    validate_texture(commands, destination);
+    const bool valid_texture = destination->state == commands->state && destination->image;
+    assert(valid_texture && "destination texture must be a live texture from the device");
     const AddressRange source_range = validate_range(commands, source);
     const VkDeviceMemoryImageCopyKHR region = make_texture_copy_region(*destination, copy, source_range);
     const VkCopyDeviceMemoryImageInfoKHR info{
@@ -4789,9 +4546,8 @@ void copy_texture_to_memory(CommandBuffer* commands, Texture* source, GpuRange d
 {
     const bool valid = commands && commands->recording && !commands->rendering && source;
     assert(valid && "copy_texture_to_memory received an empty object or active rendering scope");
-    const bool valid_texture = source->state == commands->state && has_flag(source->usage, TextureUsage::transfer_source);
-    assert(valid_texture && "texture must belong to the device and support transfer source use");
-    validate_texture(commands, source);
+    const bool valid_texture = source->state == commands->state && source->image;
+    assert(valid_texture && "source texture must be a live texture from the device");
     const AddressRange destination_range = validate_range(commands, destination);
     const VkDeviceMemoryImageCopyKHR region = make_texture_copy_region(*source, copy, destination_range);
     const VkCopyDeviceMemoryImageInfoKHR info{
@@ -4807,10 +4563,6 @@ void barrier(CommandBuffer* commands, Stage before, Access before_access, Stage 
 {
     const bool valid = commands && commands->recording && !commands->rendering;
     assert(valid && "barrier requires a recording command buffer outside rendering");
-    const bool valid_host_scopes = !has_flag(before, Stage::host) && (!has_flag(after, Stage::host) || has_flag(after_access, Access::host_read));
-    assert(valid_host_scopes && "the host stage is destination-only and requires host-read access");
-    validate_stage_access(before, before_access);
-    validate_stage_access(after, after_access);
     const VkMemoryBarrier2 memory_barrier{
         .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
         .srcStageMask = to_vk(before),

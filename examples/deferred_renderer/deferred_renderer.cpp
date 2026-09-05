@@ -4,6 +4,7 @@
 #include "simulation_shared.h"
 
 #include <NoGraphicsAPIUtility/bump_allocator.hpp>
+#include <NoGraphicsAPIUtility/delete_queue.hpp>
 #include <NoGraphicsAPIUtility/math.hpp>
 #include <NoGraphicsAPIUtility/texture_allocator.hpp>
 
@@ -49,13 +50,7 @@ struct GBuffer
     uint32_t height = 0;
 };
 
-void recreate_gbuffer(Device* device,
-                      TextureAllocator& texture_allocator,
-                      GBuffer& gbuffer,
-                      byte* descriptors,
-                      uint64_t descriptor_stride,
-                      uint32_t width,
-                      uint32_t height) noexcept
+void destroy_gbuffer(TextureAllocator& texture_allocator, GBuffer& gbuffer) noexcept
 {
     destroy_render_view(gbuffer.depth_render_view);
     destroy_render_view(gbuffer.normal_roughness_render_view);
@@ -63,7 +58,17 @@ void recreate_gbuffer(Device* device,
     texture_allocator.free(gbuffer.depth);
     texture_allocator.free(gbuffer.normal_roughness);
     texture_allocator.free(gbuffer.albedo);
+    gbuffer = {};
+}
 
+void recreate_gbuffer(Device* device,
+                      TextureAllocator& texture_allocator,
+                      GBuffer& gbuffer,
+                      byte* descriptors,
+                      uint64_t descriptor_size,
+                      uint32_t width,
+                      uint32_t height) noexcept
+{
     gbuffer = {
         .albedo = texture_allocator.allocate({
             .extent = {.x = width, .y = height, .z = 1},
@@ -90,11 +95,10 @@ void recreate_gbuffer(Device* device,
     gbuffer.normal_roughness_render_view = create_render_view(gbuffer.normal_roughness.texture);
     gbuffer.depth_render_view = create_render_view(gbuffer.depth.texture);
 
-    const size_t stride = size_t(descriptor_stride);
-    write_texture_descriptor(device, descriptors + size_t(GBufferTexture::albedo) * stride, gbuffer.albedo.texture, TextureDescriptorType::sampled);
-    write_texture_descriptor(device, descriptors + size_t(GBufferTexture::normal_roughness) * stride, gbuffer.normal_roughness.texture,
+    write_texture_descriptor(device, descriptors + size_t(GBufferTexture::albedo) * descriptor_size, gbuffer.albedo.texture, TextureDescriptorType::sampled);
+    write_texture_descriptor(device, descriptors + size_t(GBufferTexture::normal_roughness) * descriptor_size, gbuffer.normal_roughness.texture,
                              TextureDescriptorType::sampled);
-    write_texture_descriptor(device, descriptors + size_t(GBufferTexture::depth) * stride, gbuffer.depth.texture, TextureDescriptorType::sampled);
+    write_texture_descriptor(device, descriptors + size_t(GBufferTexture::depth) * descriptor_size, gbuffer.depth.texture, TextureDescriptorType::sampled);
 }
 
 float random_signed(uint32_t& state) noexcept
@@ -109,7 +113,7 @@ void initialize_object_data(ObjectData* objects) noexcept
 {
     constexpr float minimum_radius_squared = minimum_orbit_radius * minimum_orbit_radius;
     constexpr float maximum_radius_squared = maximum_orbit_radius * maximum_orbit_radius;
-    constexpr float softening_squared = gravity_softening * gravity_softening;
+    const float softening_squared = gravity_softening * gravity_softening;
     uint32_t random_state = 0x12345678u;
 
     for (uint32_t i = 0; i != object_count; ++i)
@@ -174,7 +178,8 @@ int main()
     printf("Using %s\n", caps.device_name);
 
     // GPU resources
-    GpuHeap texture_descriptor_heap = create_gpu_heap(device, caps.texture_descriptor_stride * gbuffer_texture_count * frames_in_flight, MemoryType::texture_descriptor_heap);
+    GpuHeap texture_descriptor_heap =
+        create_gpu_heap(device, caps.texture_descriptor_size * gbuffer_texture_count * frames_in_flight, MemoryType::texture_descriptor_heap);
     GpuHeap data_heap = create_gpu_heap(device, data_heap_size);
     BumpAllocator data_allocator(data_heap.range);
     const GpuCpuRange<ObjectData> object_allocation = data_allocator.allocate<ObjectData>(object_count);
@@ -211,39 +216,44 @@ int main()
     const float3 view_up = math::to_float3(view.rows[1]);
     const float3 view_forward = -math::to_float3(view.rows[2]);
     GBuffer gbuffer{};
-    uint32_t gbuffer_texture_base = 0;
+    uint32_t descriptor_row = 0;
     chrono::steady_clock::time_point previous_time = chrono::steady_clock::now();
     float rotation_angle = 0.0f;
 
     TimelinePoint latest_completion{.semaphore = create_timeline_semaphore(device)};
+    DeleteQueue delete_queue(latest_completion.semaphore, frames_in_flight);
 
     while (pump_example_window(window))
     {
-        const uint32x2 extent = get_drawable_extent(device);
-
         // Limit the application to two frames in flight so double-buffered descriptors are safe to reuse
         if (latest_completion.value >= frames_in_flight)
         {
             wait_timeline({.semaphore = latest_completion.semaphore, .value = latest_completion.value - frames_in_flight + 1});
         }
+        delete_queue.tick();
+
+        const SwapchainFrame frame = acquire(device);
+        if (!frame.render_view)
+            continue;
+        const uint32x2 extent = frame.extent;
 
         // Window resize?
         if (extent.x != gbuffer.width || extent.y != gbuffer.height)
         {
             if (gbuffer.albedo.texture)
             {
-                wait_timeline(latest_completion);
-                gbuffer_texture_base = gbuffer_texture_count - gbuffer_texture_base;
+                delete_queue.defer(latest_completion.value, [&texture_allocator, gbuffer]() mutable noexcept {
+                    destroy_gbuffer(texture_allocator, gbuffer);
+                });
+                descriptor_row = (descriptor_row + 1) % frames_in_flight;
             }
             recreate_gbuffer(device, texture_allocator, gbuffer,
-                             texture_descriptor_heap.range.cpu + size_t(gbuffer_texture_base) * caps.texture_descriptor_stride,
-                             caps.texture_descriptor_stride, extent.x, extent.y);
+                             texture_descriptor_heap.range.cpu + size_t(descriptor_row * gbuffer_texture_count) * caps.texture_descriptor_size,
+                             caps.texture_descriptor_size, extent.x, extent.y);
         }
 
-        const SwapchainFrame frame = acquire(device);
-
         CommandBuffer* commands = begin_commands(device);
-        set_texture_heap(commands, gpu_range(texture_descriptor_heap));
+        set_texture_descriptor_heap(commands, gpu_range(texture_descriptor_heap));
 
         // Simulation
         const chrono::steady_clock::time_point current_time = chrono::steady_clock::now();
@@ -329,7 +339,7 @@ int main()
                     .x = float(gbuffer.width) / float(frame.extent.x),
                     .y = float(gbuffer.height) / float(frame.extent.y),
                 },
-            .gbuffer_texture_base = gbuffer_texture_base,
+            .gbuffer_texture_base = descriptor_row * gbuffer_texture_count,
         };
 
         draw(commands, deferred_lighting_root, 3);
@@ -342,18 +352,14 @@ int main()
     }
 
     wait_timeline(latest_completion);
+    delete_queue.tick();
 
     // Cleanup
     destroy_timeline_semaphore(latest_completion.semaphore);
     destroy_pso(deferred_lighting_pso);
     destroy_pso(gbuffer_pso);
     destroy_pso(simulation_pso);
-    destroy_render_view(gbuffer.depth_render_view);
-    destroy_render_view(gbuffer.normal_roughness_render_view);
-    destroy_render_view(gbuffer.albedo_render_view);
-    texture_allocator.free(gbuffer.depth);
-    texture_allocator.free(gbuffer.normal_roughness);
-    texture_allocator.free(gbuffer.albedo);
+    destroy_gbuffer(texture_allocator, gbuffer);
     destroy_texture_heap(texture_heap);
     destroy_gpu_heap(data_heap);
     destroy_gpu_heap(texture_descriptor_heap);
