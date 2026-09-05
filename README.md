@@ -187,19 +187,19 @@ memory type, typically backed by a PCIe BAR aperture. Vulkan 1.4 alone is insuff
 The latest available Windows drivers are [AMD Adrenalin 26.9.1](https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-9-1.html)
 and [NVIDIA 616.64 WHQL](https://us.download.nvidia.com/Windows/616.64/616.64-win11-win10-release-notes.pdf).
 
-The floors below are the lowest qualifying models checked for each driver path; the linked capability
-reports are representative architecture checks.
+The entries below cover each checked driver path; the linked capability reports are representative
+architecture checks.
 
-| Architecture | Driver path | Product family | Hardware floor | Current result |
-| --- | --- | --- | --- | --- |
-| AMD RDNA 2 | Windows / Adrenalin 26.9.1 | Radeon RX 6000 | None | Unsupported |
-| AMD RDNA 2 | Linux / Mesa RADV 26.2+ | Steam Deck (Van Gogh) | Steam Deck | Supported |
-| AMD RDNA 3 | Windows / Adrenalin 26.9.1 | Radeon RX 7000 | Radeon RX 7600 | Supported |
-| AMD RDNA 4 | Windows / Adrenalin 26.9.1 | Radeon RX 9000 | Radeon RX 9050 | Supported |
-| NVIDIA Turing | Windows / NVIDIA 616.64 | GeForce RTX 20 | GeForce RTX 2060 | Supported |
-| NVIDIA Ampere | Windows / NVIDIA 616.64 | GeForce RTX 30 | GeForce RTX 3050 | Supported |
-| NVIDIA Ada Lovelace | Windows / NVIDIA 616.64 | GeForce RTX 40 | GeForce RTX 4060 | Supported |
-| NVIDIA Blackwell | Windows / NVIDIA 616.64 | GeForce RTX 50 | GeForce RTX 5050 | Supported |
+| Architecture | Driver path | Product family | Current result |
+| --- | --- | --- | --- |
+| AMD RDNA 2 | Windows / Adrenalin 26.9.1 | Radeon RX 6000 | Unsupported |
+| AMD RDNA 2 | Linux / Mesa RADV 26.2+ | Steam Deck (Van Gogh) | Supported |
+| AMD RDNA 3 | Windows / Adrenalin 26.9.1 | Radeon RX 7000 | Supported |
+| AMD RDNA 4 | Windows / Adrenalin 26.9.1 | Radeon RX 9000 | Supported |
+| NVIDIA Turing | Windows / NVIDIA 616.64 | GeForce RTX 20 | Supported |
+| NVIDIA Ampere | Windows / NVIDIA 616.64 | GeForce RTX 30 | Supported |
+| NVIDIA Ada Lovelace | Windows / NVIDIA 616.64 | GeForce RTX 40 | Supported |
+| NVIDIA Blackwell | Windows / NVIDIA 616.64 | GeForce RTX 50 | Supported |
 
 AMD limits `VK_EXT_descriptor_heap` to RDNA 3 and RDNA 4 on Windows, so no Radeon RX 6000 GPU qualifies
 there. With Mesa [RADV 26.2 or newer](https://docs.mesa3d.org/relnotes/26.2.0.html), Steam Deck has all
