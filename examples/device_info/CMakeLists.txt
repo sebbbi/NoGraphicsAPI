@@ -1,0 +1,3 @@
+add_executable(example_device_info device_info.cpp)
+NoGraphicsAPI_disable_exceptions(example_device_info)
+target_link_libraries(example_device_info PRIVATE NoGraphicsAPI::NoGraphicsAPI)
