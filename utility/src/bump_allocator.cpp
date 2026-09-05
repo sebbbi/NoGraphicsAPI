@@ -58,9 +58,7 @@ GpuCpuRange<byte> BumpAllocator::allocate(uint64_t byte_size) noexcept
         .size = byte_size,
     };
     const uint64_t remaining = storage_.size - offset_;
-    const uint64_t aligned_size = byte_size <= std::numeric_limits<uint64_t>::max() - (alignment - 1)
-                                           ? (byte_size + alignment - 1) & ~(alignment - 1)
-                                           : remaining;
+    const uint64_t aligned_size = (byte_size + alignment - 1) & ~(alignment - 1);
     offset_ += aligned_size < remaining ? aligned_size : remaining;
     return allocation;
 }

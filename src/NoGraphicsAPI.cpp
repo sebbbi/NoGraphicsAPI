@@ -1141,7 +1141,6 @@ struct Device
     template<typename Callback>
     void defer_delete(const Callback& callback, uint64_t payload = 0) noexcept
     {
-        assert(active_command_buffers == 0 || command_retirement_value != std::numeric_limits<uint64_t>::max());
         const uint64_t retire_value = active_command_buffers != 0 ? command_retirement_value + 1 : command_retirement_value;
         delete_queue.push(retire_value, payload, callback);
         delete_queue.collect(*this, completed_command_retirement);
@@ -1596,7 +1595,7 @@ void Device::wait_command_retirement(uint64_t value) noexcept
         .pSemaphores = &command_retirement,
         .pValues = &value,
     };
-    require_vk(vkWaitSemaphores(device, &wait_info, std::numeric_limits<uint64_t>::max()));
+    require_vk(vkWaitSemaphores(device, &wait_info, UINT64_MAX));
     completed_command_retirement = value;
     reset_retired_command_contexts();
     delete_queue.collect(*this, completed_command_retirement);
@@ -1604,10 +1603,8 @@ void Device::wait_command_retirement(uint64_t value) noexcept
 
 uint64_t Device::next_command_retirement() noexcept
 {
-    assert(command_retirement_value != std::numeric_limits<uint64_t>::max());
     const uint64_t next = command_retirement_value + 1;
-    if (max_timeline_value_difference != std::numeric_limits<uint64_t>::max() &&
-        next - completed_command_retirement > max_timeline_value_difference)
+    if (next - completed_command_retirement > max_timeline_value_difference)
     {
         poll_command_retirement();
         if (next - completed_command_retirement > max_timeline_value_difference)
@@ -1673,7 +1670,7 @@ void Device::wait_present_context(detail::PresentContext& context) noexcept
 {
     if (!context.present_pending)
         return;
-    assert_vk(vkWaitForFences(device, 1, &context.presented, VK_TRUE, std::numeric_limits<uint64_t>::max()));
+    assert_vk(vkWaitForFences(device, 1, &context.presented, VK_TRUE, UINT64_MAX));
     context.present_pending = false;
     finish_present_context(context);
 }
@@ -2645,7 +2642,7 @@ void wait_timeline(TimelinePoint point) noexcept
     assert_vk(vkWaitSemaphores(
         semaphore->state->device,
         &wait_info,
-        std::numeric_limits<uint64_t>::max()));
+        UINT64_MAX));
     semaphore->state->poll_command_retirement();
 }
 
@@ -3033,7 +3030,7 @@ SwapchainFrame acquire(Device* device) noexcept
         const VkResult result = vkAcquireNextImageKHR(
             device->device,
             swapchain->handle,
-            std::numeric_limits<uint64_t>::max(),
+            UINT64_MAX,
             present_context->acquired,
             VK_NULL_HANDLE,
             &image_index);

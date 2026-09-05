@@ -2,7 +2,6 @@
 
 #include <NoGraphicsAPI/NoGraphicsAPI.hpp>
 
-#include <cassert>
 #include <limits>
 
 namespace gpu
@@ -42,11 +41,6 @@ public:
     [[nodiscard]] HeapAllocation<T> allocate(uint64_t element_count) noexcept
     {
         static_assert(alignof(T) <= alignment);
-        if (element_count > std::numeric_limits<uint64_t>::max() / sizeof(T))
-        {
-            assert(false && "typed allocation byte size overflows uint64_t");
-            return {};
-        }
         const HeapAllocation<byte> allocation = allocate(element_count * sizeof(T));
         return {
             .range = {

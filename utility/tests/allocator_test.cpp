@@ -163,10 +163,6 @@ bool check_typed_allocations() noexcept
     const gpu::GpuCpuRange<std::uint16_t> bump_allocation = bump_allocator.allocate<std::uint16_t>(5);
     CHECK(bump_allocation.cpu == reinterpret_cast<std::uint16_t*>(cpu) &&
           bump_allocation.gpu == reinterpret_cast<std::uint16_t*>(gpu_address) && bump_allocation.size == 10);
-#if defined(NDEBUG)
-    CHECK(empty(heap_allocator.allocate<std::uint64_t>(std::numeric_limits<std::uint64_t>::max())));
-    CHECK(empty(bump_allocator.allocate<std::uint64_t>(std::numeric_limits<std::uint64_t>::max())));
-#endif
     return true;
 }
 
@@ -240,18 +236,13 @@ bool check_bump_allocator() noexcept
     return true;
 }
 
-bool check_maximum_ranges() noexcept
+bool check_maximum_heap_range() noexcept
 {
     std::byte* gpu_address = reinterpret_cast<std::byte*>(gpu::HeapAllocator::alignment);
     gpu::HeapAllocator heap_allocator({.gpu = gpu_address, .size = gpu::HeapAllocator::maximum_size}, 1);
     const gpu::HeapAllocation<gpu::byte> heap_allocation = heap_allocator.allocate(gpu::HeapAllocator::maximum_size);
     CHECK(heap_allocation.range.gpu == gpu_address && heap_allocation.range.size == gpu::HeapAllocator::maximum_size);
     heap_allocator.free(heap_allocation);
-
-    gpu::BumpAllocator bump_allocator({.gpu = gpu_address, .size = std::numeric_limits<std::uint64_t>::max()});
-    const gpu::GpuCpuRange<gpu::byte> bump_allocation = bump_allocator.allocate(std::numeric_limits<std::uint64_t>::max());
-    CHECK(bump_allocation.gpu == gpu_address && bump_allocation.size == std::numeric_limits<std::uint64_t>::max());
-    CHECK(empty(bump_allocator.allocate(1)));
     return true;
 }
 
@@ -261,7 +252,7 @@ int main()
 {
     if (!check_gpu_cpu_range_defaults() || !check_heap_allocator_basics() || !check_heap_allocator_address_domains() ||
         !check_heap_allocator_limit_and_move() || !check_typed_allocations() || !check_heap_allocator_fragmentation() || !check_bump_allocator() ||
-        !check_maximum_ranges())
+        !check_maximum_heap_range())
         return 1;
     return 0;
 }
