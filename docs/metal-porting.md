@@ -144,12 +144,18 @@ The exact C++ spelling remains open, but the destination is always a heap and sl
 writable descriptor pointer. Vulkan can implement the same abstraction by hiding its current
 descriptor-heap allocation and translating indexed operations internally.
 
-Metal shader lookup remains direct. `MTLTextureViewPool` assigns a contiguous resource-ID range, so
-the shader forms a typed texture from:
+Metal documents each `MTLTextureViewPool` as a contiguous range of `MTLResourceID` values, so CPU
+code can address a view directly as:
 
 ```text
 resource_id = texture_view_pool_base + texture_index
 ```
+
+The same lookup works in shader code, but MSL has no first-class syntax for indexing a texture-view
+pool or performing arithmetic on texture handles. A shader must currently reinterpret-cast the base
+texture handle to a 64-bit integer, add the heap index, and reinterpret-cast the result back to the
+required texture type. Sebastian Aaltonen (author) has asked Apple to make this an official MSL
+feature.
 
 There is no `index -> resource-ID table -> texture` lookup in the main ABI. Avoiding that extra
 load preserves the direct global texture namespace intended by the blog post.
@@ -200,8 +206,10 @@ Slang is the intended common source compiler. Its Metal target must produce all 
 - direct sampler indexing;
 - ordinary raw GPU-pointer loads with the same data layout used by Vulkan.
 
-Existing descriptor-heap syntax does not establish this ABI by itself. Implementing and validating
-this lowering is the principal external blocker for the port.
+Slang's Metal backend does not currently lower the global `ResourceDescriptorHeap` and
+`SamplerDescriptorHeap` syntax required by this ABI. This missing Slang support is the main blocker
+for the port. Slang is unlikely to add a stable lowering until MSL provides a well-established,
+documented texture-view-pool indexing mechanism.
 
 Compute and mesh workgroup sizes are compiled shader metadata. The Metal PSO retains the values
 needed to encode dispatches; command recording does not reflect shader metadata repeatedly.
