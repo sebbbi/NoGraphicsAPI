@@ -1,3 +1,9 @@
+# The windowed examples use the Win32 message pump in common/example_support.cpp and compile
+# their shaders with slangc, so they and the Slang tooling they need are Windows-only for now.
+if(NOT WIN32)
+    return()
+endif()
+
 include(NoGraphicsAPI_slang.cmake)
 
 add_library(NoGraphicsAPI_example_support STATIC
