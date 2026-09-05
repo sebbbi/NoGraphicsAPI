@@ -10,14 +10,14 @@ set(deferred_fragment_spv ${shader_dir}/deferred.frag.spv)
 set(gbuffer_shader_dependencies
     ${CMAKE_CURRENT_SOURCE_DIR}/gbuffer_shared.h
     ${CMAKE_CURRENT_SOURCE_DIR}/object_data.h
-    ${PROJECT_SOURCE_DIR}/include/NoGraphicsAPI/shader_types.h)
+    ${PROJECT_SOURCE_DIR}/utility/include/NoGraphicsAPIUtility/shader_types.h)
 set(simulation_shader_dependencies
     ${CMAKE_CURRENT_SOURCE_DIR}/simulation_shared.h
     ${CMAKE_CURRENT_SOURCE_DIR}/object_data.h
-    ${PROJECT_SOURCE_DIR}/include/NoGraphicsAPI/shader_types.h)
+    ${PROJECT_SOURCE_DIR}/utility/include/NoGraphicsAPIUtility/shader_types.h)
 set(deferred_lighting_shader_dependencies
     ${CMAKE_CURRENT_SOURCE_DIR}/deferred_lighting_shared.h
-    ${PROJECT_SOURCE_DIR}/include/NoGraphicsAPI/shader_types.h)
+    ${PROJECT_SOURCE_DIR}/utility/include/NoGraphicsAPIUtility/shader_types.h)
 
 NoGraphicsAPI_compile_slang(${simulation_compute_spv} ${simulation_shader} computeMain compute
     DESCRIPTOR_HEAP DEPENDS ${simulation_shader_dependencies})
@@ -45,6 +45,7 @@ NoGraphicsAPI_add_example(example_deferred_renderer
     ${deferred_vertex_spv}
     ${deferred_fragment_spv}
 )
+target_link_libraries(example_deferred_renderer PRIVATE NoGraphicsAPIUtility::math NoGraphicsAPIUtility::textures)
 target_compile_definitions(example_deferred_renderer PRIVATE
     NOGRAPHICSAPI_SIMULATION_COMPUTE_SPV_PATH="${simulation_compute_spv}"
     NOGRAPHICSAPI_GBUFFER_MESH_SPV_PATH="${gbuffer_mesh_spv}"

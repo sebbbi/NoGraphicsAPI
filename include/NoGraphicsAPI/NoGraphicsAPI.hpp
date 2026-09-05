@@ -1,7 +1,5 @@
 #pragma once
 
-#include <NoGraphicsAPI/shader_types.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -27,13 +25,27 @@ using std::uint8_t;
 using std::uint32_t;
 using std::uint64_t;
 
+struct uint32x2
+{
+    uint32_t x = 0;
+    uint32_t y = 0;
+};
+
+struct uint32x3
+{
+    uint32_t x = 0;
+    uint32_t y = 0;
+    uint32_t z = 0;
+};
+
 struct Device;
 struct Texture;
 struct RenderView;
 struct PSO;
 struct CommandBuffer;
 struct TimelineSemaphore;
-struct GpuAllocationOwner;
+struct GpuHeapOwner;
+struct TextureHeapOwner;
 
 template<typename T>
 struct Span
@@ -43,15 +55,10 @@ struct Span
 
     constexpr Span() noexcept = default;
 
-    constexpr Span(T* values, size_t count) noexcept
-        : data(values), size(count)
-    {
-    }
+    constexpr Span(T* values, size_t count) noexcept : data(values), size(count) {}
 
     template<size_t Count>
-    constexpr Span(T (&values)[Count]) noexcept : data(values), size(Count)
-    {
-    }
+    constexpr Span(T (&values)[Count]) noexcept : data(values), size(Count) {}
 
     template<typename Container>
     constexpr Span(Container&& values) noexcept
@@ -59,17 +66,13 @@ struct Span
             std::is_same_v<std::remove_cv_t<std::remove_pointer_t<decltype(values.data())>>, std::remove_cv_t<T>> &&
             std::is_convertible_v<decltype(values.data()), T*> &&
             std::is_convertible_v<decltype(values.size()), size_t>)
-        : Span(values.data(), values.size())
-    {
-    }
+        : Span(values.data(), values.size()) {}
 
     // Temporary container and initializer-list storage is valid only through
     // the containing full expression. Functions must not retain the span.
     constexpr Span(std::initializer_list<std::remove_const_t<T>> values) noexcept
         requires std::is_const_v<T>
-        : Span(values.begin(), values.size())
-    {
-    }
+        : Span(values.begin(), values.size()) {}
 };
 
 struct ByteSpan
@@ -80,19 +83,14 @@ struct ByteSpan
     constexpr ByteSpan() noexcept = default;
 
     ByteSpan(const void* bytes, size_t byte_size) noexcept
-        : data(static_cast<const byte*>(bytes)), size(byte_size)
-    {
-    }
+        : data(static_cast<const byte*>(bytes)), size(byte_size) {}
 
     // A span converted from a value remains valid only while that value is
     // alive. Functions must not retain the span.
     template<typename T>
-        requires(std::is_class_v<T> && !std::is_volatile_v<T> &&
-                 std::is_trivially_copyable_v<T> && (sizeof(T) & 3u) == 0)
+        requires(std::is_class_v<T> && !std::is_volatile_v<T> && std::is_trivially_copyable_v<T> && (sizeof(T) & 3u) == 0)
     ByteSpan(const T& value) noexcept
-        : data(reinterpret_cast<const byte*>(std::addressof(value))), size(sizeof(T))
-    {
-    }
+        : data(reinterpret_cast<const byte*>(std::addressof(value))), size(sizeof(T)) {}
 };
 
 enum class Error : uint8_t
@@ -108,8 +106,14 @@ enum class MemoryType : uint8_t
     cpu_visible,
     gpu_only,
     readback,
-    texture_heap,
-    sampler_heap,
+    texture_descriptor_heap,
+    sampler_descriptor_heap,
+};
+
+struct SizeAlign
+{
+    uint64_t size = 0;
+    uint64_t align = 0;
 };
 
 struct GpuRange
@@ -118,15 +122,24 @@ struct GpuRange
     uint64_t size = 0;
 };
 
-template<typename T = byte>
-struct GpuAllocation
+template<typename T>
+struct GpuCpuRange
 {
     T* cpu = nullptr;
     T* gpu = nullptr;
     uint64_t size = 0;
-    // Opaque gpu_free bookkeeping. Preserve both fields and free exactly once.
-    const GpuAllocationOwner* allocation_owner = nullptr;
-    uint64_t allocation_token = 0;
+};
+
+struct GpuHeap
+{
+    GpuCpuRange<byte> range{};
+    const GpuHeapOwner* owner = nullptr;
+};
+
+struct TextureHeap
+{
+    uint64_t size = 0;
+    const TextureHeapOwner* owner = nullptr;
 };
 
 struct TimelinePoint
@@ -197,8 +210,7 @@ enum class Format : uint8_t
 
 struct TextureFormatInfo
 {
-    uint32_t block_width = 0;
-    uint32_t block_height = 0;
+    uint32x2 block_extent = {};
     uint32_t bytes_per_block = 0;
     bool depth = false;
     bool stencil = false;
@@ -213,8 +225,7 @@ struct TextureFormatInfo
     case Format::r8_uint:
     case Format::s8_uint:
         return {
-            .block_width = 1,
-            .block_height = 1,
+            .block_extent = {.x = 1, .y = 1},
             .bytes_per_block = 1,
             .depth = false,
             .stencil = format == Format::s8_uint,
@@ -230,8 +241,7 @@ struct TextureFormatInfo
     case Format::r16_float:
     case Format::d16_unorm:
         return {
-            .block_width = 1,
-            .block_height = 1,
+            .block_extent = {.x = 1, .y = 1},
             .bytes_per_block = 2,
             .depth = format == Format::d16_unorm,
             .stencil = false,
@@ -252,8 +262,7 @@ struct TextureFormatInfo
     case Format::d24_unorm_s8_uint:
     case Format::d32_float:
         return {
-            .block_width = 1,
-            .block_height = 1,
+            .block_extent = {.x = 1, .y = 1},
             .bytes_per_block = 4,
             .depth = format == Format::d24_unorm_s8_uint || format == Format::d32_float,
             .stencil = format == Format::d24_unorm_s8_uint,
@@ -265,8 +274,7 @@ struct TextureFormatInfo
     case Format::rg32_float:
     case Format::d32_float_s8_uint:
         return {
-            .block_width = 1,
-            .block_height = 1,
+            .block_extent = {.x = 1, .y = 1},
             .bytes_per_block = 8,
             .depth = format == Format::d32_float_s8_uint,
             .stencil = format == Format::d32_float_s8_uint,
@@ -274,15 +282,13 @@ struct TextureFormatInfo
     case Format::rgb32_uint:
     case Format::rgb32_float:
         return {
-            .block_width = 1,
-            .block_height = 1,
+            .block_extent = {.x = 1, .y = 1},
             .bytes_per_block = 12,
         };
     case Format::rgba32_uint:
     case Format::rgba32_float:
         return {
-            .block_width = 1,
-            .block_height = 1,
+            .block_extent = {.x = 1, .y = 1},
             .bytes_per_block = 16,
         };
     case Format::eac_rg:
@@ -294,8 +300,7 @@ struct TextureFormatInfo
     case Format::bc7_srgb:
     case Format::bc7_unorm:
         return {
-            .block_width = 4,
-            .block_height = 4,
+            .block_extent = {.x = 4, .y = 4},
             .bytes_per_block = 16,
         };
     case Format::undefined: return {};
@@ -332,8 +337,7 @@ enum class TextureDescriptorType : uint8_t
 
 constexpr TextureUsage operator|(TextureUsage lhs, TextureUsage rhs) noexcept
 {
-    return static_cast<TextureUsage>(static_cast<uint32_t>(lhs) |
-                                     static_cast<uint32_t>(rhs));
+    return static_cast<TextureUsage>(static_cast<uint32_t>(lhs) |  static_cast<uint32_t>(rhs));
 }
 
 enum class Filter : uint8_t
@@ -447,8 +451,7 @@ enum class Stage : uint64_t
 
 constexpr Stage operator|(Stage lhs, Stage rhs) noexcept
 {
-    return static_cast<Stage>(static_cast<uint64_t>(lhs) |
-                              static_cast<uint64_t>(rhs));
+    return static_cast<Stage>(static_cast<uint64_t>(lhs) | static_cast<uint64_t>(rhs));
 }
 
 enum class Access : uint64_t
@@ -470,14 +473,15 @@ enum class Access : uint64_t
 
 constexpr Access operator|(Access lhs, Access rhs) noexcept
 {
-    return static_cast<Access>(static_cast<uint64_t>(lhs) |
-                               static_cast<uint64_t>(rhs));
+    return static_cast<Access>(static_cast<uint64_t>(lhs) | static_cast<uint64_t>(rhs));
 }
 
 struct DeviceCaps
 {
     const char* device_name = nullptr;
     uint64_t max_push_data_size = 0;
+    // Common element size for suballocating TextureHeap storage; every SizeAlign::align divides this value.
+    uint64_t texture_heap_alignment = 0;
     uint64_t texture_descriptor_size = 0;
     uint64_t texture_descriptor_stride = 0;
     uint64_t sampler_descriptor_size = 0;
@@ -494,7 +498,6 @@ struct DeviceDesc
     void* window = nullptr;
     Format swapchain_format = Format::undefined;
     uint32_t desired_swapchain_image_count = 2;
-    uint32_t heap_memory_block_size = 256u * 1024u * 1024u; // Bytes; must be a non-zero multiple of 16.
 };
 
 struct DeviceInit
@@ -503,29 +506,20 @@ struct DeviceInit
     Error error = Error::none;
 };
 
-struct DrawableExtent
-{
-    uint32_t width = 0;
-    uint32_t height = 0;
-};
-
 struct SwapchainFrame
 {
     RenderView* render_view = nullptr;
-    uint32_t width = 0;
-    uint32_t height = 0;
+    uint32x2 extent = {};
 };
 
 struct TextureDesc
 {
     TextureType type = TextureType::two_d;
-    uint32_t width = 1;
-    uint32_t height = 1;
-    uint32_t depth = 1;
+    uint32x3 extent = {.x = 1, .y = 1, .z = 1};
     uint32_t mip_levels = 1;
-    uint32_t layer_count = 1; // Cube types count whole cubes, not faces.
+    uint32_t layer_count = 1; // Vulkan array layers; cube faces are individual layers.
     Format format = Format::rgba8_unorm;
-    bool mutable_format = false; // Allow format-compatible descriptor views.
+    bool mutable_format = false; // Allow format-compatible descriptor views, but could lose DCC.
     TextureUsage usage = TextureUsage::sampled;
 };
 
@@ -540,8 +534,8 @@ struct TextureDescriptorDesc
     Format format = Format::undefined; // Undefined inherits the texture format.
     uint32_t base_mip = 0;
     uint32_t mip_count = 0; // Zero selects every remaining mip level.
-    uint32_t base_layer = 0; // Cube types count whole cubes, not faces.
-    uint32_t layer_count = 0; // Zero selects every remaining logical layer.
+    uint32_t base_layer = 0; // Vulkan array layer; cube faces are individual layers.
+    uint32_t layer_count = 0; // Vulkan array layers; zero selects every remaining layer.
 };
 
 struct TextureCopyDesc
@@ -549,12 +543,8 @@ struct TextureCopyDesc
     uint32_t mip_level = 0;
     uint32_t base_slice = 0; // Physical array slice; cube faces are individual slices.
     uint32_t slice_count = 0; // Zero selects every remaining physical slice.
-    uint32_t x = 0;
-    uint32_t y = 0;
-    uint32_t z = 0;
-    uint32_t width = 0;  // Zero selects the remaining mip width.
-    uint32_t height = 0; // Zero selects the remaining mip height.
-    uint32_t depth = 0;  // Zero selects the remaining mip depth.
+    uint32x3 offset = {};
+    uint32x3 extent = {}; // Zero components select the remaining mip extent.
     uint64_t row_pitch_bytes = 0;   // Zero is tightly packed.
     uint64_t slice_pitch_bytes = 0; // Zero is tightly packed.
 };
@@ -644,17 +634,20 @@ struct MeshPSODesc
     DepthStencilState depth_stencil = {};
 };
 
+struct ClearColor
+{
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float w = 1.0f;
+};
+
 struct ColorAttachment
 {
     RenderView* render_view = nullptr;
     LoadOp load = LoadOp::load;
     StoreOp store = StoreOp::store;
-    float4 clear = {
-        .x = 0.0f,
-        .y = 0.0f,
-        .z = 0.0f,
-        .w = 1.0f,
-    };
+    ClearColor clear = {};
 };
 
 struct DepthAttachment
@@ -683,118 +676,84 @@ struct RenderingDesc
 [[nodiscard]] DeviceInit create_device(const DeviceDesc& desc = {}) noexcept;
 void destroy_device(Device* device) noexcept;
 [[nodiscard]] const DeviceCaps& get_device_caps(const Device* device) noexcept;
-[[nodiscard]] bool
-supports_texture_format(const Device* device, Format format, TextureUsage usage) noexcept;
-[[nodiscard]] DrawableExtent get_drawable_extent(Device* device) noexcept;
+[[nodiscard]] bool supports_texture_format(const Device* device, Format format, TextureUsage usage) noexcept;
+[[nodiscard]] uint32x2 get_drawable_extent(Device* device) noexcept;
 
-[[nodiscard]] TimelineSemaphore* create_timeline_semaphore(
-    Device* device, uint64_t initial_value = 0) noexcept;
+[[nodiscard]] TimelineSemaphore* create_timeline_semaphore(Device* device, uint64_t initial_value = 0) noexcept;
 void destroy_timeline_semaphore(TimelineSemaphore* semaphore) noexcept;
-[[nodiscard]] uint64_t
-timeline_completed_value(const TimelineSemaphore* semaphore) noexcept;
+[[nodiscard]] uint64_t timeline_completed_value(const TimelineSemaphore* semaphore) noexcept;
 void wait_timeline(TimelinePoint point) noexcept;
+void wait_idle(Device* device) noexcept;
 
 [[nodiscard]] SwapchainFrame acquire(Device* device) noexcept;
 void submit_and_present(Device* device, Span<CommandBuffer* const> commands, TimelinePoint completion) noexcept;
 
-// Every non-null returned pointer is 16-byte aligned.
-[[nodiscard]] GpuAllocation<> gpu_malloc(Device* device, uint64_t byte_count, MemoryType memory = MemoryType::cpu_visible) noexcept;
+// Every non-null returned pointer is 16-byte aligned. Descriptor heaps are exact allocations;
+// cpu_visible, gpu_only, and readback heaps are raw blocks for application-side suballocation.
+[[nodiscard]] GpuHeap create_gpu_heap(Device* device, uint64_t byte_count, MemoryType memory = MemoryType::cpu_visible) noexcept;
+void destroy_gpu_heap(const GpuHeap& heap) noexcept;
 
 template<typename T>
-[[nodiscard]] GpuAllocation<T> gpu_malloc(Device* device, size_t count = 1,
-                                          MemoryType memory = MemoryType::cpu_visible) noexcept
+[[nodiscard]] constexpr GpuRange gpu_range(GpuCpuRange<T> range) noexcept
 {
-    static_assert(alignof(T) <= 16, "gpu_malloc supports types aligned to at most 16 bytes");
-    const GpuAllocation<> bytes = gpu_malloc(device, count * sizeof(T), memory);
-    return {
-        .cpu = reinterpret_cast<T*>(bytes.cpu),
-        .gpu = reinterpret_cast<T*>(bytes.gpu),
-        .size = bytes.size,
-        .allocation_owner = bytes.allocation_owner,
-        .allocation_token = bytes.allocation_token,
-    };
+    return {.gpu = range.gpu, .size = range.size};
 }
 
-void gpu_free(const GpuAllocation<>& allocation) noexcept;
-
-template<typename T> void gpu_free(const GpuAllocation<T>& allocation) noexcept
+[[nodiscard]] constexpr GpuRange gpu_range(const GpuHeap& heap) noexcept
 {
-    gpu_free({
-        .cpu = reinterpret_cast<byte*>(allocation.cpu),
-        .gpu = reinterpret_cast<byte*>(allocation.gpu),
-        .size = allocation.size,
-        .allocation_owner = allocation.allocation_owner,
-        .allocation_token = allocation.allocation_token,
-    });
+    return gpu_range(heap.range);
 }
 
-template<typename T> [[nodiscard]] constexpr GpuRange gpu_range(const GpuAllocation<T>& allocation) noexcept
-{
-    return {.gpu = static_cast<void*>(allocation.gpu), .size = allocation.size};
-}
-
-[[nodiscard]] Texture* create_texture(Device* device,
-                                      const TextureDesc& desc) noexcept;
+// Texture heaps use one device-selected GPU-only memory type and must outlive every placed texture.
+// Placements must satisfy get_texture_size_align(), remain non-overlapping, and not be reused before the timeline point covering their last use completes.
+// DeviceCaps::texture_heap_alignment can be used as a common allocator element size, avoiding per-placement leading alignment padding.
+[[nodiscard]] TextureHeap create_texture_heap(Device* device, uint64_t byte_count) noexcept;
+void destroy_texture_heap(const TextureHeap& heap) noexcept;
+[[nodiscard]] SizeAlign get_texture_size_align(Device* device, const TextureDesc& desc) noexcept;
+[[nodiscard]] Texture* create_texture(Device* device, const TextureDesc& desc, const TextureHeap& heap, uint64_t offset) noexcept;
 void destroy_texture(Texture* texture) noexcept;
-[[nodiscard]] RenderView* create_render_view(
-    Texture* texture, const RenderViewDesc& desc = {}) noexcept;
+[[nodiscard]] RenderView* create_render_view(Texture* texture, const RenderViewDesc& desc = {}) noexcept;
 void destroy_render_view(RenderView* render_view) noexcept;
 void write_texture_descriptor(Device* device,
                               void* cpu_destination,
                               const Texture* texture,
                               TextureDescriptorType type,
                               const TextureDescriptorDesc& desc = {}) noexcept;
-void write_sampler_descriptor(Device* device,
-                              void* cpu_destination,
-                              const SamplerDesc& desc = {}) noexcept;
+void write_sampler_descriptor(Device* device, void* cpu_destination, const SamplerDesc& desc = {}) noexcept;
 
-[[nodiscard]] PSO* create_graphics_pso(
-    Device* device, const GraphicsPSODesc& desc) noexcept;
-[[nodiscard]] PSO* create_mesh_pso(
-    Device* device, const MeshPSODesc& desc) noexcept;
-[[nodiscard]] PSO* create_compute_pso(
-    Device* device, Span<const uint32_t> compute_spirv) noexcept;
+[[nodiscard]] PSO* create_graphics_pso(Device* device, const GraphicsPSODesc& desc) noexcept;
+[[nodiscard]] PSO* create_mesh_pso(Device* device, const MeshPSODesc& desc) noexcept;
+[[nodiscard]] PSO* create_compute_pso(Device* device, Span<const uint32_t> compute_spirv) noexcept;
 void destroy_pso(PSO* pso) noexcept;
 
-// Every begun command buffer must be included exactly once in the next submit or
-// submit_and_present call.
+// Every begun command buffer must be included exactly once in the next submit or submit_and_present call
 [[nodiscard]] CommandBuffer* begin_commands(Device* device) noexcept;
-void submit(Span<CommandBuffer* const> commands,
-            TimelinePoint completion) noexcept;
-void wait_idle(Device* device) noexcept;
+void submit(Span<CommandBuffer* const> commands, TimelinePoint completion) noexcept;
 
-void bind_pso(CommandBuffer* commands, const PSO* pso) noexcept;
-void set_texture_heap(CommandBuffer* commands, GpuRange heap) noexcept;
-void set_sampler_heap(CommandBuffer* commands, GpuRange heap) noexcept;
+void set_texture_heap(CommandBuffer* commands, GpuRange heap) noexcept; // Heap range must be full GpuHeap range
+void set_sampler_heap(CommandBuffer* commands, GpuRange heap) noexcept; // Heap range must be full GpuHeap range
+
+void copy_memory(CommandBuffer* commands, GpuRange source, GpuRange destination) noexcept;
+void copy_memory_to_texture(CommandBuffer* commands, GpuRange source, Texture* destination, const TextureCopyDesc& copy = {}) noexcept;
+void copy_texture_to_memory(CommandBuffer* commands, Texture* source, GpuRange destination, const TextureCopyDesc& copy = {}) noexcept;
+
+void barrier(CommandBuffer* commands, Stage before, Access before_access, Stage after, Access after_access) noexcept;
+
 void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc) noexcept;
 void end_render_pass(CommandBuffer* commands) noexcept;
-void copy_memory(CommandBuffer* commands,
-                 GpuRange source,
-                 GpuRange destination) noexcept;
-void copy_memory_to_texture(CommandBuffer* commands,
-                            GpuRange source,
-                            Texture* destination,
-                            const TextureCopyDesc& copy = {}) noexcept;
-void copy_texture_to_memory(CommandBuffer* commands,
-                            Texture* source,
-                            GpuRange destination,
-                            const TextureCopyDesc& copy = {}) noexcept;
-void barrier(CommandBuffer* commands,
-             Stage before,
-             Access before_access,
-             Stage after,
-             Access after_access) noexcept;
 
-void draw(CommandBuffer* commands, ByteSpan root, uint32_t vertex_count,
-          uint32_t instance_count = 1, uint32_t first_vertex = 0, uint32_t first_instance = 0) noexcept;
+void bind_pso(CommandBuffer* commands, const PSO* pso) noexcept;
+
+void draw(CommandBuffer* commands, ByteSpan root, uint32_t vertex_count, uint32_t instance_count = 1,
+          uint32_t first_vertex = 0, uint32_t first_instance = 0) noexcept;
 void draw_indexed(CommandBuffer* commands, ByteSpan root, GpuRange indices, IndexType type, uint32_t index_count,
                   uint32_t instance_count = 1, uint32_t first_index = 0, int32_t vertex_offset = 0, uint32_t first_instance = 0) noexcept;
 void draw_indirect(CommandBuffer* commands, ByteSpan root, GpuRange arguments, uint32_t draw_count = 1, uint32_t stride = 0) noexcept;
 void draw_indexed_indirect(CommandBuffer* commands, ByteSpan root, GpuRange indices, IndexType type,
                            GpuRange arguments, uint32_t draw_count = 1, uint32_t stride = 0) noexcept;
-void dispatch(CommandBuffer* commands, ByteSpan root, uint32_t x, uint32_t y = 1, uint32_t z = 1) noexcept;
+void dispatch(CommandBuffer* commands, ByteSpan root, uint32x3 group_count) noexcept;
 void dispatch_indirect(CommandBuffer* commands, ByteSpan root, GpuRange arguments) noexcept;
-void draw_meshlets(CommandBuffer* commands, ByteSpan root, uint32_t x, uint32_t y = 1, uint32_t z = 1) noexcept;
+void draw_meshlets(CommandBuffer* commands, ByteSpan root, uint32x3 group_count) noexcept;
 void draw_meshlets_indirect(CommandBuffer* commands, ByteSpan root, GpuRange arguments, uint32_t draw_count = 1, uint32_t stride = 0) noexcept;
 
 } // namespace gpu

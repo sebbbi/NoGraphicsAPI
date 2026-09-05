@@ -31,10 +31,14 @@ template<typename T>
 concept HasImplicitRootDraw = requires(T* commands) { gpu::draw(commands, 3u); };
 
 template<typename T>
-concept HasImplicitRootDispatch = requires(T* commands) { gpu::dispatch(commands, 1u); };
+concept HasImplicitRootDispatch = requires(T* commands) {
+    gpu::dispatch(commands, gpu::uint32x3{.x = 1, .y = 1, .z = 1});
+};
 
 template<typename T>
-concept HasImplicitRootMeshDraw = requires(T* commands) { gpu::draw_meshlets(commands, 1u); };
+concept HasImplicitRootMeshDraw = requires(T* commands) {
+    gpu::draw_meshlets(commands, gpu::uint32x3{.x = 1, .y = 1, .z = 1});
+};
 
 template<typename Root>
 concept RootCommandApi = requires(gpu::CommandBuffer* commands, const Root& root, gpu::GpuRange range) {
@@ -42,9 +46,9 @@ concept RootCommandApi = requires(gpu::CommandBuffer* commands, const Root& root
     gpu::draw_indexed(commands, root, range, gpu::IndexType::uint32, 3u);
     gpu::draw_indirect(commands, root, range);
     gpu::draw_indexed_indirect(commands, root, range, gpu::IndexType::uint32, range);
-    gpu::dispatch(commands, root, 1u);
+    gpu::dispatch(commands, root, {.x = 1, .y = 1, .z = 1});
     gpu::dispatch_indirect(commands, root, range);
-    gpu::draw_meshlets(commands, root, 1u);
+    gpu::draw_meshlets(commands, root, {.x = 1, .y = 1, .z = 1});
     gpu::draw_meshlets_indirect(commands, root, range);
 };
 
@@ -54,9 +58,9 @@ concept RawRootCommandApi = requires(T* commands, const void* root, std::size_t 
     gpu::draw_indexed(commands, root, root_size, range, gpu::IndexType::uint32, 3u);
     gpu::draw_indirect(commands, root, root_size, range);
     gpu::draw_indexed_indirect(commands, root, root_size, range, gpu::IndexType::uint32, range);
-    gpu::dispatch(commands, root, root_size, 1u);
+    gpu::dispatch(commands, root, root_size, {.x = 1, .y = 1, .z = 1});
     gpu::dispatch_indirect(commands, root, root_size, range);
-    gpu::draw_meshlets(commands, root, root_size, 1u);
+    gpu::draw_meshlets(commands, root, root_size, {.x = 1, .y = 1, .z = 1});
     gpu::draw_meshlets_indirect(commands, root, root_size, range);
 };
 
@@ -71,9 +75,9 @@ concept NullRootCommandApi = requires(T* commands, gpu::GpuRange range) {
     gpu::draw_indexed(commands, nullptr, 0, range, gpu::IndexType::uint32, 3u);
     gpu::draw_indirect(commands, nullptr, 0, range);
     gpu::draw_indexed_indirect(commands, nullptr, 0, range, gpu::IndexType::uint32, range);
-    gpu::dispatch(commands, nullptr, 0, 1u);
+    gpu::dispatch(commands, nullptr, 0, {.x = 1, .y = 1, .z = 1});
     gpu::dispatch_indirect(commands, nullptr, 0, range);
-    gpu::draw_meshlets(commands, nullptr, 0, 1u);
+    gpu::draw_meshlets(commands, nullptr, 0, {.x = 1, .y = 1, .z = 1});
     gpu::draw_meshlets_indirect(commands, nullptr, 0, range);
 };
 
@@ -83,9 +87,9 @@ concept EmptyRootCommandApi = requires(T* commands, gpu::GpuRange range) {
     gpu::draw_indexed(commands, {}, range, gpu::IndexType::uint32, 3u);
     gpu::draw_indirect(commands, {}, range);
     gpu::draw_indexed_indirect(commands, {}, range, gpu::IndexType::uint32, range);
-    gpu::dispatch(commands, {}, 1u);
+    gpu::dispatch(commands, {}, {.x = 1, .y = 1, .z = 1});
     gpu::dispatch_indirect(commands, {}, range);
-    gpu::draw_meshlets(commands, {}, 1u);
+    gpu::draw_meshlets(commands, {}, {.x = 1, .y = 1, .z = 1});
     gpu::draw_meshlets_indirect(commands, {}, range);
 };
 
@@ -126,7 +130,8 @@ struct NonTrivialRoot
 
 static_assert(!CompleteType<gpu::Device> && !CompleteType<gpu::Texture> && !CompleteType<gpu::RenderView> &&
               !CompleteType<gpu::PSO> && !CompleteType<gpu::CommandBuffer> &&
-              !CompleteType<gpu::TimelineSemaphore> && !CompleteType<gpu::GpuAllocationOwner>);
+              !CompleteType<gpu::TimelineSemaphore> && !CompleteType<gpu::GpuHeapOwner> &&
+              !CompleteType<gpu::TextureHeapOwner>);
 static_assert(sizeof(void*) == 8);
 static_assert(std::is_trivially_copyable_v<ApiRoot> && sizeof(ApiRoot) % 4 == 0);
 static_assert(!HasImplicitRootDraw<gpu::CommandBuffer>);
@@ -241,8 +246,8 @@ constexpr bool valid_texture_formats() noexcept
     for (std::size_t index = 0; index < texture_format_count; ++index)
     {
         const gpu::TextureFormatInfo info = gpu::get_texture_format_info(texture_formats[index]);
-        if (static_cast<std::uint8_t>(texture_formats[index]) != index || info.block_width == 0 ||
-            info.block_height == 0 || info.bytes_per_block == 0)
+        if (static_cast<std::uint8_t>(texture_formats[index]) != index || info.block_extent.x == 0 ||
+            info.block_extent.y == 0 || info.bytes_per_block == 0)
         {
             return false;
         }
@@ -253,17 +258,14 @@ constexpr bool valid_texture_formats() noexcept
 static_assert(texture_format_count == static_cast<std::uint8_t>(gpu::Format::undefined));
 static_assert(valid_texture_formats());
 static_assert(gpu::get_texture_format_info(gpu::Format::rgba8_unorm).bytes_per_block == 4);
-static_assert(gpu::get_texture_format_info(gpu::Format::astc_4x4_unorm).block_width == 4);
+static_assert(gpu::get_texture_format_info(gpu::Format::astc_4x4_unorm).block_extent.x == 4);
 static_assert(gpu::get_texture_format_info(gpu::Format::d24_unorm_s8_uint).depth);
 static_assert(gpu::get_texture_format_info(gpu::Format::d24_unorm_s8_uint).stencil);
 static_assert(gpu::get_texture_format_info(gpu::Format::undefined).bytes_per_block == 0);
 
-using ByteAllocation = gpu::GpuAllocation<>;
-using TypedAllocation = gpu::GpuAllocation<std::uint32_t>;
-
-static_assert(plain_api_data<gpu::TextureFormatInfo> && plain_api_data<gpu::DeviceCaps> &&
+static_assert(plain_api_data<gpu::uint32x2> && plain_api_data<gpu::uint32x3> &&
+              plain_api_data<gpu::TextureFormatInfo> && plain_api_data<gpu::DeviceCaps> &&
               plain_api_data<gpu::DeviceDesc> && plain_api_data<gpu::DeviceInit> &&
-              plain_api_data<gpu::DrawableExtent> &&
               plain_api_data<gpu::SwapchainFrame> && plain_api_data<gpu::TextureDesc> &&
               plain_api_data<gpu::RenderViewDesc> &&
               plain_api_data<gpu::TextureDescriptorDesc> && plain_api_data<gpu::TextureCopyDesc> &&
@@ -271,27 +273,42 @@ static_assert(plain_api_data<gpu::TextureFormatInfo> && plain_api_data<gpu::Devi
               plain_api_data<gpu::BlendState> && plain_api_data<gpu::ColorTargetDesc> &&
               plain_api_data<gpu::RasterizationState> && plain_api_data<gpu::StencilFaceState> &&
               plain_api_data<gpu::DepthStencilState> && plain_api_data<gpu::GraphicsPSODesc> &&
-              plain_api_data<gpu::MeshPSODesc> && plain_api_data<gpu::ColorAttachment> &&
+              plain_api_data<gpu::MeshPSODesc> && plain_api_data<gpu::ClearColor> && plain_api_data<gpu::ColorAttachment> &&
               plain_api_data<gpu::DepthAttachment> && plain_api_data<gpu::StencilAttachment> &&
-              plain_api_data<gpu::RenderingDesc> && plain_api_data<gpu::GpuRange> &&
-              plain_api_data<ByteAllocation> && plain_api_data<TypedAllocation> &&
+              plain_api_data<gpu::RenderingDesc> && plain_api_data<gpu::SizeAlign> &&
+              plain_api_data<gpu::GpuRange> && plain_api_data<gpu::GpuCpuRange<gpu::byte>> && plain_api_data<gpu::GpuCpuRange<std::uint32_t>> &&
+              plain_api_data<gpu::GpuHeap> && plain_api_data<gpu::TextureHeap> &&
               plain_api_data<gpu::TimelinePoint>);
 
+static_assert(sizeof(gpu::uint32x2) == 8 && alignof(gpu::uint32x2) == 4 &&
+              offsetof(gpu::uint32x2, x) == 0 && offsetof(gpu::uint32x2, y) == 4);
+static_assert(sizeof(gpu::uint32x3) == 12 && alignof(gpu::uint32x3) == 4 &&
+              offsetof(gpu::uint32x3, x) == 0 && offsetof(gpu::uint32x3, y) == 4 && offsetof(gpu::uint32x3, z) == 8);
 static_assert(sizeof(gpu::TextureFormatInfo) == 16 &&
-              offsetof(gpu::TextureFormatInfo, block_width) == 0 &&
+              offsetof(gpu::TextureFormatInfo, block_extent) == 0 &&
+              offsetof(gpu::TextureFormatInfo, bytes_per_block) == 8 &&
               offsetof(gpu::TextureFormatInfo, stencil) == 13);
+static_assert(sizeof(gpu::SwapchainFrame) == 16 && offsetof(gpu::SwapchainFrame, extent) == 8);
+static_assert(sizeof(gpu::TextureDesc) == 32 && offsetof(gpu::TextureDesc, extent) == 4);
+static_assert(sizeof(gpu::TextureCopyDesc) == 56 && offsetof(gpu::TextureCopyDesc, offset) == 12 &&
+              offsetof(gpu::TextureCopyDesc, extent) == 24);
 static_assert(sizeof(gpu::GpuRange) == 16 && offsetof(gpu::GpuRange, gpu) == 0 &&
               offsetof(gpu::GpuRange, size) == 8);
-static_assert(sizeof(ByteAllocation) == 40 && sizeof(TypedAllocation) == sizeof(ByteAllocation) &&
-              offsetof(ByteAllocation, cpu) == 0 && offsetof(ByteAllocation, gpu) == 8 &&
-              offsetof(ByteAllocation, size) == 16 &&
-              offsetof(ByteAllocation, allocation_owner) == 24 &&
-              offsetof(ByteAllocation, allocation_token) == 32);
+static_assert(sizeof(gpu::GpuCpuRange<gpu::byte>) == 24 && offsetof(gpu::GpuCpuRange<gpu::byte>, cpu) == 0 &&
+              offsetof(gpu::GpuCpuRange<gpu::byte>, gpu) == 8 && offsetof(gpu::GpuCpuRange<gpu::byte>, size) == 16);
+static_assert(sizeof(gpu::GpuCpuRange<std::uint32_t>) == sizeof(gpu::GpuCpuRange<gpu::byte>));
+static_assert(sizeof(gpu::SizeAlign) == 16 && offsetof(gpu::SizeAlign, size) == 0 &&
+              offsetof(gpu::SizeAlign, align) == 8);
+static_assert(sizeof(gpu::ClearColor) == 16 && offsetof(gpu::ClearColor, x) == 0 &&
+              offsetof(gpu::ClearColor, y) == 4 && offsetof(gpu::ClearColor, z) == 8 && offsetof(gpu::ClearColor, w) == 12);
+static_assert(sizeof(gpu::GpuHeap) == 32 && offsetof(gpu::GpuHeap, range) == 0 && offsetof(gpu::GpuHeap, owner) == 24);
+static_assert(sizeof(gpu::TextureHeap) == 16 && offsetof(gpu::TextureHeap, size) == 0 && offsetof(gpu::TextureHeap, owner) == 8);
 static_assert(sizeof(gpu::TimelinePoint) == 16 && offsetof(gpu::TimelinePoint, semaphore) == 0 &&
               offsetof(gpu::TimelinePoint, value) == 8);
 
 constexpr gpu::DeviceCaps default_caps{};
 static_assert(default_caps.device_name == nullptr && default_caps.max_push_data_size == 0 &&
+              default_caps.texture_heap_alignment == 0 &&
               default_caps.texture_descriptor_size == 0 &&
               default_caps.texture_descriptor_stride == 0 &&
               default_caps.sampler_descriptor_size == 0 &&
@@ -301,20 +318,20 @@ constexpr gpu::DeviceInit default_device_init{};
 static_assert(default_device_init.device == nullptr &&
               default_device_init.error == gpu::Error::none);
 constexpr gpu::DeviceDesc default_device_desc{};
-static_assert(std::is_same_v<decltype(gpu::DeviceDesc::heap_memory_block_size), std::uint32_t>);
 static_assert(default_device_desc.window == nullptr &&
               default_device_desc.swapchain_format == gpu::Format::undefined &&
-              default_device_desc.desired_swapchain_image_count == 2 &&
-              default_device_desc.heap_memory_block_size == 256u * 1024u * 1024u);
-constexpr gpu::DrawableExtent default_drawable_extent{};
-static_assert(default_drawable_extent.width == 0 && default_drawable_extent.height == 0);
+              default_device_desc.desired_swapchain_image_count == 2);
+constexpr gpu::uint32x2 default_uint32x2{};
+static_assert(default_uint32x2.x == 0 && default_uint32x2.y == 0);
+constexpr gpu::uint32x3 default_uint32x3{};
+static_assert(default_uint32x3.x == 0 && default_uint32x3.y == 0 && default_uint32x3.z == 0);
 constexpr gpu::SwapchainFrame default_swapchain_frame{};
 static_assert(default_swapchain_frame.render_view == nullptr &&
-              default_swapchain_frame.width == 0 && default_swapchain_frame.height == 0);
+              default_swapchain_frame.extent.x == 0 && default_swapchain_frame.extent.y == 0);
 
 constexpr gpu::TextureDesc default_texture{};
-static_assert(default_texture.type == gpu::TextureType::two_d && default_texture.width == 1 &&
-              default_texture.height == 1 && default_texture.depth == 1 &&
+static_assert(default_texture.type == gpu::TextureType::two_d && default_texture.extent.x == 1 &&
+              default_texture.extent.y == 1 && default_texture.extent.z == 1 &&
               default_texture.mip_levels == 1 && default_texture.layer_count == 1 &&
               default_texture.format == gpu::Format::rgba8_unorm &&
               !default_texture.mutable_format &&
@@ -322,12 +339,11 @@ static_assert(default_texture.type == gpu::TextureType::two_d && default_texture
 constexpr gpu::TextureDesc mutable_texture{.mutable_format = true};
 static_assert(mutable_texture.mutable_format);
 constexpr gpu::TextureDesc sized_texture{
-    .width = 64,
-    .height = 32,
+    .extent = {.x = 64, .y = 32, .z = 1},
     .usage = gpu::TextureUsage::sampled | gpu::TextureUsage::transfer_destination,
 };
-static_assert(sized_texture.type == gpu::TextureType::two_d && sized_texture.width == 64 &&
-              sized_texture.height == 32 && sized_texture.depth == 1 &&
+static_assert(sized_texture.type == gpu::TextureType::two_d && sized_texture.extent.x == 64 &&
+              sized_texture.extent.y == 32 && sized_texture.extent.z == 1 &&
               sized_texture.mip_levels == 1);
 constexpr gpu::RenderViewDesc default_render_view{};
 static_assert(default_render_view.mip_level == 0 && default_render_view.slice == 0);
@@ -339,10 +355,10 @@ static_assert(default_texture_descriptor.format == gpu::Format::undefined &&
               default_texture_descriptor.layer_count == 0);
 constexpr gpu::TextureCopyDesc default_texture_copy{};
 static_assert(default_texture_copy.mip_level == 0 && default_texture_copy.base_slice == 0 &&
-              default_texture_copy.slice_count == 0 && default_texture_copy.x == 0 &&
-              default_texture_copy.y == 0 && default_texture_copy.z == 0 &&
-              default_texture_copy.width == 0 && default_texture_copy.height == 0 &&
-              default_texture_copy.depth == 0 && default_texture_copy.row_pitch_bytes == 0 &&
+              default_texture_copy.slice_count == 0 && default_texture_copy.offset.x == 0 &&
+              default_texture_copy.offset.y == 0 && default_texture_copy.offset.z == 0 &&
+              default_texture_copy.extent.x == 0 && default_texture_copy.extent.y == 0 &&
+              default_texture_copy.extent.z == 0 && default_texture_copy.row_pitch_bytes == 0 &&
               default_texture_copy.slice_pitch_bytes == 0);
 constexpr gpu::SamplerDesc default_sampler{};
 static_assert(default_sampler.min_filter == gpu::Filter::linear &&
@@ -414,17 +430,31 @@ static_assert(default_rendering.colors.size == 0 &&
               default_rendering.stencil.render_view == nullptr);
 
 constexpr gpu::GpuRange default_range{};
-constexpr ByteAllocation default_allocation{};
+constexpr gpu::GpuCpuRange<gpu::byte> default_cpu_range{};
+constexpr gpu::GpuCpuRange<std::uint32_t> default_typed_cpu_range{};
+constexpr gpu::SizeAlign default_size_align{};
+constexpr gpu::GpuHeap default_heap{};
+constexpr gpu::TextureHeap default_texture_heap{};
 constexpr gpu::TimelinePoint default_timeline_point{};
 static_assert(default_range.gpu == nullptr && default_range.size == 0);
-static_assert(default_allocation.cpu == nullptr && default_allocation.gpu == nullptr && default_allocation.size == 0 &&
-              default_allocation.allocation_owner == nullptr && default_allocation.allocation_token == 0);
+static_assert(default_cpu_range.cpu == nullptr && default_cpu_range.gpu == nullptr && default_cpu_range.size == 0);
+static_assert(gpu::gpu_range(default_cpu_range).gpu == nullptr && gpu::gpu_range(default_cpu_range).size == 0);
+static_assert(default_typed_cpu_range.cpu == nullptr && default_typed_cpu_range.gpu == nullptr && default_typed_cpu_range.size == 0);
+static_assert(gpu::gpu_range(default_typed_cpu_range).gpu == nullptr && gpu::gpu_range(default_typed_cpu_range).size == 0);
+static_assert(default_size_align.size == 0 && default_size_align.align == 0);
+static_assert(default_heap.range.cpu == nullptr && default_heap.range.gpu == nullptr && default_heap.range.size == 0 && default_heap.owner == nullptr);
+static_assert(gpu::gpu_range(default_heap).gpu == nullptr && gpu::gpu_range(default_heap).size == 0);
+static_assert(default_texture_heap.size == 0 && default_texture_heap.owner == nullptr);
 static_assert(default_timeline_point.semaphore == nullptr && default_timeline_point.value == 0);
 
-using ByteFreeFunction = void (*)(const ByteAllocation&) noexcept;
-using GpuMallocFunction = ByteAllocation (*)(gpu::Device*, std::uint64_t, gpu::MemoryType) noexcept;
+using CreateGpuHeapFunction = gpu::GpuHeap (*)(gpu::Device*, std::uint64_t, gpu::MemoryType) noexcept;
+using DestroyGpuHeapFunction = void (*)(const gpu::GpuHeap&) noexcept;
+using CreateTextureHeapFunction = gpu::TextureHeap (*)(gpu::Device*, std::uint64_t) noexcept;
+using DestroyTextureHeapFunction = void (*)(const gpu::TextureHeap&) noexcept;
+using GetTextureSizeAlignFunction = gpu::SizeAlign (*)(gpu::Device*, const gpu::TextureDesc&) noexcept;
+using CreateTextureFunction = gpu::Texture* (*)(gpu::Device*, const gpu::TextureDesc&, const gpu::TextureHeap&, std::uint64_t) noexcept;
 using CreateDeviceFunction = gpu::DeviceInit (*)(const gpu::DeviceDesc&) noexcept;
-using DrawableExtentFunction = gpu::DrawableExtent (*)(gpu::Device*) noexcept;
+using GetDrawableExtentFunction = gpu::uint32x2 (*)(gpu::Device*) noexcept;
 using AcquireFunction = gpu::SwapchainFrame (*)(gpu::Device*) noexcept;
 using CommandBatch = gpu::Span<gpu::CommandBuffer* const>;
 using CreateComputePSOFunction = gpu::PSO* (*)(gpu::Device*, gpu::Span<const std::uint32_t>) noexcept;
@@ -451,13 +481,16 @@ using DrawIndirectFunction = void (*)(gpu::CommandBuffer*, gpu::ByteSpan, gpu::G
 using DrawIndexedIndirectFunction = void (*)(gpu::CommandBuffer*, gpu::ByteSpan, gpu::GpuRange,
                                              gpu::IndexType, gpu::GpuRange, std::uint32_t,
                                              std::uint32_t) noexcept;
-using DispatchFunction = void (*)(gpu::CommandBuffer*, gpu::ByteSpan, std::uint32_t, std::uint32_t,
-                                  std::uint32_t) noexcept;
+using DispatchFunction = void (*)(gpu::CommandBuffer*, gpu::ByteSpan, gpu::uint32x3) noexcept;
 using DispatchIndirectFunction = void (*)(gpu::CommandBuffer*, gpu::ByteSpan, gpu::GpuRange) noexcept;
-static_assert(std::is_same_v<decltype(static_cast<ByteFreeFunction>(&gpu::gpu_free)), ByteFreeFunction>);
-static_assert(std::is_same_v<decltype(static_cast<GpuMallocFunction>(&gpu::gpu_malloc)), GpuMallocFunction>);
+static_assert(std::is_same_v<decltype(&gpu::create_gpu_heap), CreateGpuHeapFunction>);
+static_assert(std::is_same_v<decltype(&gpu::destroy_gpu_heap), DestroyGpuHeapFunction>);
+static_assert(std::is_same_v<decltype(&gpu::create_texture_heap), CreateTextureHeapFunction>);
+static_assert(std::is_same_v<decltype(&gpu::destroy_texture_heap), DestroyTextureHeapFunction>);
+static_assert(std::is_same_v<decltype(&gpu::get_texture_size_align), GetTextureSizeAlignFunction>);
+static_assert(std::is_same_v<decltype(&gpu::create_texture), CreateTextureFunction>);
 static_assert(std::is_same_v<decltype(&gpu::create_device), CreateDeviceFunction>);
-static_assert(std::is_same_v<decltype(&gpu::get_drawable_extent), DrawableExtentFunction>);
+static_assert(std::is_same_v<decltype(&gpu::get_drawable_extent), GetDrawableExtentFunction>);
 static_assert(std::is_same_v<decltype(&gpu::acquire), AcquireFunction>);
 static_assert(std::is_same_v<decltype(&gpu::create_compute_pso), CreateComputePSOFunction>);
 static_assert(std::is_same_v<decltype(&gpu::submit), SubmitFunction>);
@@ -489,7 +522,6 @@ static_assert(std::is_constructible_v<CommandBatch, std::initializer_list<gpu::C
         .window = descriptor,
         .swapchain_format = gpu::Format::bgra8_srgb,
         .desired_swapchain_image_count = 3,
-        .heap_memory_block_size = 64u * 1024u * 1024u,
     });
     const gpu::DeviceCaps& caps = gpu::get_device_caps(device);
     const bool supported = gpu::supports_texture_format(device, gpu::Format::rgba8_unorm, gpu::TextureUsage::sampled);
@@ -500,23 +532,29 @@ static_assert(std::is_constructible_v<CommandBatch, std::initializer_list<gpu::C
     gpu::wait_timeline({.semaphore = semaphore, .value = 1});
     gpu::destroy_timeline_semaphore(timeline);
 
-    gpu::DrawableExtent drawable_extent = gpu::get_drawable_extent(device);
+    gpu::uint32x2 drawable_extent = gpu::get_drawable_extent(device);
     gpu::SwapchainFrame frame = gpu::acquire(device);
     gpu::submit_and_present(device, {commands}, {.semaphore = semaphore, .value = 2});
 
-    ByteAllocation bytes = gpu::gpu_malloc(device, 64);
-    ByteAllocation gpu_only = gpu::gpu_malloc(device, 64, gpu::MemoryType::gpu_only);
-    TypedAllocation typed = gpu::gpu_malloc<std::uint32_t>(device, 16);
-    gpu::GpuRange range = gpu::gpu_range(typed);
-    gpu::gpu_free(bytes);
-    gpu::gpu_free(typed);
+    gpu::GpuHeap bytes = gpu::create_gpu_heap(device, 64);
+    gpu::GpuHeap gpu_only = gpu::create_gpu_heap(device, 64, gpu::MemoryType::gpu_only);
+    gpu::GpuHeap texture_descriptors = gpu::create_gpu_heap(device, 64, gpu::MemoryType::texture_descriptor_heap);
+    gpu::GpuHeap sampler_descriptors = gpu::create_gpu_heap(device, 64, gpu::MemoryType::sampler_descriptor_heap);
+    gpu::GpuRange range = gpu::gpu_range(bytes);
+    gpu::destroy_gpu_heap(sampler_descriptors);
+    gpu::destroy_gpu_heap(texture_descriptors);
+    gpu::destroy_gpu_heap(gpu_only);
+    gpu::destroy_gpu_heap(bytes);
 
-    gpu::Texture* created_texture = gpu::create_texture(device, {});
+    const gpu::SizeAlign texture_size_align = gpu::get_texture_size_align(device, {});
+    gpu::TextureHeap texture_heap = gpu::create_texture_heap(device, texture_size_align.size);
+    gpu::Texture* created_texture = gpu::create_texture(device, {}, texture_heap, 0);
     gpu::RenderView* created_render_view = gpu::create_render_view(texture);
     gpu::write_texture_descriptor(device, descriptor, texture, gpu::TextureDescriptorType::sampled);
     gpu::write_sampler_descriptor(device, descriptor);
     gpu::destroy_render_view(created_render_view);
     gpu::destroy_texture(created_texture);
+    gpu::destroy_texture_heap(texture_heap);
 
     gpu::PSO* graphics = gpu::create_graphics_pso(device, {});
     gpu::PSO* mesh = gpu::create_mesh_pso(device, {});
@@ -538,10 +576,10 @@ static_assert(std::is_constructible_v<CommandBatch, std::initializer_list<gpu::C
     gpu::draw_indexed(a, root, range, gpu::IndexType::uint32, 3);
     gpu::draw_indirect(a, root, range);
     gpu::draw_indexed_indirect(a, root, range, gpu::IndexType::uint32, range);
-    gpu::draw_meshlets(a, root, 1);
+    gpu::draw_meshlets(a, root, {.x = 1, .y = 1, .z = 1});
     gpu::draw_meshlets_indirect(a, root, range);
     gpu::end_render_pass(a);
-    gpu::dispatch(a, root, 1);
+    gpu::dispatch(a, root, {.x = 1, .y = 1, .z = 1});
     gpu::dispatch_indirect(a, root, range);
     gpu::copy_memory(a, range, range);
     gpu::copy_memory_to_texture(a, range, texture);
@@ -557,7 +595,7 @@ static_assert(std::is_constructible_v<CommandBatch, std::initializer_list<gpu::C
     (void)completed;
     (void)drawable_extent;
     (void)frame;
-    (void)gpu_only;
+    (void)texture_size_align;
 }
 
 int main()

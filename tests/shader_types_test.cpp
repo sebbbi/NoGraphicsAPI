@@ -1,4 +1,4 @@
-#include <NoGraphicsAPI/shader_types.h>
+#include <NoGraphicsAPIUtility/shader_types.h>
 
 #include <cstdint>
 #include <type_traits>

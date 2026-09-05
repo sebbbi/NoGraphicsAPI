@@ -2,6 +2,7 @@
 
 - Write simple, efficient, minimal C/C++ code.
 - Avoid adding named variables for trivial expressions, especially when the value is used only once.
+- Avoid `auto` for local variables. Do not use it for ordinary value or structure types.
 - Disable C++ exceptions and RTTI across the entire codebase. Do not use either.
 - Perform error checks as early as possible. Check application initialization, resource loading, and Vulkan object creation immediately. Avoid error checking after initialization; normal code should not fail.
 - Use asserts to catch code bugs and documented API precondition violations. Use error codes and error messages only for invalid external input data and

@@ -4,7 +4,7 @@ set(vertex_spv ${shader_dir}/cube.vert.spv)
 set(fragment_spv ${shader_dir}/cube.frag.spv)
 set(shader_dependencies
     ${CMAKE_CURRENT_SOURCE_DIR}/cube_shared.h
-    ${PROJECT_SOURCE_DIR}/include/NoGraphicsAPI/shader_types.h)
+    ${PROJECT_SOURCE_DIR}/utility/include/NoGraphicsAPIUtility/shader_types.h)
 
 NoGraphicsAPI_compile_slang(${vertex_spv} ${shader} vertexMain vertex
     DESCRIPTOR_HEAP DEPENDS ${shader_dependencies})
@@ -30,6 +30,7 @@ NoGraphicsAPI_add_example(example_cube
     ${vertex_spv}
     ${fragment_spv}
 )
+target_link_libraries(example_cube PRIVATE NoGraphicsAPIUtility::math NoGraphicsAPIUtility::textures)
 target_compile_definitions(example_cube PRIVATE
     NOGRAPHICSAPI_CUBE_VERTEX_SPV_PATH="${vertex_spv}"
     NOGRAPHICSAPI_CUBE_FRAGMENT_SPV_PATH="${fragment_spv}"

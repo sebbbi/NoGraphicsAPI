@@ -31,7 +31,8 @@ The terms used below are deliberate:
 | Ordinary data | Preserve real 64-bit GPU addresses and pointer arithmetic. |
 | Index and indirect arguments | Pass `MTLGPUAddress` directly to Metal 4 commands. |
 | Native copies | Resolve a GPU address internally to its backing `MTLBuffer` and offset. |
-| Texture heap | Replace the public byte allocation with an opaque, indexed `TextureHeap` backed by `MTLTextureViewPool`. |
+| Texture storage | Preserve application placement in GPU-only `TextureHeap` objects backed by `MTLHeap`. |
+| Texture descriptors | Replace the public descriptor-byte `GpuHeap` with an opaque indexed heap backed by `MTLTextureViewPool`. |
 | Sampler heap | Keep the logical heap and expose a typed Tier-2 argument-buffer array to shaders. |
 | Root data | Keep the exact user structure; snapshot it at Metal buffer slot 0 for each command. |
 | Shader artifacts | Replace SPIR-V-only PSO inputs with backend-neutral stage artifacts. |
@@ -40,8 +41,8 @@ The terms used below are deliberate:
 | Submission | Map command batches and timeline points to grouped queue commits and `MTLSharedEvent`. |
 | Presentation | Use a supplied `CAMetalLayer` without adding a second public swapchain model. |
 
-The texture heap and shader artifacts are the only required public representation changes. A
-capability decision may also be needed for indirect mesh drawing.
+The texture descriptor heap and shader artifacts are the only required public representation
+changes. A capability decision may also be needed for indirect mesh drawing.
 
 ## Platform baseline
 
@@ -67,9 +68,9 @@ by Metal queries and device tests; it should not promise a format merely because
 
 This is the strongest direct match with *No Graphics API*.
 
-Ordinary `GpuAllocation` and `GpuRange` values continue to carry real GPU virtual addresses. Metal
-placed buffers expose `MTLGPUAddress`, so application root structures and shader structures can
-retain typed pointers and pointer arithmetic. No public `MTLBuffer` handle, binding index, or
+Ordinary `GpuHeap` and `GpuRange` values continue to carry real GPU virtual addresses. Metal placed
+buffers expose `MTLGPUAddress`, so application root structures and shader structures can retain
+typed pointers and pointer arithmetic. No public `MTLBuffer` handle, binding index, or
 address-translation API is introduced.
 
 Metal 4 accepts raw addresses for the command operands that matter most to the design:
@@ -93,13 +94,14 @@ The public memory classes retain their intent:
 - `cpu_visible` provides coherent mapped upload memory with a GPU address;
 - `gpu_only` provides private GPU memory;
 - `readback` provides mapped memory suitable for completed GPU results;
-- `sampler_heap` provides the logical sampler namespace described below.
+- `texture_descriptor_heap` and `sampler_descriptor_heap` provide the descriptor namespaces
+  described below.
 
-Buffers and textures are placed in `MTLHeap` storage. Allocation growth, alignment, and the number
-of backing heaps remain backend policy. `DeviceDesc::heap_memory_block_size` supplies the requested
-backing-block size, subject to native backend limits. Destruction invalidates the public object
-immediately, while physical storage is reused only after the last relevant timeline value has
-completed. The initial port does not add simultaneous live aliasing.
+`GpuHeap` is an exact application-sized buffer block. GPU-only `TextureHeap` values wrap texture
+memory, `SizeAlign` reports placement requirements, and the application chooses offsets and block
+growth. Destruction invalidates the public object immediately, while native objects are retired only
+after the last relevant timeline value has completed. The initial port does not add simultaneous
+live aliasing.
 
 ## Root and binding ABI
 
@@ -123,16 +125,16 @@ These hidden bindings are a compiler target ABI, not additions to the shared C++
 structure. Vulkan can retain its push-data and descriptor-heap lowering while Metal emits the
 three-slot form. This preserves one source-level data layout across both backends.
 
-## Texture heap compatibility
+## Texture descriptor heap compatibility
 
-The current Vulkan texture heap is a byte-addressable allocation containing implementation
+The current Vulkan texture descriptor heap is a byte-addressable allocation containing implementation
 descriptor bytes. `MTLTextureViewPool` is not byte-addressable: the CPU assigns a texture view to a
 pool index, and Metal assigns the corresponding resource ID inside a contiguous range. Arbitrary
 CPU or GPU copies of descriptor bytes cannot update the pool.
 
-The portable texture heap must therefore become opaque. The proposed contract provides:
+The portable texture descriptor heap must therefore become opaque. The proposed contract provides:
 
-- capacity-based `TextureHeap` creation and destruction;
+- capacity-based descriptor-heap creation and destruction;
 - an indexed texture-view write;
 - an indexed range copy between compatible heaps;
 - command-buffer binding of one active heap.
@@ -252,24 +254,24 @@ and textures, plus render and compute pipeline allocations. A windowed device al
 `CAMetalLayer` residency set required for drawable textures.
 
 Heap membership is tracked at heap granularity. A heap or pipeline allocation leaves the set only
-after all submitted work that may reference it has completed. Exhaustion grows the appropriate
-placed-heap pool; it does not silently switch a user resource to an unrelated standalone allocation.
+after all submitted work that may reference it has completed. The application responds to
+exhaustion by creating another explicit heap.
 
 Residency is backend machinery and requires no public resource list. It guarantees addressability,
 not ordering, visibility, or lifetime beyond the application's existing timeline contract.
 
 ## Proposed public API impact
 
-Most of the API remains intact: opaque handles, ordinary GPU allocations and ranges, root
-arguments, texture objects and render views, draw/dispatch/copy calls, global barriers, command
-batches, timelines, and presentation flow.
+Most of the API remains intact: exact GPU heaps and ranges, placed texture heaps, opaque resource
+handles, root arguments, draw/dispatch/copy calls, global barriers, command batches, timelines, and
+presentation flow.
 
 Required changes are limited to:
 
-1. Replace raw `MemoryType::texture_heap` allocations with opaque, capacity-sized `TextureHeap`
-   objects and indexed write/copy/bind operations.
+1. Adapt Vulkan descriptor-heap buffers to Metal texture and sampler indexing while preserving the
+   application-owned logical namespaces.
 2. Replace SPIR-V-only PSO inputs with backend-neutral shader-stage artifacts.
-3. Remove or deprecate texture descriptor byte-size/stride capabilities once texture heaps are
+3. Remove or deprecate texture descriptor byte-size/stride capabilities once descriptor heaps are
    opaque.
 
 A fourth change is conditional: expose indirect-mesh support as a capability if the initial backend
@@ -293,7 +295,7 @@ Metal can execute commands but cannot preserve the data model that makes this AP
 Implementation must also settle:
 
 - Apple 9 as the baseline versus a public indirect-mesh capability;
-- the final `TextureHeap` API spelling and migration from raw descriptor storage;
+- the final texture descriptor-heap API spelling and migration from raw descriptor storage;
 - the backend-neutral shader artifact and entry-point representation;
 - tested format and view support for each advertised Apple GPU family;
 - the `CAMetalLayer` ownership and presentation contract;
@@ -345,8 +347,9 @@ evidence that the proposed NoGraphicsAPI Metal ABI already exists.
 ## Relationship to the implemented backend
 
 The [Vulkan support document](vulkan-support.md) remains the contract for the only implemented
-backend. Vulkan can adopt an opaque `TextureHeap` without weakening its descriptor-heap path; the
-change simply stops exposing a backend representation that Metal cannot share.
+backend. Vulkan can adopt an opaque texture descriptor-heap API without changing the GPU-only
+`TextureHeap` used for placed image storage; the change simply stops exposing descriptor bytes that
+Metal cannot share.
 
 The [No Graphics API comparison](no-graphics-api-comparison.md) explains how the current API follows
 the blog proposal. This Metal design preserves its most important properties: real GPU pointers,

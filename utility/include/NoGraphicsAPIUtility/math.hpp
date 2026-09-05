@@ -1,6 +1,6 @@
 #pragma once
 
-#include <NoGraphicsAPI/shader_types.h>
+#include <NoGraphicsAPIUtility/shader_types.h>
 
 #if !defined(__SLANG__)
 
@@ -814,9 +814,11 @@ namespace math {
 	}
 
 	constexpr float3x3 transpose(const float3x3& matrix) noexcept {
-		return {
-			{ { matrix.rows[0].x, matrix.rows[1].x, matrix.rows[2].x }, { matrix.rows[0].y, matrix.rows[1].y, matrix.rows[2].y }, { matrix.rows[0].z, matrix.rows[1].z, matrix.rows[2].z } }
-		};
+		return {{
+			{ matrix.rows[0].x, matrix.rows[1].x, matrix.rows[2].x },
+			{ matrix.rows[0].y, matrix.rows[1].y, matrix.rows[2].y },
+			{ matrix.rows[0].z, matrix.rows[1].z, matrix.rows[2].z },
+		}};
 	}
 
 	constexpr float4x4 transpose(const float4x4& matrix) noexcept {

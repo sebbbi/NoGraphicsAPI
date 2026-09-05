@@ -14,15 +14,15 @@ implementation copies a small CPU root structure into Vulkan push-data state.
 
 | Area | Fidelity | `NoGraphicsAPI` |
 |---|---|---|
-| Linear data | Direct | No public buffer objects. Allocations expose 64-bit GPU addresses used directly by shaders and commands. |
+| Linear data | Direct | No public buffer objects. Application-partitioned GPU heaps expose 64-bit addresses used directly by shaders and commands. |
 | Vertex and structured data | Direct | Shaders follow typed pointers and fetch their own data; PSOs have no vertex layout. |
-| Texture descriptors | Direct | The application allocates, fills, indexes, and binds the texture heap. |
-| Samplers | Adapted | A second application-owned heap replaces the post's Metal-style embedded samplers. |
+| Texture descriptors | Direct | The application allocates, fills, indexes, and binds the texture descriptor heap. |
+| Samplers | Adapted | An application-owned sampler descriptor heap replaces the post's Metal-style embedded samplers. |
 | Root data | Adapted | CPU root bytes are copied with `vkCmdPushDataEXT`; the post passes GPU root pointers. |
 | Pipeline binding model | Direct | Pipelines use no descriptor-set layout, pipeline layout, or resource signature. |
 | Raster state | Partial | Fixed render state remains baked into PSOs rather than split or dynamic as explored by the post. |
 | Barriers | Direct in spirit | One global dependency names stages and accesses, with no resource or image-layout lists. |
-| Textures | Mostly direct | Textures are opaque, but storage placement is managed internally instead of exposed as placed resources. |
+| Textures | Mostly direct | The application places opaque textures in its own GPU-only texture heap, restricted to one device-selected memory type. |
 | Commands and completion | Mostly direct | One-shot command buffers and caller-owned timeline points provide asynchronous reuse tracking. |
 | Indirect work | Partial | Arguments and indices use GPU address ranges; root selection and draw count remain CPU-controlled. |
 
@@ -54,9 +54,10 @@ This is an unusually direct Vulkan realization of the post: the implementation c
 
 ## GPU pointers are the primary data model
 
-The most important match is the absence of public buffer objects. `gpu_malloc<T>()` returns a plain
-`GpuAllocation<T>` containing a CPU address when mapped, a typed GPU address, and a byte size.
-Shared C++/Slang structures can contain those typed GPU pointers directly:
+The most important match is the absence of public buffer objects. `create_gpu_heap()` returns a raw
+`GpuHeap` containing those addresses and the exact requested byte size in `GpuHeap::range`. The
+application partitions that `GpuCpuRange<byte>` and places typed GPU pointers directly in shared C++/Slang
+structures:
 
 ```cpp
 struct RootArguments
@@ -74,16 +75,21 @@ descriptor entries. This is the key novel property of both the post and this imp
 both an address and an extent, so copies, index binding, and indirect operations consume ranges
 without reintroducing buffer handles. A subrange is expressed by adjusting the address and size.
 
-Allocation classes cover mapped CPU-visible memory, GPU-only memory, readback, and the two descriptor
-heaps. Exact allocation and suballocation policy is backend detail rather than part of the model.
+`MemoryType` selects mapped CPU-visible memory, GPU-only memory, readback, or one of the two
+descriptor-heap usages. Each call creates one whole backing buffer and memory allocation; the backend
+has no suballocator. Applications can pass `heap.range` to the companion utility library's fixed
+16-byte `BumpAllocator` or `HeapAllocator`. Raw allocation returns `GpuCpuRange<byte>`, while
+`allocate<T>(element_count)` returns a range with typed CPU and GPU pointers.
+Applications may also supply their own policy.
 
 As in the post, GPU pointers are raw capabilities rather than tracked references. The application
-must keep their backing allocations alive and must synchronize mutation or reuse. A `GpuRange`
-does not add shader bounds checking or ownership.
+must keep their backing heaps live while recording and must synchronize suballocation mutation or
+reuse. Whole-heap destruction after submission is deferred by the backend; a `GpuRange` does not add
+shader bounds checking or ownership.
 
 ## Application-owned descriptor heaps
 
-The texture heap preserves the post's ownership model:
+The texture descriptor heap preserves the post's ownership model:
 
 1. The application allocates heap storage.
 2. It chooses compact integer slots and writes descriptors into them.
@@ -91,14 +97,15 @@ The texture heap preserves the post's ownership model:
 4. The application binds the heap range before commands that use it.
 
 There are no descriptor sets, descriptor tables, binding layouts, or backend-managed descriptor
-caches. Buffers never occupy texture-heap slots because shaders reach them through GPU pointers.
+caches. Buffers never occupy texture-descriptor slots because shaders reach them through GPU pointers.
 Vulkan defines the native descriptor bytes and alignment; the API exposes descriptor sizes and
 strides so the application can lay out its own heap.
 
-`VK_EXT_descriptor_heap` separates resource and sampler heaps. `NoGraphicsAPI` exposes the resource
-heap as an image-only texture heap and exposes the sampler heap explicitly. This differs from the
-post's Metal-style embedded sampler values, but retains the more important property: slot ownership
-and indexing stay with the application, and pipeline creation remains binding-free.
+`VK_EXT_descriptor_heap` separates resource and sampler heaps. `NoGraphicsAPI` creates exact-sized,
+mapped `GpuHeap` values with `MemoryType::texture_descriptor_heap` and
+`MemoryType::sampler_descriptor_heap`. The first is image-only. This differs from the post's
+Metal-style embedded sampler values, but retains the more important property: slot ownership and
+indexing stay with the application, and pipeline creation remains binding-free.
 
 ## Root ABI
 
@@ -112,8 +119,8 @@ fields directly from push-data state:
 
 ```cpp
 RootArguments root{
-    .vertices = vertices.gpu,
-    .objects = objects.gpu,
+    .vertices = vertex_gpu,
+    .objects = object_gpu,
 };
 gpu::draw(commands, root, vertex_count);
 ```
@@ -180,9 +187,10 @@ Command buffers are one-shot handles backed by reusable Vulkan contexts. Each su
 command buffers begun since the preceding submission, in the supplied order.
 
 Applications provide a monotonically increasing `TimelinePoint` with every submission. Polling or
-waiting that point controls reuse of application-owned allocations, descriptor slots, and readback
-data. Internal command-context and resource retirement uses a separate private timeline. This keeps
-frames asynchronous and matches the post's recommendation that completion be explicit.
+waiting that point controls reuse of application-owned heap ranges, texture placements, descriptor
+slots, and readback data. Internal command-context and Vulkan-object retirement uses a separate
+private timeline. This keeps frames asynchronous and matches the post's recommendation that
+completion be explicit.
 
 `VK_KHR_device_address_commands` extends the GPU-pointer model into command processing. Index data,
 indirect argument records, and copy operands are supplied as `GpuRange` values and passed to Vulkan
@@ -195,10 +203,20 @@ from the post is only partially present.
 
 ## Textures and presentation
 
-Textures remain opaque objects because Vulkan images need creation metadata, memory binding, views,
-and lifetime management. Unlike the post's placed-texture sketch, `create_texture()` owns storage
-placement. Applications still own every sampled/storage descriptor and decide where it lives in the
-texture heap, so this policy does not weaken the bindless model.
+Textures remain opaque objects because Vulkan images need creation metadata, binding, views, and
+lifetime management, but their storage placement is application-owned. A `TextureHeap` value owns
+one raw allocation of a device-selected GPU-only image-memory type, separate from the texture descriptor
+heap. `DeviceCaps::texture_heap_alignment` is a worst-case alignment for every supported texture, so
+the utility `TextureAllocator` can suballocate without leading alignment padding. It owns the placement
+policy for one texture heap: `allocate()` queries `SizeAlign` and hides element rounding and the Vulkan
+offset, while `free()` destroys the `PlacedTexture` and returns its range. The backend contains no
+texture suballocator.
+
+There are no CPU-visible or readback texture heaps. Texture upload and readback use
+`copy_memory_to_texture()` and `copy_texture_to_memory()` with buffer-backed `GpuRange` storage.
+Destroying the wrapper does not make an in-flight placement reusable; the application retires that
+range with its submission timeline. Every sampled or storage descriptor remains separately owned
+and placed by the application.
 
 Presentation is outside the post. The project adds a compact Win32 swapchain boundary with explicit
 extent query, acquire, and present operations. WSI synchronization, transitions, and recreation stay
@@ -207,14 +225,13 @@ internal. Other window systems are outside the current prototype.
 ## Deliberate adaptations and remaining gaps
 
 The implementation deliberately uses CPU push-data roots, one shared graphics root, a separate
-sampler heap, and Vulkan stage/access masks. These preserve the post's main model while adapting it
-to `VK_EXT_descriptor_heap` and synchronization2.
+sampler descriptor heap, one GPU-only texture memory type, and Vulkan stage/access masks. These
+preserve the post's main model while adapting it to `VK_EXT_descriptor_heap` and synchronization2.
 
-**Prototype scope.** Vulkan already supports application-placed image memory, task shaders, public
-queue selection and multiple queues, GPU-addressed indirect draw counts through
-`vkCmdDraw*IndirectCount2KHR`, and optional BDA capture/replay address preservation. This backend does
-not expose them. Fixed render and attachment state in PSOs is also largely a current implementation
-choice.
+**Prototype scope.** Vulkan already supports task shaders, public queue selection and multiple queues,
+GPU-addressed indirect draw counts through `vkCmdDraw*IndirectCount2KHR`, and optional BDA
+capture/replay address preservation. This backend does not expose them. Fixed render and attachment
+state in PSOs is also largely a current implementation choice.
 
 **Available through an additional extension.** GPU-root indirect work has an existing but heavier
 path: `VK_EXT_device_generated_commands` and its descriptor-heap push-data tokens can source

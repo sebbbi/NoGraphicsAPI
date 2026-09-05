@@ -38,7 +38,8 @@ function(NoGraphicsAPI_compile_slang output source entry stage)
             -matrix-layout-row-major
             -capability spvDescriptorHeapEXT
             -I ${CMAKE_CURRENT_SOURCE_DIR}
-            -I ${PROJECT_SOURCE_DIR}/include)
+            -I ${PROJECT_SOURCE_DIR}/include
+            -I ${PROJECT_SOURCE_DIR}/utility/include)
     endif()
     if(SLANG_DEFINE)
         list(APPEND options -D${SLANG_DEFINE}=1)

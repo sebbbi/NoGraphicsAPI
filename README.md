@@ -11,10 +11,11 @@ implemented; [the Metal 4 design](docs/metal-porting.md) records the proposed ma
 
 ## How it maps to *No Graphics API*
 
-- **GPU pointers replace buffer objects and bindings.** `gpu_malloc()` returns a GPU address and a
-  persistently mapped CPU address. Address-based commands consume `GpuRange {gpu, size}` directly,
-  and shaders follow typed 64-bit pointers for vertex fetch and arbitrary data structures.
-- **Applications own descriptor heaps.** Texture and sampler heaps are ordinary mapped allocations.
+- **GPU pointers replace buffer objects and bindings.** `create_gpu_heap()` returns a raw allocation
+  with a GPU address and, for mapped memory, a CPU address. Address-based commands consume
+  `GpuRange {gpu, size}` directly, and shaders follow typed 64-bit pointers for vertex fetch and
+  arbitrary data structures.
+- **Applications own descriptor heaps.** Texture and sampler descriptor heaps are mapped GPU heaps.
   The application chooses slots, writes descriptors through the CPU address, binds the GPU range,
   and passes 32-bit indices to shaders.
 - **Root data is one small payload.** A shared C++/Slang structure is copied with
@@ -55,19 +56,33 @@ synchronization2, scalar block layout, and the remaining core features. See
 
 ## GPU memory and descriptor heaps
 
-There is no public buffer handle. `GpuAllocation<T>` exposes a CPU pointer, a GPU pointer, and a byte
-size. Every non-null pointer returned by `gpu_malloc()` is 16-byte aligned. The ordinary memory classes are:
+There is no public buffer handle or internal suballocator. `GpuHeap::range` is a `GpuCpuRange<byte>` with
+`byte* cpu`, `byte* gpu`, and `uint64_t size`; the heap's opaque `owner` field must be preserved for
+destruction. Copies alias the same heap, so destroy one unchanged copy exactly once and then discard
+every copy and range. Every non-null returned pointer is 16-byte aligned. The raw heap API is:
+
+```cpp
+[[nodiscard]] GpuHeap create_gpu_heap(Device* device, uint64_t byte_count, MemoryType memory = MemoryType::cpu_visible) noexcept;
+void destroy_gpu_heap(const GpuHeap& heap) noexcept;
+template<typename T>
+[[nodiscard]] constexpr GpuRange gpu_range(GpuCpuRange<T> range) noexcept;
+[[nodiscard]] constexpr GpuRange gpu_range(const GpuHeap& heap) noexcept;
+```
+
+Each call creates one whole heap for application-side partitioning. The memory types are:
 
 - `cpu_visible`: coherent device-local memory for data written by the CPU;
-- `gpu_only`: device-local memory with no CPU mapping (`cpu` is null);
+- `gpu_only`: device-local memory with no CPU mapping (`range.cpu` is null);
 - `readback`: coherent mapped memory with host-cached memory preferred;
-- `texture_heap` and `sampler_heap`: mapped application-owned descriptor storage.
+- `texture_descriptor_heap` and `sampler_descriptor_heap`: mapped descriptor storage.
 
-`DeviceDesc::heap_memory_block_size` controls the internal backing-block size for the three ordinary
-memory classes and pooled texture memory. It defaults to 256 MiB and must be a non-zero multiple of
-16 bytes; its `uint32_t` type keeps it below 4 GiB. Application-owned `texture_heap` and
-`sampler_heap` allocations remain exact-sized and are not affected by this setting. Each ordinary
-allocation and texture memory requirement must fit one block.
+Textures use a separate `TextureHeap` value backed by GPU-only image memory. The utility
+`TextureAllocator` captures its device and heap, using the heap's size and the requested maximum
+allocation count. Its `allocate()` method queries `SizeAlign` and places a `PlacedTexture` using the
+device's common worst-case texture alignment, so callers handle neither byte offsets nor alignment
+padding. The application owns every resource lifetime and returns placements through the allocating
+allocator's `free()`; neither library tracks dependencies between resources. `PlacedTexture` is
+move-only.
 
 `GpuRange` is the non-owning GPU address/size view used by commands. The application owns allocation,
 descriptor-slot, and pointed-to data lifetimes; timeline points mark when mutable storage can be
@@ -81,7 +96,8 @@ float4 texel = texture.Sample(sampler, uv);
 
 ## Shared root ABI
 
-Root structures are declared once and included by C++ and Slang:
+Shared scalar, vector, and matrix types come from `<NoGraphicsAPIUtility/shader_types.h>`. Root
+structures are declared once and included by C++ and Slang:
 
 ```cpp
 struct RootArguments
@@ -94,8 +110,9 @@ struct RootArguments
 On the CPU, pointer fields receive GPU virtual addresses while ordinary values are copied directly:
 
 ```cpp
+GpuCpuRange<Vertex> vertex_memory = data_allocator.allocate<Vertex>(vertex_count);
 RootArguments root{
-    .vertices = vertices.gpu,
+    .vertices = vertex_memory.gpu,
     .mvp = mvp,
 };
 gpu::draw(commands, root, vertex_count);
@@ -127,21 +144,20 @@ Requirements:
 
 - CMake 3.24+, a C++20 compiler, and Vulkan SDK headers and development libraries version 1.4.357
   or newer;
-- Git and network access during initial configuration to fetch the pinned OffsetAllocator dependency,
-  unless `FETCHCONTENT_SOURCE_DIR_OFFSETALLOCATOR` points to a local checkout;
-- a little-endian x86-64 target with AVX2 and FMA;
+- a little-endian x86-64 target; the optional utility math target additionally requires AVX2 and FMA;
 - a Vulkan 1.4 loader and device exposing the required descriptor-heap, device-address-command,
   untyped-pointer, and mesh extensions above, plus their required BDA, synchronization, and
   16-bit/scalar-layout features;
 - coherent CPU-visible GPU memory (for example through PCIe Resizable BAR on a discrete GPU or UMA on
-  an integrated GPU), plus a separate non-host-visible device-local memory type;
+  an integrated GPU), plus device-local memory compatible with the supported buffers and textures;
 - Slang 2026.14.1+ and SPIRV-Tools 2026.3+ when building the examples.
 
 MSVC and clang-cl are supported on Windows. GNU and Clang can build the headless library on other
 platforms. MinGW, 32-bit x86, and ARM targets are not supported.
 
-The default configuration builds only the library. Examples and tests are opt-in so embedding
-NoGraphicsAPI with `add_subdirectory()` or FetchContent does not add development targets:
+The utility implementation is shipped in-tree, so configuration has no Git or network dependency.
+The default configuration builds NoGraphicsAPI and its companion utility library. Examples and tests
+are opt-in so embedding NoGraphicsAPI with `add_subdirectory()` does not add development targets:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -149,12 +165,24 @@ cmake --build build
 cmake --install build --prefix path/to/install
 ```
 
-Installed packages provide the `NoGraphicsAPI::NoGraphicsAPI` target:
+The same install provides independent `NoGraphicsAPI` and `NoGraphicsAPIUtility` packages:
 
 ```cmake
 find_package(NoGraphicsAPI CONFIG REQUIRED)
-target_link_libraries(my_application PRIVATE NoGraphicsAPI::NoGraphicsAPI)
+find_package(NoGraphicsAPIUtility CONFIG REQUIRED)
+target_link_libraries(my_application PRIVATE
+    NoGraphicsAPI::NoGraphicsAPI
+    NoGraphicsAPIUtility::math
+    NoGraphicsAPIUtility::textures)
 ```
+
+`NoGraphicsAPIUtility::types` provides the shared C++/Slang types, `::math` adds the header-only math
+API and its AVX2/FMA compile options, and `::allocators` provides fixed-16-byte `gpu::BumpAllocator`
+and `gpu::HeapAllocator` policies. Both accept a non-owning `GpuCpuRange<byte>`. Raw allocation returns
+that same type, while `allocate<T>(element_count)` returns a `GpuCpuRange<T>` with typed CPU and GPU pointers;
+`GpuHeap::range` can be passed directly. `::textures` adds
+`TextureAllocator` and `PlacedTexture`. NoGraphicsAPI itself does not use these helpers or propagate
+the math target's AVX2/FMA requirements.
 
 For repository development on Windows, enable the examples and tests explicitly. Building examples
 requires the Slang and SPIR-V Tools versions listed above.
@@ -199,7 +227,6 @@ Further reading:
 
 ## License
 
-NoGraphicsAPI is distributed under the [MIT License](LICENSE). The pinned OffsetAllocator dependency
-is also MIT-licensed. The cube example's texture is derived from Vulkan-Tools and is redistributed
-under Apache-2.0. See [third-party notices](THIRD_PARTY_NOTICES.md) for complete attribution and
-license details.
+NoGraphicsAPI and NoGraphicsAPIUtility are distributed under the [MIT License](LICENSE). The cube
+example's texture is derived from Vulkan-Tools and is redistributed under Apache-2.0. See
+[third-party notices](THIRD_PARTY_NOTICES.md) for complete attribution and license details.

@@ -9,14 +9,11 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "NoGraphicsAPI requires a 64-bit target")
 endif()
 
-include(FetchContent)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 option(NOGRAPHICSAPI_BUILD_EXAMPLES "Build NoGraphicsAPI examples" OFF)
 option(NOGRAPHICSAPI_BUILD_TESTS "Build NoGraphicsAPI tests" OFF)
-
-include(cmake/NoGraphicsAPI_math.cmake)
 
 # CMake adds /EHsc to MSVC's default flags. Remove it before adding the explicit
 # no-exceptions mode below so cl.exe does not report an option-override warning.
@@ -33,23 +30,6 @@ function(NoGraphicsAPI_disable_exceptions target)
     endif()
 endfunction()
 
-FetchContent_Declare(
-    OffsetAllocator
-    GIT_REPOSITORY https://github.com/sebbbi/OffsetAllocator.git
-    GIT_TAG 3610a7377088b1e8c8f1525f458c96038a4e6fc0
-    SOURCE_SUBDIR NoGraphicsAPI_no_upstream_cmake
-)
-FetchContent_MakeAvailable(OffsetAllocator)
-
-add_library(NoGraphicsAPI_offset_allocator STATIC
-    ${offsetallocator_SOURCE_DIR}/offsetAllocator.cpp
-)
-target_include_directories(NoGraphicsAPI_offset_allocator PUBLIC
-    $<BUILD_INTERFACE:${offsetallocator_SOURCE_DIR}>
-)
-target_compile_features(NoGraphicsAPI_offset_allocator PUBLIC cxx_std_20)
-NoGraphicsAPI_disable_exceptions(NoGraphicsAPI_offset_allocator)
-
 find_package(Vulkan 1.4.357 REQUIRED)
 
 add_library(NoGraphicsAPI STATIC
@@ -58,12 +38,15 @@ add_library(NoGraphicsAPI STATIC
 )
 add_library(NoGraphicsAPI::NoGraphicsAPI ALIAS NoGraphicsAPI)
 set_target_properties(NoGraphicsAPI PROPERTIES EXPORT_NAME NoGraphicsAPI)
-set_target_properties(NoGraphicsAPI_offset_allocator PROPERTIES EXPORT_NAME offset_allocator)
 
 target_compile_features(NoGraphicsAPI PUBLIC cxx_std_20)
+target_include_directories(NoGraphicsAPI PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
 target_link_libraries(NoGraphicsAPI
-    PUBLIC NoGraphicsAPI::math Vulkan::Headers
-    PRIVATE Vulkan::Vulkan NoGraphicsAPI_offset_allocator
+    PUBLIC Vulkan::Headers
+    PRIVATE Vulkan::Vulkan
 )
 NoGraphicsAPI_disable_exceptions(NoGraphicsAPI)
 
@@ -80,6 +63,8 @@ else()
     )
 endif()
 
+add_subdirectory(utility)
+
 if(NOGRAPHICSAPI_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
@@ -91,8 +76,6 @@ endif()
 
 install(TARGETS
         NoGraphicsAPI
-        NoGraphicsAPI_math
-        NoGraphicsAPI_offset_allocator
     EXPORT NoGraphicsAPITargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

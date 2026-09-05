@@ -1,4 +1,4 @@
-#include <NoGraphicsAPI/math.hpp>
+#include <NoGraphicsAPIUtility/math.hpp>
 
 #if defined(_WIN32)
 #	ifndef WIN32_LEAN_AND_MEAN
@@ -168,6 +168,11 @@ namespace {
 		return nearly_equal(a.x, b.x, epsilon) && nearly_equal(a.y, b.y, epsilon) && nearly_equal(a.z, b.z, epsilon) && nearly_equal(a.w, b.w, epsilon);
 	}
 
+	float projected_depth(float4x4 projection, float distance) noexcept {
+		const float4 clip = projection * float4 { 0.0f, 0.0f, -distance, 1.0f };
+		return clip.z / clip.w;
+	}
+
 	bool check_vectors() noexcept {
 		float3 value { 1.0f, -2.0f, 3.0f };
 		value += float3 { 2.0f, 4.0f, 6.0f };
@@ -254,10 +259,6 @@ namespace {
 
 		constexpr float physical_near = 0.25f;
 		constexpr float physical_far = 100.0f;
-		const auto projected_depth = [](float4x4 projection, float distance) {
-			const float4 clip = projection * float4 { 0.0f, 0.0f, -distance, 1.0f };
-			return clip.z / clip.w;
-		};
 		const float4x4 forward = math::perspective_rh_zo(math::half_pi, 1.0f, physical_near, physical_far);
 		CHECK(nearly_equal(projected_depth(forward, physical_near), 0.0f));
 		CHECK(nearly_equal(projected_depth(forward, physical_far), 1.0f));

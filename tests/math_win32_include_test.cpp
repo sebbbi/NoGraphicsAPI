@@ -7,10 +7,10 @@
 #	error "Windows-first test requires the legacy Win32 min/max macros"
 #endif
 
-#include <NoGraphicsAPI/math.hpp>
+#include <NoGraphicsAPIUtility/math.hpp>
 
 #if defined(min) || defined(max)
-#	error "math.hpp must suppress Win32 min/max macros"
+#	error "NoGraphicsAPIUtility math.hpp must suppress Win32 min/max macros"
 #endif
 
 static_assert(math::min(3, 7) == 3);

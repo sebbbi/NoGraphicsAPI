@@ -3,8 +3,11 @@
 #include "gbuffer_shared.h"
 #include "simulation_shared.h"
 
-#include <NoGraphicsAPI/math.hpp>
+#include <NoGraphicsAPIUtility/bump_allocator.hpp>
+#include <NoGraphicsAPIUtility/math.hpp>
+#include <NoGraphicsAPIUtility/texture_allocator.hpp>
 
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -22,6 +25,8 @@ constexpr uint32_t initial_height = 720;
 constexpr uint32_t object_count = object_grid_width * object_grid_width;
 constexpr uint32_t frames_in_flight = 2;
 constexpr uint32_t gbuffer_texture_count = uint32_t(GBufferTexture::count);
+constexpr uint64_t data_heap_size = 16 * 1024 * 1024;
+constexpr uint64_t texture_heap_size = 256 * 1024 * 1024;
 constexpr float cube_scale = 0.42f;
 constexpr float cube_rotation_speed = 0.5f;
 constexpr float minimum_orbit_radius = 54.0f;
@@ -34,9 +39,9 @@ constexpr float3 camera_position{
 
 struct GBuffer
 {
-    Texture* albedo = nullptr;
-    Texture* normal_roughness = nullptr;
-    Texture* depth = nullptr;
+    PlacedTexture albedo{};
+    PlacedTexture normal_roughness{};
+    PlacedTexture depth{};
     RenderView* albedo_render_view = nullptr;
     RenderView* normal_roughness_render_view = nullptr;
     RenderView* depth_render_view = nullptr;
@@ -45,6 +50,7 @@ struct GBuffer
 };
 
 void recreate_gbuffer(Device* device,
+                      TextureAllocator& texture_allocator,
                       GBuffer& gbuffer,
                       byte* descriptors,
                       uint64_t descriptor_stride,
@@ -54,27 +60,24 @@ void recreate_gbuffer(Device* device,
     destroy_render_view(gbuffer.depth_render_view);
     destroy_render_view(gbuffer.normal_roughness_render_view);
     destroy_render_view(gbuffer.albedo_render_view);
-    destroy_texture(gbuffer.depth);
-    destroy_texture(gbuffer.normal_roughness);
-    destroy_texture(gbuffer.albedo);
+    texture_allocator.free(gbuffer.depth);
+    texture_allocator.free(gbuffer.normal_roughness);
+    texture_allocator.free(gbuffer.albedo);
 
     gbuffer = {
-        .albedo = create_texture(device, {
-            .width = width,
-            .height = height,
+        .albedo = texture_allocator.allocate({
+            .extent = {.x = width, .y = height, .z = 1},
             .usage = TextureUsage::sampled |
                         TextureUsage::color_attachment,
         }),
-        .normal_roughness = create_texture(device, {
-            .width = width,
-            .height = height,
+        .normal_roughness = texture_allocator.allocate({
+            .extent = {.x = width, .y = height, .z = 1},
             .format = Format::rgba16_float,
             .usage = TextureUsage::sampled |
                         TextureUsage::color_attachment,
         }),
-        .depth = create_texture(device, {
-            .width = width,
-            .height = height,
+        .depth = texture_allocator.allocate({
+            .extent = {.x = width, .y = height, .z = 1},
             .format = Format::d32_float,
             .usage = TextureUsage::sampled |
                         TextureUsage::depth_stencil_attachment,
@@ -83,14 +86,15 @@ void recreate_gbuffer(Device* device,
         .height = height,
     };
 
-    gbuffer.albedo_render_view = create_render_view(gbuffer.albedo);
-    gbuffer.normal_roughness_render_view = create_render_view(gbuffer.normal_roughness);
-    gbuffer.depth_render_view = create_render_view(gbuffer.depth);
+    gbuffer.albedo_render_view = create_render_view(gbuffer.albedo.texture);
+    gbuffer.normal_roughness_render_view = create_render_view(gbuffer.normal_roughness.texture);
+    gbuffer.depth_render_view = create_render_view(gbuffer.depth.texture);
 
     const size_t stride = size_t(descriptor_stride);
-    write_texture_descriptor(device, descriptors + size_t(GBufferTexture::albedo) * stride, gbuffer.albedo, TextureDescriptorType::sampled);
-    write_texture_descriptor(device, descriptors + size_t(GBufferTexture::normal_roughness) * stride, gbuffer.normal_roughness, TextureDescriptorType::sampled);
-    write_texture_descriptor(device, descriptors + size_t(GBufferTexture::depth) * stride, gbuffer.depth, TextureDescriptorType::sampled);
+    write_texture_descriptor(device, descriptors + size_t(GBufferTexture::albedo) * stride, gbuffer.albedo.texture, TextureDescriptorType::sampled);
+    write_texture_descriptor(device, descriptors + size_t(GBufferTexture::normal_roughness) * stride, gbuffer.normal_roughness.texture,
+                             TextureDescriptorType::sampled);
+    write_texture_descriptor(device, descriptors + size_t(GBufferTexture::depth) * stride, gbuffer.depth.texture, TextureDescriptorType::sampled);
 }
 
 float random_signed(uint32_t& state) noexcept
@@ -170,9 +174,13 @@ int main()
     printf("Using %s\n", caps.device_name);
 
     // GPU resources
-    GpuAllocation<byte> texture_heap = gpu_malloc(device, caps.texture_descriptor_stride * gbuffer_texture_count * frames_in_flight, MemoryType::texture_heap);
-    GpuAllocation<ObjectData> object_data = gpu_malloc<ObjectData>(device, object_count);
-    initialize_object_data(object_data.cpu);
+    GpuHeap texture_descriptor_heap = create_gpu_heap(device, caps.texture_descriptor_stride * gbuffer_texture_count * frames_in_flight, MemoryType::texture_descriptor_heap);
+    GpuHeap data_heap = create_gpu_heap(device, data_heap_size);
+    BumpAllocator data_allocator(data_heap.range);
+    const GpuCpuRange<ObjectData> object_allocation = data_allocator.allocate<ObjectData>(object_count);
+    initialize_object_data(object_allocation.cpu);
+    TextureHeap texture_heap = create_texture_heap(device, texture_heap_size);
+    TextureAllocator texture_allocator(device, texture_heap, 64);
 
     // Shaders
     PSO* simulation_pso = create_compute_pso(device, read_spirv(NOGRAPHICSAPI_SIMULATION_COMPUTE_SPV_PATH));
@@ -204,14 +212,14 @@ int main()
     const float3 view_forward = -math::to_float3(view.rows[2]);
     GBuffer gbuffer{};
     uint32_t gbuffer_texture_base = 0;
-    auto previous_time = chrono::steady_clock::now();
+    chrono::steady_clock::time_point previous_time = chrono::steady_clock::now();
     float rotation_angle = 0.0f;
 
     TimelinePoint latest_completion{.semaphore = create_timeline_semaphore(device)};
 
     while (pump_example_window(window))
     {
-        const DrawableExtent extent = get_drawable_extent(device);
+        const uint32x2 extent = get_drawable_extent(device);
 
         // Limit the application to two frames in flight so double-buffered descriptors are safe to reuse
         if (latest_completion.value >= frames_in_flight)
@@ -220,21 +228,25 @@ int main()
         }
 
         // Window resize?
-        if (extent.width != gbuffer.width || extent.height != gbuffer.height)
+        if (extent.x != gbuffer.width || extent.y != gbuffer.height)
         {
-            if (gbuffer.albedo)
+            if (gbuffer.albedo.texture)
+            {
+                wait_timeline(latest_completion);
                 gbuffer_texture_base = gbuffer_texture_count - gbuffer_texture_base;
-            recreate_gbuffer(device, gbuffer, texture_heap.cpu + size_t(gbuffer_texture_base) * caps.texture_descriptor_stride, caps.texture_descriptor_stride,
-                             extent.width, extent.height);
+            }
+            recreate_gbuffer(device, texture_allocator, gbuffer,
+                             texture_descriptor_heap.range.cpu + size_t(gbuffer_texture_base) * caps.texture_descriptor_stride,
+                             caps.texture_descriptor_stride, extent.x, extent.y);
         }
 
         const SwapchainFrame frame = acquire(device);
 
         CommandBuffer* commands = begin_commands(device);
-        set_texture_heap(commands, gpu_range(texture_heap));
+        set_texture_heap(commands, gpu_range(texture_descriptor_heap));
 
         // Simulation
-        const auto current_time = chrono::steady_clock::now();
+        const chrono::steady_clock::time_point current_time = chrono::steady_clock::now();
         const float delta_seconds = chrono::duration<float>(current_time - previous_time).count();
         previous_time = current_time;
 
@@ -244,9 +256,9 @@ int main()
 
         bind_pso(commands, simulation_pso);
         dispatch(commands, SimulationRoot{
-            .objects = object_data.gpu,
+            .objects = object_allocation.gpu,
             .delta_seconds = delta_seconds,
-        }, object_count / simulation_thread_count);
+        }, {.x = object_count / simulation_thread_count, .y = 1, .z = 1});
 
         // G-buffer
         barrier(commands,
@@ -270,13 +282,13 @@ int main()
 
         bind_pso(commands, gbuffer_pso);
 
-        float4x4 projection = math::perspective_rh_zo(math::pi / 3.0f, float(extent.width) / float(extent.height), 0.3f, 1500.0f);
+        float4x4 projection = math::perspective_rh_zo(math::pi / 3.0f, float(extent.x) / float(extent.y), 0.3f, 1500.0f);
         projection.rows[1].y = -projection.rows[1].y;
         float4x4 view_projection = projection * view;
         rotation_angle += cube_rotation_speed * delta_seconds;
 
         const GBufferRoot gbuffer_root{
-            .objects = object_data.gpu,
+            .objects = object_allocation.gpu,
             .view_projection = view_projection,
             .orientation = math::to_float3x4(
                 math::rotation_y(rotation_angle) *
@@ -284,7 +296,7 @@ int main()
                 math::scale({.x = cube_scale, .y = cube_scale, .z = cube_scale})),
         };
 
-        draw_meshlets(commands, gbuffer_root, object_grid_width, object_grid_width);
+        draw_meshlets(commands, gbuffer_root, {.x = object_grid_width, .y = object_grid_width, .z = 1});
 
         end_render_pass(commands);
 
@@ -314,8 +326,8 @@ int main()
                 },
             .gbuffer_pixel_scale =
                 {
-                    .x = float(gbuffer.width) / float(frame.width),
-                    .y = float(gbuffer.height) / float(frame.height),
+                    .x = float(gbuffer.width) / float(frame.extent.x),
+                    .y = float(gbuffer.height) / float(frame.extent.y),
                 },
             .gbuffer_texture_base = gbuffer_texture_base,
         };
@@ -339,11 +351,12 @@ int main()
     destroy_render_view(gbuffer.depth_render_view);
     destroy_render_view(gbuffer.normal_roughness_render_view);
     destroy_render_view(gbuffer.albedo_render_view);
-    destroy_texture(gbuffer.depth);
-    destroy_texture(gbuffer.normal_roughness);
-    destroy_texture(gbuffer.albedo);
-    gpu_free(object_data);
-    gpu_free(texture_heap);
+    texture_allocator.free(gbuffer.depth);
+    texture_allocator.free(gbuffer.normal_roughness);
+    texture_allocator.free(gbuffer.albedo);
+    destroy_texture_heap(texture_heap);
+    destroy_gpu_heap(data_heap);
+    destroy_gpu_heap(texture_descriptor_heap);
 
     destroy_device(device);
     close_example_window(window);

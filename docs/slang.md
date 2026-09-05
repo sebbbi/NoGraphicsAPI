@@ -62,8 +62,9 @@ The CPU fills pointer fields with GPU virtual addresses and passes the structure
 or dispatch:
 
 ```cpp
+GpuCpuRange<Vertex> vertex_memory = data_allocator.allocate<Vertex>(vertex_count);
 RootArguments root{
-    .vertices = vertices.gpu,
+    .vertices = vertex_memory.gpu,
     .transform = transform,
 };
 gpu::draw(commands, root, vertex_count);
@@ -91,10 +92,15 @@ Root structures must be trivially copyable, use a byte size divisible by four, a
 
 ## Typed GPU pointers
 
-`gpu_malloc<T>()` returns both address domains when the allocation is CPU-visible:
+`create_gpu_heap()` returns both address domains in `GpuHeap::range` when the heap is CPU-visible.
+The application can pass that `GpuCpuRange<byte>` directly to `gpu::BumpAllocator` or reusable
+`gpu::HeapAllocator`. For example:
 
 ```cpp
-gpu::GpuAllocation<Vertex> vertices = gpu::gpu_malloc<Vertex>(device, vertex_count);
+gpu::GpuHeap data = gpu::create_gpu_heap(device, data_size);
+gpu::BumpAllocator allocator(data.range);
+gpu::GpuCpuRange<Vertex> vertices = allocator.allocate<Vertex>(vertex_count);
+initialize_vertices(vertices.cpu, vertex_count);
 RootArguments root{.vertices = vertices.gpu};
 ```
 
@@ -113,8 +119,8 @@ commands.
 GPU pointers are intentionally low level:
 
 - they carry no bounds and robust descriptor access does not protect an invalid dereference;
-- `gpu_malloc()` guarantees 16-byte alignment; stronger pointee and interior-pointer alignment, range validity, synchronization, and lifetime belong to the
-  application;
+- heap bases and allocator suballocations are 16-byte aligned; stronger pointee and interior-pointer
+  alignment, range validity, synchronization, and lifetime belong to the application;
 - a GPU pointer must never be dereferenced by the CPU; and
 - opaque textures and samplers are represented by heap indices rather than pointers.
 
@@ -123,14 +129,19 @@ an unnecessary `shaderInt64` requirement.
 
 ## Application-owned descriptor heaps
 
-Texture and sampler heaps are mapped `GpuAllocation` values. The application allocates their
-storage, chooses slots, passes each mapped slot to the descriptor writer, and binds the GPU ranges
-as command state:
+Texture and sampler descriptor heaps are exact mapped `GpuHeap` allocations. The application
+chooses slots, passes each mapped slot to the descriptor writer, and binds the GPU ranges as command
+state:
 
 ```cpp
+gpu::GpuHeap texture_heap = gpu::create_gpu_heap(device, texture_heap_size, gpu::MemoryType::texture_descriptor_heap);
+gpu::GpuHeap sampler_heap = gpu::create_gpu_heap(device, sampler_heap_size, gpu::MemoryType::sampler_descriptor_heap);
 gpu::set_texture_heap(commands, gpu::gpu_range(texture_heap));
 gpu::set_sampler_heap(commands, gpu::gpu_range(sampler_heap));
 ```
+
+Each bind takes the unchanged full range of the matching descriptor heap. Interior or shortened
+ranges do not contain the Vulkan-reserved tail and are invalid.
 
 Shaders index the heaps directly:
 
@@ -151,9 +162,9 @@ manual `NonUniform` decoration is needed.
 
 ## Shared data layout
 
-Shared headers include `<NoGraphicsAPI/shader_types.h>`, which provides matching plain scalar,
-vector, and matrix types for C++ and Slang. Both languages use `T*` for GPU-address fields. CPU-only
-math lives in `<NoGraphicsAPI/math.hpp>` and is not part of the shared ABI.
+Shared headers include `<NoGraphicsAPIUtility/shader_types.h>`, which provides matching plain
+scalar, vector, and matrix types for C++ and Slang. Both languages use `T*` for GPU-address fields.
+CPU-only math lives in `<NoGraphicsAPIUtility/math.hpp>` and is not part of the shared ABI.
 
 Compile every shader that reads a shared structure with `-fvk-use-c-layout`. Add
 `-matrix-layout-row-major` when matrices are present. Use the supplied types and explicit padding,
