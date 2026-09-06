@@ -122,8 +122,8 @@ Requirements:
 - a Vulkan 1.4 loader and device exposing the required descriptor-heap, device-address-command,
   untyped-pointer, and mesh extensions above, plus their required BDA, synchronization, and
   16-bit/scalar-layout features;
-- coherent CPU-visible GPU memory (for example through PCIe Resizable BAR on a discrete GPU or UMA on
-  an integrated GPU), plus device-local memory compatible with the supported buffers and textures;
+- coherent CPU-visible GPU memory through a PCIe BAR on a discrete GPU or UMA on an integrated GPU,
+  plus device-local memory compatible with the supported buffers and textures;
 - Slang 2026.14.1+ and SPIRV-Tools 2026.3+ when building the examples.
 
 MSVC and clang-cl are supported on Windows. GNU and Clang can build the headless library on other
@@ -181,8 +181,8 @@ They can be run from their corresponding directories under `build/examples` when
 Driver support was checked on 5 September 2026 against the latest available packages and recent
 capability reports. These are API compatibility floors, not performance recommendations. `create_device()`
 remains authoritative because it also requires suitable queues and a coherent, host-visible device-local
-memory type, typically backed by a PCIe BAR aperture. Vulkan 1.4 alone is insufficient, and
-`VK_KHR_unified_image_layouts` remains optional.
+memory type. The heap column records the topology seen in checked systems, not a per-allocation size
+guarantee. Vulkan 1.4 alone is insufficient, and `VK_KHR_unified_image_layouts` remains optional.
 
 The latest available Windows drivers are [AMD Adrenalin 26.9.1](https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-9-1.html)
 and [NVIDIA 616.64 WHQL](https://us.download.nvidia.com/Windows/616.64/616.64-win11-win10-release-notes.pdf).
@@ -190,24 +190,49 @@ and [NVIDIA 616.64 WHQL](https://us.download.nvidia.com/Windows/616.64/616.64-wi
 The entries below cover each checked driver path; the linked capability reports are representative
 architecture checks.
 
-| Architecture | Driver path | Product family | Current result |
-| --- | --- | --- | --- |
-| AMD RDNA 2 | Windows / Adrenalin 26.9.1 | Radeon RX 6000 | Unsupported |
-| AMD RDNA 2 | Linux / Mesa RADV 26.2+ | Steam Deck (Van Gogh) | Supported |
-| AMD RDNA 3 | Windows / Adrenalin 26.9.1 | Radeon RX 7000 | Supported |
-| AMD RDNA 4 | Windows / Adrenalin 26.9.1 | Radeon RX 9000 | Supported |
-| NVIDIA Turing | Windows / NVIDIA 616.64 | GeForce RTX 20 | Supported |
-| NVIDIA Ampere | Windows / NVIDIA 616.64 | GeForce RTX 30 | Supported |
-| NVIDIA Ada Lovelace | Windows / NVIDIA 616.64 | GeForce RTX 40 | Supported |
-| NVIDIA Blackwell | Windows / NVIDIA 616.64 | GeForce RTX 50 | Supported |
+| Architecture | Driver path | Product family | CPU-visible device-local heap | Current result |
+| --- | --- | --- | --- | --- |
+| AMD RDNA 2 (dGPU) | Windows / Adrenalin 26.9.1 | Radeon RX 6000 | PCIe ReBAR or 256 MiB fixed BAR | Unsupported |
+| AMD RDNA 2 (iGPU) | Windows / Adrenalin 26.9.1 | Radeon 600M | UMA | Unsupported |
+| AMD RDNA 2 (iGPU) | Linux / Mesa RADV 26.2+ | Steam Deck (Van Gogh) | UMA | Supported |
+| AMD RDNA 3 (dGPU) | Windows / Adrenalin 26.9.1 | Radeon RX 7000 | PCIe ReBAR (VRAM-sized heap observed) | Supported |
+| AMD RDNA 3 (iGPU) | Windows / Adrenalin 26.9.1 | Radeon 700M | UMA | Supported |
+| AMD RDNA 4 (dGPU) | Windows / Adrenalin 26.9.1 | Radeon RX 9000 | PCIe ReBAR (VRAM-sized heap observed) | Supported |
+| NVIDIA Turing (dGPU) | Windows / NVIDIA 616.64 | GeForce RTX 20 | 256 MiB fixed BAR (214 MiB exposed) | Supported |
+| NVIDIA Ampere (dGPU) | Windows / NVIDIA 616.64 | GeForce RTX 30 | PCIe ReBAR (VRAM-sized heap observed) | Supported |
+| NVIDIA Ada Lovelace (dGPU) | Windows / NVIDIA 616.64 | GeForce RTX 40 | PCIe ReBAR (VRAM-sized heap observed) | Supported |
+| NVIDIA Blackwell (dGPU) | Windows / NVIDIA 616.64 | GeForce RTX 50 | PCIe ReBAR (VRAM-sized heap observed) | Supported |
 
-AMD limits `VK_EXT_descriptor_heap` to RDNA 3 and RDNA 4 on Windows, so no Radeon RX 6000 GPU qualifies
-there. With Mesa [RADV 26.2 or newer](https://docs.mesa3d.org/relnotes/26.2.0.html), Steam Deck has all
-required device extensions. Linux/SteamOS window presentation is not implemented yet and is planned
-for a near-term update.
+Each checked GPU exposes a `DEVICE_LOCAL | HOST_VISIBLE | HOST_COHERENT` memory type; the unsupported
+Windows RDNA 2 rows fail extension requirements rather than this heap-type check.
+
+CPU-visible and readback data heaps, plus descriptor heaps, require coherent, CPU-visible device-local
+memory. Device creation checks that a compatible type exists, not that its capacity is practical: a
+fixed aperture can pass but still constrain mapped allocations. GPU-only heaps and texture memory can
+use separate non-host-visible VRAM. Actual budgets and maximum single-allocation sizes remain
+device-specific. ReBAR depends on firmware and platform configuration. Checked systems expose
+VRAM-sized CPU-visible heaps on [RDNA 2](https://vulkan.gpuinfo.org/displayreport.php?id=42800), RDNA 3,
+RDNA 4, Ampere, Ada, and Blackwell; a checked
+[RDNA 2 system](https://vulkan.gpuinfo.org/displayreport.php?id=48951) instead exposes a separate 256 MiB
+heap, consistent with a fixed BAR.
+[NVIDIA lists no ReBAR support for Turing](https://www.nvidia.com/en-us/geforce/graphics-cards/compare/?section=compare-specs),
+and the checked RTX 2060 exposes only 214 MiB of its nominal 256 MiB aperture.
+
+Checked UMA reports expose coherent CPU-visible device-local memory types with 5.1 GiB on a Windows
+[Radeon 680M](https://vulkan.gpuinfo.org/displayreport.php?id=47714), 5.8 GiB on
+[Steam Deck](https://vulkan.gpuinfo.org/displayreport.php?id=51189), and 21.2 GiB on a Windows
+[Radeon 780M](https://vulkan.gpuinfo.org/displayreport.php?id=49646). These are driver-reported heap sizes
+that vary with system memory and driver or firmware configuration, not fixed product capacities.
+
+Current Windows reports expose `VK_EXT_descriptor_heap` on RDNA 3-class and newer devices, while the
+checked Radeon RX 6000 and Radeon 600M reports do not, even when their mapped heaps are large enough.
+With Mesa
+[RADV 26.2 or newer](https://docs.mesa3d.org/relnotes/26.2.0.html), Steam Deck has all required device
+extensions. Linux/SteamOS window presentation is not implemented yet and is planned for a near-term update.
 
 Reports for [RDNA 3 on Adrenalin 26.8.1](https://vulkan.gpuinfo.org/displayreport.php?id=51443)
-and [RDNA 4 on Adrenalin 26.7.1](https://vulkan.gpuinfo.org/displayreport.php?id=51293) advertise all
+and [RDNA 3 integrated graphics on Adrenalin 26.6.1](https://vulkan.gpuinfo.org/displayreport.php?id=49646),
+plus [RDNA 4 on Adrenalin 26.7.1](https://vulkan.gpuinfo.org/displayreport.php?id=51293), advertise all
 required device functionality. AMD exposes the promoted `VK_KHR_surface_maintenance1` and
 `VK_KHR_swapchain_maintenance1` names; the backend accepts these as well as the original EXT names.
 Both KHR extensions are no-functional-change promotions:
