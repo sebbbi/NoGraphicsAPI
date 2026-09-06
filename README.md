@@ -202,7 +202,7 @@ and [NVIDIA 616.64 WHQL](https://us.download.nvidia.com/Windows/616.64/616.64-wi
 | AMD RDNA 3 (dGPU) | Windows / Adrenalin 26.9.1 | [Radeon RX 7000](https://vulkan.gpuinfo.org/displayreport.php?id=51443) | PCIe ReBAR | Supported |
 | AMD RDNA 3 (iGPU) | Windows / Adrenalin 26.9.1 | [Radeon 700M](https://vulkan.gpuinfo.org/displayreport.php?id=49646) | UMA | Supported |
 | AMD RDNA 4 (dGPU) | Windows / Adrenalin 26.9.1 | [Radeon RX 9000](https://vulkan.gpuinfo.org/displayreport.php?id=51293) | PCIe ReBAR | Supported |
-| NVIDIA Turing (dGPU) | Windows / NVIDIA 616.64 | [GeForce RTX 16][turing-16] / [GeForce RTX 20][turing-20] | 🔴 [256 MiB fixed BAR][turing-rebar] (214 MiB exposed) | Supported |
+| NVIDIA Turing (dGPU) | Windows / NVIDIA 616.64 | [GeForce GTX 16][turing-16] / [GeForce RTX 20][turing-20] | 🔴 [256 MiB fixed BAR][turing-rebar] (214 MiB exposed) | Supported |
 | NVIDIA Ampere (dGPU) | Windows / NVIDIA 616.64 | [GeForce RTX 30](https://vulkan.gpuinfo.org/displayreport.php?id=51549) | PCIe ReBAR | Supported |
 | NVIDIA Ada Lovelace (dGPU) | Windows / NVIDIA 616.64 | [GeForce RTX 40](https://vulkan.gpuinfo.org/displayreport.php?id=51469) | PCIe ReBAR | Supported |
 | NVIDIA Blackwell (dGPU) | Windows / NVIDIA 616.64 | [GeForce RTX 50](https://vulkan.gpuinfo.org/displayreport.php?id=51573) | PCIe ReBAR | Supported |
