@@ -24,7 +24,7 @@ endfunction()
 
 NoGraphicsAPI_require_tool_version(
     "${NOGRAPHICSAPI_SLANGC}" -version Slang 2026.14.1
-    "([0-9]+\\.[0-9]+\\.[0-9]+)")
+    "([0-9]+\\.[0-9]+(\\.[0-9]+)?)")
 NoGraphicsAPI_require_tool_version(
     "${NOGRAPHICSAPI_SPIRV_VAL}" --version SPIRV-Tools 2026.3
     "SPIRV-Tools v([0-9]+\\.[0-9]+)")
