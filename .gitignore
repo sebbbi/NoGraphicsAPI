@@ -1,6 +1,6 @@
 /build*/
 /cmake-build*/
-/.vs/
+/.vs*/
 CMakeFiles/
 /CMakeCache.txt
 /cmake_install.cmake

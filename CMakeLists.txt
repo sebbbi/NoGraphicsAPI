@@ -31,6 +31,8 @@ function(NoGraphicsAPI_disable_exceptions target)
 endfunction()
 
 find_package(Vulkan 1.4.357 REQUIRED)
+message(STATUS "Using Vulkan ${Vulkan_VERSION}: ${Vulkan_LIBRARY}")
+message(STATUS "Using Vulkan headers: ${Vulkan_INCLUDE_DIR}")
 
 add_library(NoGraphicsAPI STATIC
     include/NoGraphicsAPI/NoGraphicsAPI.hpp
