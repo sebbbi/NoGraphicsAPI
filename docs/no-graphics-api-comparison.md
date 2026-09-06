@@ -80,8 +80,8 @@ fixed-16-byte bump and reusable allocation policies, or applications may supply 
 `GpuCpuRange<T>::size` is measured in bytes.
 
 As in the post, GPU pointers are raw capabilities rather than tracked references. The application
-must synchronize suballocation mutation or reuse. A heap may be destroyed after its final use is
-recorded; the backend retires it after completion. A `GpuRange` adds neither bounds checking nor ownership.
+must synchronize suballocation mutation, reuse, and lifetime. A `GpuRange` adds neither bounds
+checking nor ownership.
 
 ## Application-owned descriptor heaps
 
@@ -175,9 +175,8 @@ command buffers begun since the preceding submission, in the supplied order.
 
 Applications provide a monotonically increasing `TimelinePoint` with every submission. Polling or
 waiting that point controls reuse of application-owned heap ranges, texture placements, descriptor
-slots, and readback data. Internal command-context and Vulkan-object retirement uses a separate
-private timeline. This keeps frames asynchronous and matches the post's recommendation that
-completion be explicit.
+slots, and readback data. Internal command-context reuse uses a separate private timeline. This keeps
+frames asynchronous and matches the post's recommendation that completion be explicit.
 
 `VK_KHR_device_address_commands` extends the GPU-pointer model into command processing. Index data,
 indirect argument records, and copy operands are supplied as `GpuRange` values and passed to Vulkan
@@ -199,9 +198,8 @@ contains no texture suballocator or dependency tracking.
 
 There are no CPU-visible or readback texture heaps. Texture upload and readback use
 `copy_memory_to_texture()` and `copy_texture_to_memory()` with buffer-backed `GpuRange` storage.
-Destroying the wrapper does not make an in-flight placement reusable; the application retires that
-range with its submission timeline. Every sampled or storage descriptor remains separately owned
-and placed by the application.
+The application retires in-flight placements with its submission timeline. Every sampled or storage
+descriptor remains separately owned and placed by the application.
 
 Presentation is outside the post. The project adds a compact Win32 swapchain boundary with explicit
 extent query, acquire, and present operations. WSI synchronization, transitions, and recreation stay

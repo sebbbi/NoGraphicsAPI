@@ -90,10 +90,10 @@ bool test_descriptor_heaps(gpu::Device* device, const gpu::DeviceCaps& caps, gpu
         .semaphore = timeline,
         .value = ++next_timeline_value,
     };
-    gpu::destroy_gpu_heap(texture_heap);
-    gpu::destroy_gpu_heap(sampler_heap);
     gpu::submit({commands}, completion);
     gpu::wait_timeline(completion);
+    gpu::destroy_gpu_heap(texture_heap);
+    gpu::destroy_gpu_heap(sampler_heap);
     return true;
 }
 
@@ -336,6 +336,8 @@ bool test_placed_textures(gpu::Device* device,
         .semaphore = timeline,
         .value = ++next_timeline_value,
     };
+    gpu::submit({commands}, final_completion);
+    gpu::wait_timeline(final_completion);
     gpu::destroy_render_view(depth_stencil_render_view);
     gpu::destroy_render_view(color_render_view);
     gpu::destroy_texture(depth_stencil);
@@ -347,8 +349,6 @@ bool test_placed_textures(gpu::Device* device,
     gpu::destroy_texture(first);
     gpu::destroy_texture_heap(recording_heap);
     gpu::destroy_texture_heap(texture_heap);
-    gpu::submit({commands}, final_completion);
-    gpu::wait_timeline(final_completion);
     return true;
 }
 
@@ -400,6 +400,7 @@ int main()
         return 1;
     }
 
+    gpu::wait_timeline(final_completion);
     gpu::destroy_timeline_semaphore(timeline);
     gpu::destroy_device(device);
     return 0;

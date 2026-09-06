@@ -1,4 +1,5 @@
 #include <NoGraphicsAPIUtility/bump_allocator.hpp>
+#include <NoGraphicsAPIUtility/fixed_function.hpp>
 #include <NoGraphicsAPIUtility/heap_allocator.hpp>
 #include <NoGraphicsAPIUtility/texture_allocator.hpp>
 
@@ -24,6 +25,8 @@ static_assert(std::is_same_v<decltype(std::declval<gpu::GpuCpuRange<std::uint32_
 static_assert(std::is_same_v<decltype(std::declval<gpu::GpuCpuRange<std::uint32_t>>().gpu), std::uint32_t*>);
 static_assert(std::is_same_v<decltype(std::declval<gpu::HeapAllocator&>().allocate<std::uint32_t>(1)), gpu::HeapAllocation<std::uint32_t>>);
 static_assert(std::is_same_v<decltype(std::declval<gpu::BumpAllocator&>().allocate<std::uint32_t>(1)), gpu::GpuCpuRange<std::uint32_t>>);
+static_assert(!std::is_copy_constructible_v<gpu::FixedFunction<128>>);
+static_assert(!std::is_move_constructible_v<gpu::FixedFunction<128>>);
 
 namespace
 {
@@ -58,6 +61,32 @@ bool check_gpu_cpu_range_defaults() noexcept
     CHECK(!allocation.cpu && !allocation.gpu && allocation.size == 0);
     CHECK(empty(heap_allocation));
     CHECK(!placed_texture.texture && placed_texture.token == 0);
+    return true;
+}
+
+struct FullFixedFunctionCallback
+{
+    std::byte padding[128 - sizeof(std::uint32_t*)]{};
+    std::uint32_t* invocation_count = nullptr;
+
+    void operator()() noexcept
+    {
+        ++*invocation_count;
+    }
+};
+
+static_assert(sizeof(FullFixedFunctionCallback) == 128);
+
+bool check_fixed_function() noexcept
+{
+    std::uint32_t invocation_count = 0;
+    gpu::FixedFunction<128> callback;
+    callback.set(FullFixedFunctionCallback{.invocation_count = &invocation_count});
+    callback();
+    callback.clear();
+    callback.set([&invocation_count]() noexcept { invocation_count += 2; });
+    callback();
+    CHECK(invocation_count == 3);
     return true;
 }
 
@@ -250,7 +279,7 @@ bool check_maximum_heap_range() noexcept
 
 int main()
 {
-    if (!check_gpu_cpu_range_defaults() || !check_heap_allocator_basics() || !check_heap_allocator_address_domains() ||
+    if (!check_gpu_cpu_range_defaults() || !check_fixed_function() || !check_heap_allocator_basics() || !check_heap_allocator_address_domains() ||
         !check_heap_allocator_limit_and_move() || !check_typed_allocations() || !check_heap_allocator_fragmentation() || !check_bump_allocator() ||
         !check_maximum_heap_range())
         return 1;

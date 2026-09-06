@@ -1,11 +1,9 @@
 #pragma once
 
 #include <NoGraphicsAPI/NoGraphicsAPI.hpp>
+#include <NoGraphicsAPIUtility/fixed_function.hpp>
 
 #include <cassert>
-#include <cstddef>
-#include <new>
-#include <type_traits>
 
 namespace gpu
 {
@@ -13,6 +11,7 @@ namespace gpu
 class DeleteQueue
 {
 public:
+    // Capacity must be nonzero, every callback must run before destruction, and the timeline must be live when tick() is called.
     explicit DeleteQueue(TimelineSemaphore* timeline, uint32_t capacity) noexcept;
     ~DeleteQueue() noexcept;
 
@@ -21,17 +20,10 @@ public:
     DeleteQueue(DeleteQueue&&) = delete;
     DeleteQueue& operator=(DeleteQueue&&) = delete;
 
-    // Retire values must be enqueued in nondecreasing order.
+    // Retire values must be enqueued in nondecreasing order. Callbacks use 128 inline bytes and must satisfy FixedFunction's requirements.
     template<typename Callback>
     void defer(uint64_t retire_value, Callback callback) noexcept
     {
-        static_assert(std::is_trivially_copyable_v<Callback>);
-        static_assert(std::is_trivially_destructible_v<Callback>);
-        static_assert(std::is_nothrow_move_constructible_v<Callback>);
-        static_assert(std::is_nothrow_invocable_v<Callback&>);
-        static_assert(sizeof(Callback) <= callback_storage_size);
-        static_assert(alignof(Callback) <= alignof(std::max_align_t));
-
         assert(count_ < capacity_ && "delete queue capacity exhausted");
 
         assert((count_ == 0 || entries_[tail_ == 0 ? capacity_ - 1 : tail_ - 1].retire_value <= retire_value) &&
@@ -39,30 +31,22 @@ public:
 
         Entry& entry = entries_[tail_];
         entry.retire_value = retire_value;
-        entry.invoke = invoke_callback<Callback>;
-        ::new (static_cast<void*>(entry.callback)) Callback(static_cast<Callback&&>(callback));
+        entry.callback.set(static_cast<Callback&&>(callback));
         tail_ = tail_ + 1 == capacity_ ? 0 : tail_ + 1;
         ++count_;
     }
 
     void tick() noexcept;
+    void drain() noexcept; // Call after wait_idle() and before destroy_device(); runs every queued callback without checking the timeline.
 
 private:
-    static constexpr uint32_t callback_storage_size = 128;
-    using InvokeCallback = void (*)(void*) noexcept;
-
     struct Entry
     {
         uint64_t retire_value;
-        InvokeCallback invoke;
-        alignas(std::max_align_t) byte callback[callback_storage_size];
+        FixedFunction<128> callback;
     };
 
-    template<typename Callback>
-    static void invoke_callback(void* storage) noexcept
-    {
-        (*std::launder(reinterpret_cast<Callback*>(storage)))();
-    }
+    void collect(uint64_t completed_value) noexcept; // Callbacks cannot recursively collect the same queue.
 
     TimelineSemaphore* timeline_ = nullptr;
     Entry* entries_ = nullptr;

@@ -100,9 +100,8 @@ The public memory classes retain their intent:
 
 `GpuHeap` is an exact application-sized buffer block. GPU-only `TextureHeap` values wrap texture
 memory, `SizeAlign` reports placement requirements, and the application chooses offsets and block
-growth. Destruction invalidates the public object immediately, while native objects are retired only
-after the last relevant timeline value has completed. The initial port does not add simultaneous
-live aliasing.
+growth. Lifetime and placement policy remain application-owned. The initial port does not add
+simultaneous live aliasing.
 
 ## Root and binding ABI
 

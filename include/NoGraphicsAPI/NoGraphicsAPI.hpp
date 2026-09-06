@@ -682,6 +682,9 @@ struct RenderingDesc
     StencilAttachment stencil = {};
 };
 
+// All resource destruction is immediate. Destroy resources only when no recorded or executing GPU frame uses them.
+// The optional NoGraphicsAPIUtility DeleteQueue can defer destruction until a submitted frame completes.
+// Wait for all submitted frames to drain before destroying the device.
 [[nodiscard]] DeviceInit create_device(const DeviceDesc& desc = {}) noexcept;
 void destroy_device(Device* device) noexcept;
 [[nodiscard]] const DeviceCaps& get_device_caps(const Device* device) noexcept;

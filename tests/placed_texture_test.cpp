@@ -66,7 +66,7 @@ int main()
         gpu::DeleteQueue delete_queue(timeline, 2);
         gpu::CommandBuffer* commands = gpu::begin_commands(device);
         delete_queue.defer(1, [&allocator, &texture]() noexcept { allocator.free(texture); });
-        delete_queue.defer(2, [&callback_count]() noexcept { ++callback_count; });
+        delete_queue.defer(UINT64_MAX, [&callback_count]() noexcept { ++callback_count; });
 
         delete_queue.tick();
         exhausted = allocator.allocate(desc);
@@ -91,8 +91,8 @@ int main()
 
         commands = gpu::begin_commands(device);
         gpu::submit({commands}, {.semaphore = timeline, .value = 2});
-        gpu::wait_timeline({.semaphore = timeline, .value = 2});
-        delete_queue.tick();
+        gpu::wait_idle(device);
+        delete_queue.drain();
         delete_queue.defer(2, [&callback_count]() noexcept { ++callback_count; });
         delete_queue.defer(2, [&callback_count]() noexcept { ++callback_count; });
         delete_queue.tick();

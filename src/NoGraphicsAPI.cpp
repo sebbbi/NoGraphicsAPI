@@ -19,8 +19,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
-#include <new>
-#include <type_traits>
 #include <vector>
 
 // Keep assert expressions type-checked in release without evaluating them.
@@ -734,53 +732,18 @@ struct GpuHeapRecord;
 struct CommandContext;
 struct PresentContext;
 
-struct FixedFunction8
-{
-    using Invoke = void (*)(const void*, Device&, uint64_t) noexcept;
-
-    template<typename Callback>
-    void set(const Callback& callback) noexcept
-    {
-        static_assert(sizeof(Callback) <= sizeof(storage));
-        static_assert(alignof(Callback) <= alignof(uint64_t));
-        static_assert(std::is_trivially_copyable_v<Callback>);
-        static_assert(std::is_trivially_destructible_v<Callback>);
-        static_assert(std::is_nothrow_invocable_v<const Callback&, Device&, uint64_t>);
-        ::new (static_cast<void*>(storage)) Callback(callback);
-        invoke = [](const void* data, Device& device, uint64_t payload) noexcept {
-            (*static_cast<const Callback*>(data))(device, payload);
-        };
-    }
-
-    void operator()(Device& device, uint64_t payload) const noexcept
-    {
-        assert(invoke);
-        invoke(storage, device, payload);
-    }
-
-    void clear() noexcept
-    {
-        invoke = nullptr;
-    }
-
-    alignas(uint64_t) byte storage[sizeof(uint64_t)]{};
-    Invoke invoke = nullptr;
-};
-
-static_assert(sizeof(FixedFunction8::storage) == 8);
-
-struct DeferredDeletion
+struct DeferredSwapchainImage
 {
     uint64_t retire_value = 0;
-    uint64_t payload = 0;
-    FixedFunction8 callback;
+    VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
 };
 
-struct DeleteQueue
+struct SwapchainDeleteQueue
 {
-    template<typename Callback>
-    void push(uint64_t retire_value, uint64_t payload, const Callback& callback) noexcept
+    void push(uint64_t retire_value, VkSwapchainKHR swapchain, VkImageView view) noexcept
     {
+        assert(swapchain && view);
         if (count == entries.size())
         {
             const size_t old_size = entries.size();
@@ -795,31 +758,33 @@ struct DeleteQueue
         {
             const size_t back = (first + count - 1) % entries.size();
             assert(entries[back].retire_value <= retire_value &&
-                   "deferred deletion retire values must be monotonic");
+                   "swapchain deletion retire values must be monotonic");
         }
-        DeferredDeletion& entry = entries[(first + count) % entries.size()];
-        entry.retire_value = retire_value;
-        entry.payload = payload;
-        entry.callback.set(callback);
+        entries[(first + count) % entries.size()] = {
+            .retire_value = retire_value,
+            .swapchain = swapchain,
+            .view = view,
+        };
         ++count;
     }
 
-    void collect(Device& device, uint64_t completed_value) noexcept
+    void collect(VkDevice device, uint64_t completed_value) noexcept
     {
         while (count != 0 && entries[first].retire_value <= completed_value)
         {
-            DeferredDeletion& entry = entries[first];
-            entry.callback(device, entry.payload);
-            entry.callback.clear();
-            entry.retire_value = 0;
-            entry.payload = 0;
+            const DeferredSwapchainImage& entry = entries[first];
+            const bool final_image = count == 1 || entries[(first + 1) % entries.size()].swapchain != entry.swapchain;
+            vkDestroyImageView(device, entry.view, nullptr);
+            if (final_image)
+                vkDestroySwapchainKHR(device, entry.swapchain, nullptr);
+            entries[first] = {};
             first = (first + 1) % entries.size();
             --count;
         }
         if (count == 0) first = 0;
     }
 
-    std::vector<DeferredDeletion> entries;
+    std::vector<DeferredSwapchainImage> entries;
     size_t first = 0;
     size_t count = 0;
 };
@@ -975,7 +940,7 @@ struct Device
     VkSemaphore command_retirement = VK_NULL_HANDLE;
     uint64_t command_retirement_value = 0;
     uint64_t completed_command_retirement = 0;
-    detail::DeleteQueue delete_queue;
+    detail::SwapchainDeleteQueue swapchain_delete_queue;
     detail::PresentContext present_contexts[max_swapchain_images]{};
     detail::RetiredSwapchain retired_swapchains[max_swapchain_images]{};
     Swapchain* swapchain = nullptr;
@@ -1138,13 +1103,6 @@ struct Device
     [[nodiscard]] uint64_t next_command_retirement() noexcept;
     void poll_command_retirement() noexcept;
     void wait_command_retirement(uint64_t value) noexcept;
-    template<typename Callback>
-    void defer_delete(const Callback& callback, uint64_t payload = 0) noexcept
-    {
-        const uint64_t retire_value = active_command_buffers != 0 ? command_retirement_value + 1 : command_retirement_value;
-        delete_queue.push(retire_value, payload, callback);
-        delete_queue.collect(*this, completed_command_retirement);
-    }
     [[nodiscard]] Error create_present_context(detail::PresentContext& context) noexcept;
     void destroy_present_context(detail::PresentContext& context) noexcept;
     void finish_present_context(detail::PresentContext& context) noexcept;
@@ -1397,8 +1355,8 @@ Device::~Device()
     {
         drain_contexts();
         destroy_owned_swapchain(*this);
-        delete_queue.collect(*this, completed_command_retirement);
-        assert(delete_queue.count == 0);
+        swapchain_delete_queue.collect(device, completed_command_retirement);
+        assert(swapchain_delete_queue.count == 0);
     }
     destroy_command_contexts();
     for (uint32_t index = 0; index < present_context_count; ++index)
@@ -1577,7 +1535,7 @@ void Device::poll_command_retirement() noexcept
         return;
     completed_command_retirement = completed;
     reset_retired_command_contexts();
-    delete_queue.collect(*this, completed_command_retirement);
+    swapchain_delete_queue.collect(device, completed_command_retirement);
 }
 
 void Device::wait_command_retirement(uint64_t value) noexcept
@@ -1586,7 +1544,7 @@ void Device::wait_command_retirement(uint64_t value) noexcept
     if (value <= completed_command_retirement)
     {
         reset_retired_command_contexts();
-        delete_queue.collect(*this, completed_command_retirement);
+        swapchain_delete_queue.collect(device, completed_command_retirement);
         return;
     }
     const VkSemaphoreWaitInfo wait_info{
@@ -1598,7 +1556,7 @@ void Device::wait_command_retirement(uint64_t value) noexcept
     require_vk(vkWaitSemaphores(device, &wait_info, UINT64_MAX));
     completed_command_retirement = value;
     reset_retired_command_contexts();
-    delete_queue.collect(*this, completed_command_retirement);
+    swapchain_delete_queue.collect(device, completed_command_retirement);
 }
 
 uint64_t Device::next_command_retirement() noexcept
@@ -1694,20 +1652,16 @@ void Device::poll_present_contexts() noexcept
 void Device::queue_retired_swapchain(
     detail::RetiredSwapchain& retired) noexcept
 {
-    assert(retired.handle);
+    assert(retired.handle && retired.view_count != 0);
+    assert(active_command_buffers == 0 && "swapchain retirement is not allowed while a command buffer is recording");
     for (uint32_t index = 0; index < retired.view_count; ++index)
     {
         const VkImageView view = retired.views[index];
         assert(view);
-        defer_delete([view](Device& owner, uint64_t) noexcept {
-            vkDestroyImageView(owner.device, view, nullptr);
-        });
+        swapchain_delete_queue.push(command_retirement_value, retired.handle, view);
     }
-    const VkSwapchainKHR handle = retired.handle;
-    defer_delete([handle](Device& owner, uint64_t) noexcept {
-        vkDestroySwapchainKHR(owner.device, handle, nullptr);
-    });
     retired = {};
+    swapchain_delete_queue.collect(device, completed_command_retirement);
 }
 
 void Device::drain_contexts() noexcept
@@ -1721,7 +1675,7 @@ void Device::drain_contexts() noexcept
     {
         assert(!retired.handle);
     }
-    delete_queue.collect(*this, completed_command_retirement);
+    swapchain_delete_queue.collect(device, completed_command_retirement);
 }
 
 GpuHeap Device::allocate_gpu_heap(VkDeviceSize size, MemoryType memory) noexcept
@@ -1829,7 +1783,7 @@ void Device::release_gpu_heap(const GpuHeap& heap) noexcept
     detail::GpuHeapRecord* record = static_cast<detail::GpuHeapRecord*>(owner->object);
     assert(&record->owner == owner && record->state == this && "destroy_gpu_heap owner does not match its device");
     record->owner = {};
-    defer_delete([record](Device&, uint64_t) noexcept { delete record; });
+    delete record;
 }
 
 struct Texture
@@ -2637,9 +2591,7 @@ void destroy_timeline_semaphore(TimelineSemaphore* semaphore) noexcept
     semaphore->semaphore = VK_NULL_HANDLE;
     semaphore->state = nullptr;
     delete semaphore;
-    device->defer_delete([handle](Device& owner, uint64_t) noexcept {
-        vkDestroySemaphore(owner.device, handle, nullptr);
-    });
+    vkDestroySemaphore(device->device, handle, nullptr);
 }
 
 uint64_t timeline_completed_value(const TimelineSemaphore* semaphore) noexcept
@@ -3211,9 +3163,7 @@ void destroy_texture_heap(const TextureHeap& heap) noexcept
     assert(device && owner->memory && heap.size != 0 && "destroy_texture_heap requires a live heap returned by create_texture_heap");
     const VkDeviceMemory memory = owner->memory;
     delete owner;
-    device->defer_delete([memory](Device& owner, uint64_t) noexcept {
-        owner.free_memory(memory);
-    });
+    device->free_memory(memory);
 }
 
 SizeAlign get_texture_size_align(Device* device, const TextureDesc& desc) noexcept
@@ -4016,11 +3966,7 @@ void destroy_texture(Texture* texture) noexcept
     delete texture;
 
     if (image)
-    {
-        device->defer_delete([image](Device& owner, uint64_t) noexcept {
-            vkDestroyImage(owner.device, image, nullptr);
-        });
-    }
+        vkDestroyImage(device->device, image, nullptr);
 }
 
 void destroy_render_view(RenderView* render_view) noexcept
@@ -4034,9 +3980,7 @@ void destroy_render_view(RenderView* render_view) noexcept
     const VkImageView view = render_view->view;
     *render_view = {};
     delete render_view;
-    device->defer_delete([view](Device& owner, uint64_t) noexcept {
-        vkDestroyImageView(owner.device, view, nullptr);
-    });
+    vkDestroyImageView(device->device, view, nullptr);
 }
 
 void destroy_pso(PSO* pso) noexcept
@@ -4050,9 +3994,7 @@ void destroy_pso(PSO* pso) noexcept
     pso->state = nullptr;
     pso->pso = VK_NULL_HANDLE;
     delete pso;
-    device->defer_delete([handle](Device& owner, uint64_t) noexcept {
-        vkDestroyPipeline(owner.device, handle, nullptr);
-    });
+    vkDestroyPipeline(device->device, handle, nullptr);
 }
 
 void bind_pso(CommandBuffer* commands, const PSO* pso) noexcept

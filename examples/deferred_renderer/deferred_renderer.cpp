@@ -351,8 +351,8 @@ int main()
         submit_and_present(device, {commands}, latest_completion);
     }
 
-    wait_timeline(latest_completion);
-    delete_queue.tick();
+    wait_idle(device);
+    delete_queue.drain();
 
     // Cleanup
     destroy_timeline_semaphore(latest_completion.semaphore);

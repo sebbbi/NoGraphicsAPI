@@ -32,7 +32,7 @@ conventional feature checked by device creation.
 | [`VK_EXT_mesh_shader`][mesh-shader] | Direct and indirect mesh-workgroup draws. Task shaders are unsupported. |
 | Buffer device address | Gives GPU heaps 64-bit shader addresses for their lifetime and enables typed pointer fields in shared structures. |
 | Vulkan 1.3 `synchronization2` and `dynamicRendering` | Resource-free barriers and rendering without render-pass or framebuffer objects. |
-| Timeline semaphores | Application-visible completion points plus private command and object retirement. |
+| Timeline semaphores | Application-visible completion points plus private command-context retirement. |
 | Shader and layout features | Scalar layout, float16, 16-bit push/storage access, draw parameters, independent blending, and formatless storage-image access. |
 | Texture features | At least BC or ASTC LDR compression; exact format and usage support remains queryable. |
 | Win32 WSI | `VK_KHR_surface`, `VK_KHR_win32_surface`, `VK_KHR_swapchain`, and the maintenance extensions listed below. |
@@ -78,9 +78,8 @@ struct Root
 
 The shared ABI requires a 64-bit pointer target. The GPU dereferences pointers through the
 `SPV_KHR_physical_storage_buffer` model, while the CPU treats GPU addresses as opaque values.
-Pointer targets need valid, stable storage through GPU completion. Destroying a whole `GpuHeap`
-after its final use is recorded defers physical Vulkan destruction, but reuse of an
-application-managed suballocation remains the application's timeline responsibility.
+Pointer targets need valid, stable storage through GPU completion. Suballocation reuse and owning
+heap lifetime are the application's timeline responsibility.
 
 Commands that need an address and byte count accept `GpuRange`. The backend passes that numeric
 address directly to Vulkan; command recording does not recover a public buffer object or retain its
@@ -140,9 +139,8 @@ the same allocator after GPU use has completed. The API does not track texture-t
 texture-to-descriptor dependencies.
 
 Texture upload and readback go through buffer-backed `GpuRange` values with
-`copy_memory_to_texture()` and `copy_texture_to_memory()`. Destroying a texture defers the Vulkan
-image destruction, but the application must still wait for its timeline point before recycling the
-corresponding texture-heap range.
+`copy_memory_to_texture()` and `copy_texture_to_memory()`. The application retires texture-heap ranges
+with its submission timeline.
 
 ## Root ABI
 
@@ -217,15 +215,11 @@ last used mutable upload data, readback storage, a texture placement, indirect a
 descriptor slot before modifying or recycling it.
 
 The optional utility `DeleteQueue` runs deferred callbacks once their nondecreasing application
-timeline values complete. Applications normally tick it once per frame and destroy directly after
-draining the GPU at shutdown.
+timeline values complete. Applications normally tick it once per frame. At shutdown, call
+`wait_idle()` and then drain the queue before destroying the device.
 
-After an object's final use has been recorded, it may be destroyed even before that command buffer
-is submitted. Its public value becomes invalid immediately, while the backend keeps the Vulkan
-object alive for the recorded work and retires it after completion. The same rule applies to whole
-heaps once no future recording or live suballocation needs them. The backend does not recycle
-application allocator entries or descriptor slots; `wait_idle()` remains an intentional whole-device
-drain.
+The backend does not recycle application allocator entries or descriptor slots; `wait_idle()` remains
+an intentional whole-device drain.
 
 For presentation, `acquire()` returns a swapchain-owned `RenderView` and extent, or an empty frame
 while the drawable extent is zero. Binary WSI semaphores remain private, while
