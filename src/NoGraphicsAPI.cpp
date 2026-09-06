@@ -3342,16 +3342,16 @@ void write_sampler_descriptor(Device* device, void* cpu_destination, const Sampl
 namespace
 {
 
-VkStencilOpState to_vk(const StencilFaceState& state, uint8_t compare_mask, uint8_t write_mask) noexcept
+VkStencilOpState to_vk(const StencilFaceState& state) noexcept
 {
     return {
         .failOp = to_vk(state.fail),
         .passOp = to_vk(state.pass),
         .depthFailOp = to_vk(state.depth_fail),
         .compareOp = to_vk(state.compare),
-        .compareMask = compare_mask,
-        .writeMask = write_mask,
-        .reference = state.reference,
+        .compareMask = 0,
+        .writeMask = 0,
+        .reference = 0,
     };
 }
 
@@ -3362,7 +3362,6 @@ PSO* create_raster_pso(Device* device,
                        Format depth_format,
                        Format stencil_format,
                        const RasterizationState& rasterization_state,
-                       const DepthStencilState& depth_stencil_state,
                        bool mesh) noexcept
 {
     assert(device && "PSO creation called with a null device");
@@ -3377,12 +3376,6 @@ PSO* create_raster_pso(Device* device,
     assert(valid_depth_format && "PSO depth format has no depth aspect");
     assert(valid_stencil_format && "PSO stencil format has no stencil aspect");
     assert(matching_depth_stencil && "PSO depth and stencil formats must match when both are present");
-    const bool valid_depth_write = !depth_stencil_state.depth_write || depth_stencil_state.depth_test;
-    const bool depth_state_has_attachment = (!depth_stencil_state.depth_test && !depth_stencil_state.depth_write) || depth_enabled;
-    const bool stencil_state_has_attachment = !depth_stencil_state.stencil_test || stencil_enabled;
-    assert(valid_depth_write && "depth writes require depth testing");
-    assert(depth_state_has_attachment && "enabled depth state requires a PSO depth format");
-    assert(stencil_state_has_attachment && "enabled stencil state requires a PSO stencil format");
 
     for (size_t index = 0; index < color_targets.size; ++index)
     {
@@ -3434,8 +3427,6 @@ PSO* create_raster_pso(Device* device,
     };
     const VkPipelineViewportStateCreateInfo viewport_state{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-        .viewportCount = 1,
-        .scissorCount = 1,
     };
     const VkPipelineRasterizationStateCreateInfo rasterization{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
@@ -3456,12 +3447,6 @@ PSO* create_raster_pso(Device* device,
     };
     const VkPipelineDepthStencilStateCreateInfo depth_stencil{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-        .depthTestEnable = depth_stencil_state.depth_test,
-        .depthWriteEnable = depth_stencil_state.depth_write,
-        .depthCompareOp = to_vk(depth_stencil_state.depth_compare),
-        .stencilTestEnable = depth_stencil_state.stencil_test,
-        .front = to_vk(depth_stencil_state.front, depth_stencil_state.stencil_read_mask, depth_stencil_state.stencil_write_mask),
-        .back = to_vk(depth_stencil_state.back, depth_stencil_state.stencil_read_mask, depth_stencil_state.stencil_write_mask),
     };
     VkPipelineColorBlendAttachmentState color_attachments[max_color_attachments]{};
     for (size_t index = 0; index < color_targets.size; ++index)
@@ -3484,8 +3469,16 @@ PSO* create_raster_pso(Device* device,
         .pAttachments = color_targets.size ? color_attachments : nullptr,
     };
     constexpr VkDynamicState dynamic_states[]{
-        VK_DYNAMIC_STATE_VIEWPORT,
-        VK_DYNAMIC_STATE_SCISSOR,
+        VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT,
+        VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT,
+        VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE,
+        VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE,
+        VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,
+        VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE,
+        VK_DYNAMIC_STATE_STENCIL_OP,
+        VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
+        VK_DYNAMIC_STATE_STENCIL_WRITE_MASK,
+        VK_DYNAMIC_STATE_STENCIL_REFERENCE,
     };
     const VkPipelineDynamicStateCreateInfo dynamic_state{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
@@ -3546,7 +3539,6 @@ PSO* create_graphics_pso(Device* device, const GraphicsPSODesc& desc) noexcept
                              desc.depth_format,
                              desc.stencil_format,
                              desc.rasterization,
-                             desc.depth_stencil,
                              false);
 }
 
@@ -3559,7 +3551,6 @@ PSO* create_mesh_pso(Device* device, const MeshPSODesc& desc) noexcept
                              desc.depth_format,
                              desc.stencil_format,
                              desc.rasterization,
-                             desc.depth_stencil,
                              true);
 }
 
@@ -4153,6 +4144,57 @@ void set_sampler_descriptor_heap(CommandBuffer* commands, GpuRange heap) noexcep
     commands->state->fn.cmd_bind_sampler_heap(commands->command_buffer, &bind_info);
 }
 
+void set_viewport(CommandBuffer* commands, const Viewport& viewport) noexcept
+{
+    const bool valid = commands && commands->recording;
+    assert(valid && "set_viewport requires a recording command buffer");
+    const VkViewport vk_viewport{
+        .x = viewport.x,
+        .y = viewport.y,
+        .width = viewport.width,
+        .height = viewport.height,
+        .minDepth = viewport.min_depth,
+        .maxDepth = viewport.max_depth,
+    };
+    vkCmdSetViewportWithCount(commands->command_buffer, 1, &vk_viewport);
+}
+
+void set_scissor(CommandBuffer* commands, const Scissor& scissor) noexcept
+{
+    const bool valid = commands && commands->recording;
+    assert(valid && "set_scissor requires a recording command buffer");
+    const VkRect2D vk_scissor{
+        .offset = {.x = scissor.x, .y = scissor.y},
+        .extent = {.width = scissor.width, .height = scissor.height},
+    };
+    vkCmdSetScissorWithCount(commands->command_buffer, 1, &vk_scissor);
+}
+
+void set_depth_stencil(CommandBuffer* commands, const DepthStencilState& state) noexcept
+{
+    const bool valid = commands && commands->recording;
+    assert(valid && "set_depth_stencil requires a recording command buffer");
+
+    vkCmdSetDepthTestEnable(commands->command_buffer, state.depth_test);
+    if (state.depth_test)
+    {
+        vkCmdSetDepthWriteEnable(commands->command_buffer, state.depth_write);
+        vkCmdSetDepthCompareOp(commands->command_buffer, to_vk(state.depth_compare));
+    }
+    vkCmdSetStencilTestEnable(commands->command_buffer, state.stencil_test);
+    if (!state.stencil_test)
+        return;
+
+    const VkStencilOpState front = to_vk(state.front);
+    const VkStencilOpState back = to_vk(state.back);
+    vkCmdSetStencilOp(commands->command_buffer, VK_STENCIL_FACE_FRONT_BIT, front.failOp, front.passOp, front.depthFailOp, front.compareOp);
+    vkCmdSetStencilOp(commands->command_buffer, VK_STENCIL_FACE_BACK_BIT, back.failOp, back.passOp, back.depthFailOp, back.compareOp);
+    vkCmdSetStencilCompareMask(commands->command_buffer, VK_STENCIL_FACE_FRONT_AND_BACK, state.stencil_read_mask);
+    vkCmdSetStencilWriteMask(commands->command_buffer, VK_STENCIL_FACE_FRONT_AND_BACK, state.stencil_write_mask);
+    vkCmdSetStencilReference(commands->command_buffer, VK_STENCIL_FACE_FRONT_BIT, state.front.reference);
+    vkCmdSetStencilReference(commands->command_buffer, VK_STENCIL_FACE_BACK_BIT, state.back.reference);
+}
+
 void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc) noexcept
 {
     const bool valid = commands && commands->recording && !commands->rendering &&
@@ -4256,16 +4298,9 @@ void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc) noexc
     };
     vkCmdBeginRendering(commands->command_buffer, &rendering_info);
 
-    const VkViewport viewport{
-        .width = static_cast<float>(width),
-        .height = static_cast<float>(height),
-        .maxDepth = 1.0f,
-    };
-    const VkRect2D scissor{
-        .extent = {.width = width, .height = height},
-    };
-    vkCmdSetViewport(commands->command_buffer, 0, 1, &viewport);
-    vkCmdSetScissor(commands->command_buffer, 0, 1, &scissor);
+    set_viewport(commands, {.width = static_cast<float>(width), .height = static_cast<float>(height)});
+    set_scissor(commands, {.width = width, .height = height});
+    set_depth_stencil(commands, {});
     commands->rendering = true;
 }
 

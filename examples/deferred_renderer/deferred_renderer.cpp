@@ -199,7 +199,6 @@ int main()
         },
         .depth_format = Format::d32_float,
         .rasterization = { .cull = CullMode::clockwise },
-        .depth_stencil = { .depth_test = true, .depth_write = true }
     });
 
     PSO* deferred_lighting_pso = create_graphics_pso(device, {
@@ -290,6 +289,7 @@ int main()
             },
         });
 
+        set_depth_stencil(commands, {.depth_test = true, .depth_write = true});
         bind_pso(commands, gbuffer_pso);
 
         float4x4 projection = math::perspective_rh_zo(math::pi / 3.0f, float(extent.x) / float(extent.y), 0.3f, 1500.0f);

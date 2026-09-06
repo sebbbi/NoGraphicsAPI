@@ -24,8 +24,8 @@ implemented; [the Metal 4 design](docs/metal-porting.md) records the proposed ma
 - **Barriers describe execution and memory hazards.** The public API exposes global stage/access
   barriers, not per-resource transition lists. Normal textures remain in one unified layout.
 - **Pipeline binding state stays small.** There are no public buffer objects, descriptor sets,
-  descriptor layouts, pipeline layouts, or sampler objects. PSOs contain shader and fixed-function
-  state, while data arrives through the root and descriptor heaps.
+  descriptor layouts, pipeline layouts, or sampler objects. Viewport, scissor, and exposed
+  depth/stencil behavior are command state rather than PSO permutations, while data arrives through the root and descriptor heaps.
 - **Submission is explicit and asynchronous.** Applications provide timeline points for reuse and
   deferred destruction. Submitted command buffers are one-shot.
 
@@ -227,8 +227,8 @@ but this repository currently lacks Linux swap chain support (to be implemented)
 ## Current scope
 
 Implemented today: graphics, mesh, and compute PSOs; direct and indirect work; GPU-address copies;
-application-owned descriptor heaps; common texture types and views; dynamic rendering; global
-barriers; timeline submission; deferred destruction; and Win32 presentation.
+application-owned descriptor heaps; common texture types and views; dynamic rendering and
+viewport/scissor/depth-stencil state; global barriers; timeline submission; deferred destruction; and Win32 presentation.
 
 This is a deliberately single-threaded, single-queue prototype and a low-level thin wrapper, not a
 validation layer. API preconditions are generally enforced by debug assertions; use the Vulkan

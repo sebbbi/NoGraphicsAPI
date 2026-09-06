@@ -32,6 +32,7 @@ conventional feature checked by device creation.
 | [`VK_EXT_mesh_shader`][mesh-shader] | Direct and indirect mesh-workgroup draws. Task shaders are unsupported. |
 | Buffer device address | Gives GPU heaps 64-bit shader addresses for their lifetime and enables typed pointer fields in shared structures. |
 | Vulkan 1.3 `synchronization2` and `dynamicRendering` | Resource-free barriers and rendering without render-pass or framebuffer objects. |
+| Core Vulkan dynamic state | Command-set viewport, scissor, and exposed depth/stencil state. |
 | Timeline semaphores | Application-visible completion points plus private command-context retirement. |
 | Shader and layout features | Scalar layout, float16, 16-bit push/storage access, draw parameters, independent blending, and formatless storage-image access. |
 | Texture features | At least BC or ASTC LDR compression; exact format and usage support remains queryable. |
@@ -192,12 +193,15 @@ for actual read/write hazards and use timeline points for reuse of mutable CPU/G
 
 Graphics, mesh, and compute PSOs consume SPIR-V directly. Vulkan 1.4 maintenance5 lets pipeline
 stages take inline `VkShaderModuleCreateInfo`, and descriptor-heap pipelines need no pipeline
-layout. The public PSO descriptions retain only the fixed-function state used by the project.
+layout. Graphics and mesh PSOs retain attachment compatibility, rasterization, and blend state;
+viewport, scissor, and the public depth/stencil state are set independently on the command buffer.
 
 Rendering uses `vkCmdBeginRendering` and `vkCmdEndRendering`. `RenderView` represents the persistent
 image view needed for attachment use, but there is no render-pass or framebuffer object. Attachment
 load/store state and clears are specified at the rendering call. Barriers remain explicit and are
-not implied by rendering boundaries.
+not implied by rendering boundaries. Each `begin_render_pass()` sets a full render-area viewport and
+scissor and disables depth/stencil, preventing state from leaking between passes. Applications call
+`set_viewport()`, `set_scissor()`, or `set_depth_stencil()` after beginning a pass to override those defaults.
 
 The raster path has empty fixed vertex input because shaders fetch through GPU pointers. Mesh PSOs
 use `VK_EXT_mesh_shader` and support direct and indirect meshlet draws. Both paths share the same
