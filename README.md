@@ -216,8 +216,8 @@ floor: it lacks all four new extensions and exposes a 214 MiB fixed BAR.
 Intel Windows support is not verified. The latest public
 [Arc report](https://vulkan.gpuinfo.org/displayreport.php?id=51355) lacks the descriptor-heap,
 device-address-command, and shader-untyped-pointer extensions. Mesa ANV
-[26.2 or newer](https://docs.mesa3d.org/relnotes/26.2.0.html) exposes the required extensions, but this
-repository currently supports only headless use outside Windows.
+[26.2 or newer](https://docs.mesa3d.org/relnotes/26.2.0.html) exposes the required extensions on Linux,
+but this repository currently lacks Linux swap chain support (to be implemented).
 
 [rdna2-rebar]: https://vulkan.gpuinfo.org/displayreport.php?id=42800
 [rdna2-fixed]: https://vulkan.gpuinfo.org/displayreport.php?id=48951
