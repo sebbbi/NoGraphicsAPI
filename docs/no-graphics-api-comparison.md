@@ -20,7 +20,7 @@ implementation copies a small CPU root structure into Vulkan push-data state.
 | Samplers | Adapted | An application-owned sampler descriptor heap replaces the post's Metal-style embedded samplers. |
 | Root data | Adapted | CPU root bytes are copied with `vkCmdPushDataEXT`; the post passes GPU root pointers. |
 | Pipeline binding model | Direct | Pipelines use no descriptor-set layout, pipeline layout, or resource signature. |
-| Raster state | Partial | Fixed render state remains baked into PSOs rather than split or dynamic as explored by the post. |
+| Raster state | Partial | Viewport, scissor, and exposed depth/stencil behavior are command state; rasterization and blending remain baked into PSOs. |
 | Barriers | Direct in spirit | One global dependency names stages and accesses, with no resource or image-layout lists. |
 | Textures | Mostly direct | The application places opaque textures in its own GPU-only texture heap, restricted to one device-selected memory type. |
 | Commands and completion | Mostly direct | One-shot command buffers and caller-owned timeline points provide asynchronous reuse tracking. |
@@ -40,9 +40,9 @@ The backend requires Vulkan 1.4 and four device extensions:
 texture model. The public API does not expose layouts either way.
 
 The Win32 presentation path additionally uses `VK_KHR_surface`, `VK_KHR_win32_surface`,
-`VK_KHR_get_surface_capabilities2`, `VK_EXT_surface_maintenance1`, `VK_KHR_swapchain`, and
-`VK_EXT_swapchain_maintenance1`. `VK_EXT_debug_utils` is enabled when available for validation
-diagnostics.
+`VK_KHR_get_surface_capabilities2`, `VK_KHR_surface_maintenance1`, `VK_KHR_swapchain`, and
+`VK_KHR_swapchain_maintenance1`, with the original EXT maintenance variants accepted as a paired
+fallback. `VK_EXT_debug_utils` is enabled when available for validation diagnostics.
 
 Vulkan core features provide buffer device addresses, dynamic rendering, synchronization2, and
 maintenance5. On the shader side, ordinary GPU pointers use the SPIR-V physical-storage-buffer
@@ -80,8 +80,8 @@ fixed-16-byte bump and reusable allocation policies, or applications may supply 
 `GpuCpuRange<T>::size` is measured in bytes.
 
 As in the post, GPU pointers are raw capabilities rather than tracked references. The application
-must synchronize suballocation mutation or reuse. A heap may be destroyed after its final use is
-recorded; the backend retires it after completion. A `GpuRange` adds neither bounds checking nor ownership.
+must synchronize suballocation mutation, reuse, and lifetime. A `GpuRange` adds neither bounds
+checking nor ownership.
 
 ## Application-owned descriptor heaps
 
@@ -136,9 +136,9 @@ Vertex shaders fetch through GPU pointers, mesh shaders use the mesh path, and t
 are not declared to a pipeline. Descriptor-heap pipelines are created with a null Vulkan layout.
 
 Opaque PSO handles remain because Vulkan still compiles pipeline objects. The current prototype
-bakes raster, blend, depth/stencil, and attachment compatibility into those PSOs. That is more
-conventional than the post's permutation-reduction direction, which separates or programs more of
-this state. Dynamic rendering still removes render-pass and framebuffer objects.
+bakes rasterization, blend, and attachment compatibility into those PSOs. Viewport, scissor, and the
+public depth/stencil state are applied independently with `set_viewport()`, `set_scissor()`, and
+`set_depth_stencil()`, reducing PSO permutations. Dynamic rendering still removes render-pass and framebuffer objects.
 
 Static-constant structures are not implemented. Slang/Vulkan specialization constants do not expose
 the post's single shared C-compatible structure ABI.
@@ -175,9 +175,8 @@ command buffers begun since the preceding submission, in the supplied order.
 
 Applications provide a monotonically increasing `TimelinePoint` with every submission. Polling or
 waiting that point controls reuse of application-owned heap ranges, texture placements, descriptor
-slots, and readback data. Internal command-context and Vulkan-object retirement uses a separate
-private timeline. This keeps frames asynchronous and matches the post's recommendation that
-completion be explicit.
+slots, and readback data. Internal command-context reuse uses a separate private timeline. This keeps
+frames asynchronous and matches the post's recommendation that completion be explicit.
 
 `VK_KHR_device_address_commands` extends the GPU-pointer model into command processing. Index data,
 indirect argument records, and copy operands are supplied as `GpuRange` values and passed to Vulkan
@@ -199,9 +198,8 @@ contains no texture suballocator or dependency tracking.
 
 There are no CPU-visible or readback texture heaps. Texture upload and readback use
 `copy_memory_to_texture()` and `copy_texture_to_memory()` with buffer-backed `GpuRange` storage.
-Destroying the wrapper does not make an in-flight placement reusable; the application retires that
-range with its submission timeline. Every sampled or storage descriptor remains separately owned
-and placed by the application.
+The application retires in-flight placements with its submission timeline. Every sampled or storage
+descriptor remains separately owned and placed by the application.
 
 Presentation is outside the post. The project adds a compact Win32 swapchain boundary with explicit
 extent query, acquire, and present operations. WSI synchronization, transitions, and recreation stay
@@ -215,8 +213,8 @@ preserve the post's main model while adapting it to `VK_EXT_descriptor_heap` and
 
 **Prototype scope.** Vulkan already supports task shaders, public queue selection and multiple queues,
 GPU-addressed indirect draw counts through `vkCmdDraw*IndirectCount2KHR`, and optional BDA
-capture/replay address preservation. This backend does not expose them. Fixed render and attachment
-state in PSOs is also largely a current implementation choice.
+capture/replay address preservation. This backend does not expose them. Remaining rasterization,
+blend, and attachment state in PSOs is also largely a current implementation choice.
 
 **Available through an additional extension.** GPU-root indirect work has an existing but heavier
 path: `VK_EXT_device_generated_commands` and its descriptor-heap push-data tokens can source

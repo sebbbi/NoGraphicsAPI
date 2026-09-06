@@ -600,6 +600,24 @@ struct RasterizationState
     float depth_bias_slope = 0.0f;
 };
 
+struct Viewport
+{
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 1.0f;
+    float height = 1.0f;
+    float min_depth = 0.0f;
+    float max_depth = 1.0f;
+};
+
+struct Scissor
+{
+    int32_t x = 0;
+    int32_t y = 0;
+    uint32_t width = 1;
+    uint32_t height = 1;
+};
+
 struct StencilFaceState
 {
     CompareOp compare = CompareOp::always;
@@ -629,7 +647,6 @@ struct GraphicsPSODesc
     Format depth_format = Format::undefined;
     Format stencil_format = Format::undefined;
     RasterizationState rasterization = {};
-    DepthStencilState depth_stencil = {};
 };
 
 struct MeshPSODesc
@@ -640,7 +657,6 @@ struct MeshPSODesc
     Format depth_format = Format::undefined;
     Format stencil_format = Format::undefined;
     RasterizationState rasterization = {};
-    DepthStencilState depth_stencil = {};
 };
 
 struct ClearColor
@@ -682,6 +698,9 @@ struct RenderingDesc
     StencilAttachment stencil = {};
 };
 
+// All resource destruction is immediate. Destroy resources only when no recorded or executing GPU frame uses them.
+// The optional NoGraphicsAPIUtility DeleteQueue can defer destruction until a submitted frame completes.
+// Wait for all submitted frames to drain before destroying the device.
 [[nodiscard]] DeviceInit create_device(const DeviceDesc& desc = {}) noexcept;
 void destroy_device(Device* device) noexcept;
 [[nodiscard]] const DeviceCaps& get_device_caps(const Device* device) noexcept;
@@ -750,6 +769,11 @@ void barrier(CommandBuffer* commands, Stage before, Access before_access, Stage 
 
 void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc) noexcept;
 void end_render_pass(CommandBuffer* commands) noexcept;
+
+// begin_render_pass resets a full render-area viewport and scissor and disables depth/stencil; these commands override those defaults until the next pass
+void set_viewport(CommandBuffer* commands, const Viewport& viewport) noexcept;
+void set_scissor(CommandBuffer* commands, const Scissor& scissor) noexcept;
+void set_depth_stencil(CommandBuffer* commands, const DepthStencilState& state) noexcept;
 
 void bind_pso(CommandBuffer* commands, const PSO* pso) noexcept;
 

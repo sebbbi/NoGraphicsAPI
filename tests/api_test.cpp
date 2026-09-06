@@ -272,7 +272,8 @@ static_assert(plain_api_data<gpu::uint32x2> && plain_api_data<gpu::uint32x3> &&
               plain_api_data<gpu::TextureDescriptorDesc> && plain_api_data<gpu::TextureCopyDesc> &&
               plain_api_data<gpu::SamplerDesc> && plain_api_data<gpu::BlendComponentState> &&
               plain_api_data<gpu::BlendState> && plain_api_data<gpu::ColorTargetDesc> &&
-              plain_api_data<gpu::RasterizationState> && plain_api_data<gpu::StencilFaceState> &&
+              plain_api_data<gpu::RasterizationState> && plain_api_data<gpu::Viewport> && plain_api_data<gpu::Scissor> &&
+              plain_api_data<gpu::StencilFaceState> &&
               plain_api_data<gpu::DepthStencilState> && plain_api_data<gpu::GraphicsPSODesc> &&
               plain_api_data<gpu::MeshPSODesc> && plain_api_data<gpu::ClearColor> && plain_api_data<gpu::ColorAttachment> &&
               plain_api_data<gpu::DepthAttachment> && plain_api_data<gpu::StencilAttachment> &&
@@ -293,6 +294,10 @@ static_assert(sizeof(gpu::SwapchainFrame) == 16 && offsetof(gpu::SwapchainFrame,
 static_assert(sizeof(gpu::TextureDesc) == 32 && offsetof(gpu::TextureDesc, extent) == 4);
 static_assert(sizeof(gpu::TextureCopyDesc) == 56 && offsetof(gpu::TextureCopyDesc, offset) == 12 &&
               offsetof(gpu::TextureCopyDesc, extent) == 24);
+static_assert(sizeof(gpu::Viewport) == 24 && alignof(gpu::Viewport) == 4 &&
+              offsetof(gpu::Viewport, x) == 0 && offsetof(gpu::Viewport, min_depth) == 16);
+static_assert(sizeof(gpu::Scissor) == 16 && alignof(gpu::Scissor) == 4 &&
+              offsetof(gpu::Scissor, x) == 0 && offsetof(gpu::Scissor, width) == 8);
 static_assert(sizeof(gpu::GpuRange) == 16 && offsetof(gpu::GpuRange, gpu) == 0 &&
               offsetof(gpu::GpuRange, size) == 8);
 static_assert(sizeof(gpu::GpuCpuRange<gpu::byte>) == 24 && offsetof(gpu::GpuCpuRange<gpu::byte>, cpu) == 0 &&
@@ -382,6 +387,13 @@ static_assert(default_rasterization.cull == gpu::CullMode::none &&
               default_rasterization.depth_bias_constant == 0.0f &&
               default_rasterization.depth_bias_clamp == 0.0f &&
               default_rasterization.depth_bias_slope == 0.0f);
+constexpr gpu::Viewport default_viewport{};
+static_assert(default_viewport.x == 0.0f && default_viewport.y == 0.0f &&
+              default_viewport.width == 1.0f && default_viewport.height == 1.0f &&
+              default_viewport.min_depth == 0.0f && default_viewport.max_depth == 1.0f);
+constexpr gpu::Scissor default_scissor{};
+static_assert(default_scissor.x == 0 && default_scissor.y == 0 &&
+              default_scissor.width == 1 && default_scissor.height == 1);
 constexpr gpu::StencilFaceState default_stencil_face{};
 static_assert(default_stencil_face.compare == gpu::CompareOp::always &&
               default_stencil_face.fail == gpu::StencilOp::keep &&
@@ -461,6 +473,9 @@ using CreateComputePSOFunction = gpu::PSO* (*)(gpu::Device*, gpu::Span<const std
 using SubmitFunction = void (*)(CommandBatch, gpu::TimelinePoint) noexcept;
 using SubmitAndPresentFunction = void (*)(gpu::Device*, CommandBatch, gpu::TimelinePoint) noexcept;
 using SetHeapFunction = void (*)(gpu::CommandBuffer*, gpu::GpuRange) noexcept;
+using SetViewportFunction = void (*)(gpu::CommandBuffer*, const gpu::Viewport&) noexcept;
+using SetScissorFunction = void (*)(gpu::CommandBuffer*, const gpu::Scissor&) noexcept;
+using SetDepthStencilFunction = void (*)(gpu::CommandBuffer*, const gpu::DepthStencilState&) noexcept;
 using CopyMemoryFunction = void (*)(gpu::CommandBuffer*, gpu::GpuRange, gpu::GpuRange) noexcept;
 using CopyMemoryToTextureFunction = void (*)(gpu::CommandBuffer*, gpu::GpuRange, gpu::Texture*,
                                              const gpu::TextureCopyDesc&) noexcept;
@@ -497,6 +512,9 @@ static_assert(std::is_same_v<decltype(&gpu::submit), SubmitFunction>);
 static_assert(std::is_same_v<decltype(&gpu::submit_and_present), SubmitAndPresentFunction>);
 static_assert(std::is_same_v<decltype(&gpu::set_texture_descriptor_heap), SetHeapFunction>);
 static_assert(std::is_same_v<decltype(&gpu::set_sampler_descriptor_heap), SetHeapFunction>);
+static_assert(std::is_same_v<decltype(&gpu::set_viewport), SetViewportFunction>);
+static_assert(std::is_same_v<decltype(&gpu::set_scissor), SetScissorFunction>);
+static_assert(std::is_same_v<decltype(&gpu::set_depth_stencil), SetDepthStencilFunction>);
 static_assert(std::is_same_v<decltype(&gpu::copy_memory), CopyMemoryFunction>);
 static_assert(std::is_same_v<decltype(&gpu::copy_memory_to_texture), CopyMemoryToTextureFunction>);
 static_assert(std::is_same_v<decltype(&gpu::copy_texture_to_memory), CopyTextureToMemoryFunction>);
@@ -572,6 +590,9 @@ static_assert(std::is_constructible_v<CommandBatch, std::initializer_list<gpu::C
     gpu::begin_render_pass(a, {
                                   .colors = {{.render_view = render_view}},
                               });
+    gpu::set_viewport(a, {});
+    gpu::set_scissor(a, {});
+    gpu::set_depth_stencil(a, {});
     gpu::draw(a, root, 3);
     gpu::draw_indexed(a, root, range, gpu::IndexType::uint32, 3);
     gpu::draw_indirect(a, root, range);

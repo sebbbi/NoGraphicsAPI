@@ -22,6 +22,7 @@ endif()
 add_library(NoGraphicsAPIUtility_allocators STATIC
     include/NoGraphicsAPIUtility/bump_allocator.hpp
     include/NoGraphicsAPIUtility/delete_queue.hpp
+    include/NoGraphicsAPIUtility/fixed_function.hpp
     include/NoGraphicsAPIUtility/heap_allocator.hpp
     src/bump_allocator.cpp
     src/delete_queue.cpp

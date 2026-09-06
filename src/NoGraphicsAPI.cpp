@@ -19,8 +19,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
-#include <new>
-#include <type_traits>
 #include <vector>
 
 // Keep assert expressions type-checked in release without evaluating them.
@@ -734,53 +732,18 @@ struct GpuHeapRecord;
 struct CommandContext;
 struct PresentContext;
 
-struct FixedFunction8
-{
-    using Invoke = void (*)(const void*, Device&, uint64_t) noexcept;
-
-    template<typename Callback>
-    void set(const Callback& callback) noexcept
-    {
-        static_assert(sizeof(Callback) <= sizeof(storage));
-        static_assert(alignof(Callback) <= alignof(uint64_t));
-        static_assert(std::is_trivially_copyable_v<Callback>);
-        static_assert(std::is_trivially_destructible_v<Callback>);
-        static_assert(std::is_nothrow_invocable_v<const Callback&, Device&, uint64_t>);
-        ::new (static_cast<void*>(storage)) Callback(callback);
-        invoke = [](const void* data, Device& device, uint64_t payload) noexcept {
-            (*static_cast<const Callback*>(data))(device, payload);
-        };
-    }
-
-    void operator()(Device& device, uint64_t payload) const noexcept
-    {
-        assert(invoke);
-        invoke(storage, device, payload);
-    }
-
-    void clear() noexcept
-    {
-        invoke = nullptr;
-    }
-
-    alignas(uint64_t) byte storage[sizeof(uint64_t)]{};
-    Invoke invoke = nullptr;
-};
-
-static_assert(sizeof(FixedFunction8::storage) == 8);
-
-struct DeferredDeletion
+struct DeferredSwapchainImage
 {
     uint64_t retire_value = 0;
-    uint64_t payload = 0;
-    FixedFunction8 callback;
+    VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
 };
 
-struct DeleteQueue
+struct SwapchainDeleteQueue
 {
-    template<typename Callback>
-    void push(uint64_t retire_value, uint64_t payload, const Callback& callback) noexcept
+    void push(uint64_t retire_value, VkSwapchainKHR swapchain, VkImageView view) noexcept
     {
+        assert(swapchain && view);
         if (count == entries.size())
         {
             const size_t old_size = entries.size();
@@ -795,31 +758,33 @@ struct DeleteQueue
         {
             const size_t back = (first + count - 1) % entries.size();
             assert(entries[back].retire_value <= retire_value &&
-                   "deferred deletion retire values must be monotonic");
+                   "swapchain deletion retire values must be monotonic");
         }
-        DeferredDeletion& entry = entries[(first + count) % entries.size()];
-        entry.retire_value = retire_value;
-        entry.payload = payload;
-        entry.callback.set(callback);
+        entries[(first + count) % entries.size()] = {
+            .retire_value = retire_value,
+            .swapchain = swapchain,
+            .view = view,
+        };
         ++count;
     }
 
-    void collect(Device& device, uint64_t completed_value) noexcept
+    void collect(VkDevice device, uint64_t completed_value) noexcept
     {
         while (count != 0 && entries[first].retire_value <= completed_value)
         {
-            DeferredDeletion& entry = entries[first];
-            entry.callback(device, entry.payload);
-            entry.callback.clear();
-            entry.retire_value = 0;
-            entry.payload = 0;
+            const DeferredSwapchainImage& entry = entries[first];
+            const bool final_image = count == 1 || entries[(first + 1) % entries.size()].swapchain != entry.swapchain;
+            vkDestroyImageView(device, entry.view, nullptr);
+            if (final_image)
+                vkDestroySwapchainKHR(device, entry.swapchain, nullptr);
+            entries[first] = {};
             first = (first + 1) % entries.size();
             --count;
         }
         if (count == 0) first = 0;
     }
 
-    std::vector<DeferredDeletion> entries;
+    std::vector<DeferredSwapchainImage> entries;
     size_t first = 0;
     size_t count = 0;
 };
@@ -975,7 +940,7 @@ struct Device
     VkSemaphore command_retirement = VK_NULL_HANDLE;
     uint64_t command_retirement_value = 0;
     uint64_t completed_command_retirement = 0;
-    detail::DeleteQueue delete_queue;
+    detail::SwapchainDeleteQueue swapchain_delete_queue;
     detail::PresentContext present_contexts[max_swapchain_images]{};
     detail::RetiredSwapchain retired_swapchains[max_swapchain_images]{};
     Swapchain* swapchain = nullptr;
@@ -1138,13 +1103,6 @@ struct Device
     [[nodiscard]] uint64_t next_command_retirement() noexcept;
     void poll_command_retirement() noexcept;
     void wait_command_retirement(uint64_t value) noexcept;
-    template<typename Callback>
-    void defer_delete(const Callback& callback, uint64_t payload = 0) noexcept
-    {
-        const uint64_t retire_value = active_command_buffers != 0 ? command_retirement_value + 1 : command_retirement_value;
-        delete_queue.push(retire_value, payload, callback);
-        delete_queue.collect(*this, completed_command_retirement);
-    }
     [[nodiscard]] Error create_present_context(detail::PresentContext& context) noexcept;
     void destroy_present_context(detail::PresentContext& context) noexcept;
     void finish_present_context(detail::PresentContext& context) noexcept;
@@ -1397,8 +1355,8 @@ Device::~Device()
     {
         drain_contexts();
         destroy_owned_swapchain(*this);
-        delete_queue.collect(*this, completed_command_retirement);
-        assert(delete_queue.count == 0);
+        swapchain_delete_queue.collect(device, completed_command_retirement);
+        assert(swapchain_delete_queue.count == 0);
     }
     destroy_command_contexts();
     for (uint32_t index = 0; index < present_context_count; ++index)
@@ -1577,7 +1535,7 @@ void Device::poll_command_retirement() noexcept
         return;
     completed_command_retirement = completed;
     reset_retired_command_contexts();
-    delete_queue.collect(*this, completed_command_retirement);
+    swapchain_delete_queue.collect(device, completed_command_retirement);
 }
 
 void Device::wait_command_retirement(uint64_t value) noexcept
@@ -1586,7 +1544,7 @@ void Device::wait_command_retirement(uint64_t value) noexcept
     if (value <= completed_command_retirement)
     {
         reset_retired_command_contexts();
-        delete_queue.collect(*this, completed_command_retirement);
+        swapchain_delete_queue.collect(device, completed_command_retirement);
         return;
     }
     const VkSemaphoreWaitInfo wait_info{
@@ -1598,7 +1556,7 @@ void Device::wait_command_retirement(uint64_t value) noexcept
     require_vk(vkWaitSemaphores(device, &wait_info, UINT64_MAX));
     completed_command_retirement = value;
     reset_retired_command_contexts();
-    delete_queue.collect(*this, completed_command_retirement);
+    swapchain_delete_queue.collect(device, completed_command_retirement);
 }
 
 uint64_t Device::next_command_retirement() noexcept
@@ -1694,20 +1652,16 @@ void Device::poll_present_contexts() noexcept
 void Device::queue_retired_swapchain(
     detail::RetiredSwapchain& retired) noexcept
 {
-    assert(retired.handle);
+    assert(retired.handle && retired.view_count != 0);
+    assert(active_command_buffers == 0 && "swapchain retirement is not allowed while a command buffer is recording");
     for (uint32_t index = 0; index < retired.view_count; ++index)
     {
         const VkImageView view = retired.views[index];
         assert(view);
-        defer_delete([view](Device& owner, uint64_t) noexcept {
-            vkDestroyImageView(owner.device, view, nullptr);
-        });
+        swapchain_delete_queue.push(command_retirement_value, retired.handle, view);
     }
-    const VkSwapchainKHR handle = retired.handle;
-    defer_delete([handle](Device& owner, uint64_t) noexcept {
-        vkDestroySwapchainKHR(owner.device, handle, nullptr);
-    });
     retired = {};
+    swapchain_delete_queue.collect(device, completed_command_retirement);
 }
 
 void Device::drain_contexts() noexcept
@@ -1721,7 +1675,7 @@ void Device::drain_contexts() noexcept
     {
         assert(!retired.handle);
     }
-    delete_queue.collect(*this, completed_command_retirement);
+    swapchain_delete_queue.collect(device, completed_command_retirement);
 }
 
 GpuHeap Device::allocate_gpu_heap(VkDeviceSize size, MemoryType memory) noexcept
@@ -1829,7 +1783,7 @@ void Device::release_gpu_heap(const GpuHeap& heap) noexcept
     detail::GpuHeapRecord* record = static_cast<detail::GpuHeapRecord*>(owner->object);
     assert(&record->owner == owner && record->state == this && "destroy_gpu_heap owner does not match its device");
     record->owner = {};
-    defer_delete([record](Device&, uint64_t) noexcept { delete record; });
+    delete record;
 }
 
 struct Texture
@@ -2019,7 +1973,7 @@ struct QueriedFeatures
     VkPhysicalDeviceShaderUntypedPointersFeaturesKHR untyped_pointers{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_UNTYPED_POINTERS_FEATURES_KHR};
     VkPhysicalDeviceUnifiedImageLayoutsFeaturesKHR unified_image_layouts{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_UNIFIED_IMAGE_LAYOUTS_FEATURES_KHR};
     VkPhysicalDeviceMeshShaderFeaturesEXT mesh_shader{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
-    VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT swapchain_maintenance1{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT};
+    VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR swapchain_maintenance1{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR};
 
     explicit QueriedFeatures(bool presentation, bool include_unified_image_layouts)
     {
@@ -2048,6 +2002,7 @@ struct Candidate
     bool texture_compression_astc = false;
     bool texture_compression_etc2 = false;
     bool storage_input_output16 = false;
+    bool khr_swapchain_maintenance1 = false;
     VkPhysicalDeviceDescriptorHeapPropertiesEXT heap_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_PROPERTIES_EXT};
     VkPhysicalDeviceVulkan11Properties vulkan11_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES};
     VkPhysicalDeviceVulkan12Properties vulkan12_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES};
@@ -2055,7 +2010,11 @@ struct Candidate
     VkPhysicalDeviceMeshShaderPropertiesEXT mesh_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT};
 };
 
-Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, Candidate& output) noexcept
+Error inspect_candidate(VkPhysicalDevice physical_device,
+                        VkSurfaceKHR surface,
+                        bool khr_surface_maintenance1,
+                        bool ext_surface_maintenance1,
+                        Candidate& output) noexcept
 {
     VkExtensionProperties extensions[max_device_extensions]{};
     uint32_t extension_count = 0;
@@ -2076,9 +2035,13 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
         if (!has_name({extensions, extension_count}, name))
             return Error::unsupported;
     }
+    const bool khr_swapchain_maintenance1 = khr_surface_maintenance1 &&
+                                            has_name({extensions, extension_count}, VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
+    const bool ext_swapchain_maintenance1 = ext_surface_maintenance1 &&
+                                            has_name({extensions, extension_count}, VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
     if (surface &&
         (!has_name({extensions, extension_count}, VK_KHR_SWAPCHAIN_EXTENSION_NAME) ||
-         !has_name({extensions, extension_count}, VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME)))
+         (!khr_swapchain_maintenance1 && !ext_swapchain_maintenance1)))
     {
         return Error::unsupported;
     }
@@ -2139,7 +2102,7 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
         features.mesh_shader.meshShader == VK_TRUE &&
         (features.core.features.textureCompressionBC == VK_TRUE ||
          features.core.features.textureCompressionASTC_LDR == VK_TRUE) &&
-        (!surface ||  features.swapchain_maintenance1.swapchainMaintenance1 == VK_TRUE);
+        (!surface || features.swapchain_maintenance1.swapchainMaintenance1 == VK_TRUE);
     if (!required_features)
         return Error::unsupported;
     result.unified_image_layouts = unified_image_layouts_extension && features.unified_image_layouts.unifiedImageLayouts == VK_TRUE;
@@ -2148,6 +2111,7 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
     result.texture_compression_astc = features.core.features.textureCompressionASTC_LDR == VK_TRUE;
     result.texture_compression_etc2 = features.core.features.textureCompressionETC2 == VK_TRUE;
     result.storage_input_output16 = features.vulkan11.storageInputOutput16 == VK_TRUE;
+    result.khr_swapchain_maintenance1 = khr_swapchain_maintenance1;
 
     uint32_t available_queue_count = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &available_queue_count, nullptr);
@@ -2262,6 +2226,12 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     if (error != Error::none)
         return fail_device_creation(state, error);
 #if defined(_WIN32)
+    const bool khr_surface_maintenance1 = presentation && has_name(
+        {instance_extensions, instance_extension_count},
+        VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
+    const bool ext_surface_maintenance1 = presentation && has_name(
+        {instance_extensions, instance_extension_count},
+        VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
     if (presentation &&
         (!has_name({instance_extensions, instance_extension_count},
                    VK_KHR_SURFACE_EXTENSION_NAME) ||
@@ -2269,11 +2239,13 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
                    VK_KHR_WIN32_SURFACE_EXTENSION_NAME) ||
          !has_name({instance_extensions, instance_extension_count},
                    VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME) ||
-         !has_name({instance_extensions, instance_extension_count},
-                   VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME)))
+         (!khr_surface_maintenance1 && !ext_surface_maintenance1)))
     {
         return fail_device_creation(state, Error::unsupported);
     }
+#else
+    constexpr bool khr_surface_maintenance1 = false;
+    constexpr bool ext_surface_maintenance1 = false;
 #endif
 #if !defined(NDEBUG)
     VkLayerProperties layers[max_instance_layers]{};
@@ -2285,7 +2257,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     const bool validation_available = has_name({layers, layer_count}, "VK_LAYER_KHRONOS_validation");
 #endif
 
-    const char* enabled_instance_extensions[5]{};
+    const char* enabled_instance_extensions[6]{};
     uint32_t enabled_instance_extension_count = 0;
     const char* enabled_layers[1]{};
     uint32_t enabled_layer_count = 0;
@@ -2299,7 +2271,10 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         enabled_instance_extensions[enabled_instance_extension_count++] = VK_KHR_SURFACE_EXTENSION_NAME;
         enabled_instance_extensions[enabled_instance_extension_count++] = VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
         enabled_instance_extensions[enabled_instance_extension_count++] = VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME;
-        enabled_instance_extensions[enabled_instance_extension_count++] = VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME;
+        if (khr_surface_maintenance1)
+            enabled_instance_extensions[enabled_instance_extension_count++] = VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME;
+        if (ext_surface_maintenance1)
+            enabled_instance_extensions[enabled_instance_extension_count++] = VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME;
     }
 #endif
 
@@ -2370,7 +2345,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     {
         const VkPhysicalDevice physical_device = physical_devices[index];
         Candidate candidate{};
-        error = inspect_candidate(physical_device, state->surface, candidate);
+        error = inspect_candidate(physical_device, state->surface, khr_surface_maintenance1, ext_surface_maintenance1, candidate);
         if (error == Error::unsupported)
             continue;
         if (error != Error::none)
@@ -2476,7 +2451,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         .meshShader = VK_TRUE,
     };
     enabled_features.swapchain_maintenance1 = {
-        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT,
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR,
         .swapchainMaintenance1 = VK_TRUE,
     };
 
@@ -2501,7 +2476,9 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     if (presentation)
     {
         enabled_device_extensions[enabled_device_extension_count++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
-        enabled_device_extensions[enabled_device_extension_count++] = VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
+        enabled_device_extensions[enabled_device_extension_count++] = selected.khr_swapchain_maintenance1
+            ? VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME
+            : VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
     }
 #endif
     const VkDeviceCreateInfo device_info{
@@ -2614,9 +2591,7 @@ void destroy_timeline_semaphore(TimelineSemaphore* semaphore) noexcept
     semaphore->semaphore = VK_NULL_HANDLE;
     semaphore->state = nullptr;
     delete semaphore;
-    device->defer_delete([handle](Device& owner, uint64_t) noexcept {
-        vkDestroySemaphore(owner.device, handle, nullptr);
-    });
+    vkDestroySemaphore(device->device, handle, nullptr);
 }
 
 uint64_t timeline_completed_value(const TimelineSemaphore* semaphore) noexcept
@@ -2793,8 +2768,8 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept
 {
     Device& device = *swapchain.state;
     assert(!swapchain.acquired && !device.acquired_swapchain && device.active_command_buffers == 0);
-    const VkSurfacePresentModeEXT present_mode_info{
-        .sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_EXT,
+    const VkSurfacePresentModeKHR present_mode_info{
+        .sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_KHR,
         .presentMode = swapchain_present_mode,
     };
     const VkPhysicalDeviceSurfaceInfo2KHR surface_info{
@@ -2858,8 +2833,8 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept
 
     const VkCompositeAlphaFlagBitsKHR composite_alpha = choose_composite_alpha(capabilities.supportedCompositeAlpha);
     const VkSwapchainKHR old_handle = swapchain.handle;
-    const VkSwapchainPresentModesCreateInfoEXT present_modes_info{
-        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODES_CREATE_INFO_EXT,
+    const VkSwapchainPresentModesCreateInfoKHR present_modes_info{
+        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODES_CREATE_INFO_KHR,
         .presentModeCount = 1,
         .pPresentModes = &swapchain_present_mode,
     };
@@ -3188,9 +3163,7 @@ void destroy_texture_heap(const TextureHeap& heap) noexcept
     assert(device && owner->memory && heap.size != 0 && "destroy_texture_heap requires a live heap returned by create_texture_heap");
     const VkDeviceMemory memory = owner->memory;
     delete owner;
-    device->defer_delete([memory](Device& owner, uint64_t) noexcept {
-        owner.free_memory(memory);
-    });
+    device->free_memory(memory);
 }
 
 SizeAlign get_texture_size_align(Device* device, const TextureDesc& desc) noexcept
@@ -3369,16 +3342,16 @@ void write_sampler_descriptor(Device* device, void* cpu_destination, const Sampl
 namespace
 {
 
-VkStencilOpState to_vk(const StencilFaceState& state, uint8_t compare_mask, uint8_t write_mask) noexcept
+VkStencilOpState to_vk(const StencilFaceState& state) noexcept
 {
     return {
         .failOp = to_vk(state.fail),
         .passOp = to_vk(state.pass),
         .depthFailOp = to_vk(state.depth_fail),
         .compareOp = to_vk(state.compare),
-        .compareMask = compare_mask,
-        .writeMask = write_mask,
-        .reference = state.reference,
+        .compareMask = 0,
+        .writeMask = 0,
+        .reference = 0,
     };
 }
 
@@ -3389,7 +3362,6 @@ PSO* create_raster_pso(Device* device,
                        Format depth_format,
                        Format stencil_format,
                        const RasterizationState& rasterization_state,
-                       const DepthStencilState& depth_stencil_state,
                        bool mesh) noexcept
 {
     assert(device && "PSO creation called with a null device");
@@ -3404,12 +3376,6 @@ PSO* create_raster_pso(Device* device,
     assert(valid_depth_format && "PSO depth format has no depth aspect");
     assert(valid_stencil_format && "PSO stencil format has no stencil aspect");
     assert(matching_depth_stencil && "PSO depth and stencil formats must match when both are present");
-    const bool valid_depth_write = !depth_stencil_state.depth_write || depth_stencil_state.depth_test;
-    const bool depth_state_has_attachment = (!depth_stencil_state.depth_test && !depth_stencil_state.depth_write) || depth_enabled;
-    const bool stencil_state_has_attachment = !depth_stencil_state.stencil_test || stencil_enabled;
-    assert(valid_depth_write && "depth writes require depth testing");
-    assert(depth_state_has_attachment && "enabled depth state requires a PSO depth format");
-    assert(stencil_state_has_attachment && "enabled stencil state requires a PSO stencil format");
 
     for (size_t index = 0; index < color_targets.size; ++index)
     {
@@ -3461,8 +3427,6 @@ PSO* create_raster_pso(Device* device,
     };
     const VkPipelineViewportStateCreateInfo viewport_state{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-        .viewportCount = 1,
-        .scissorCount = 1,
     };
     const VkPipelineRasterizationStateCreateInfo rasterization{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
@@ -3483,12 +3447,6 @@ PSO* create_raster_pso(Device* device,
     };
     const VkPipelineDepthStencilStateCreateInfo depth_stencil{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-        .depthTestEnable = depth_stencil_state.depth_test,
-        .depthWriteEnable = depth_stencil_state.depth_write,
-        .depthCompareOp = to_vk(depth_stencil_state.depth_compare),
-        .stencilTestEnable = depth_stencil_state.stencil_test,
-        .front = to_vk(depth_stencil_state.front, depth_stencil_state.stencil_read_mask, depth_stencil_state.stencil_write_mask),
-        .back = to_vk(depth_stencil_state.back, depth_stencil_state.stencil_read_mask, depth_stencil_state.stencil_write_mask),
     };
     VkPipelineColorBlendAttachmentState color_attachments[max_color_attachments]{};
     for (size_t index = 0; index < color_targets.size; ++index)
@@ -3511,8 +3469,16 @@ PSO* create_raster_pso(Device* device,
         .pAttachments = color_targets.size ? color_attachments : nullptr,
     };
     constexpr VkDynamicState dynamic_states[]{
-        VK_DYNAMIC_STATE_VIEWPORT,
-        VK_DYNAMIC_STATE_SCISSOR,
+        VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT,
+        VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT,
+        VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE,
+        VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE,
+        VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,
+        VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE,
+        VK_DYNAMIC_STATE_STENCIL_OP,
+        VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
+        VK_DYNAMIC_STATE_STENCIL_WRITE_MASK,
+        VK_DYNAMIC_STATE_STENCIL_REFERENCE,
     };
     const VkPipelineDynamicStateCreateInfo dynamic_state{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
@@ -3573,7 +3539,6 @@ PSO* create_graphics_pso(Device* device, const GraphicsPSODesc& desc) noexcept
                              desc.depth_format,
                              desc.stencil_format,
                              desc.rasterization,
-                             desc.depth_stencil,
                              false);
 }
 
@@ -3586,7 +3551,6 @@ PSO* create_mesh_pso(Device* device, const MeshPSODesc& desc) noexcept
                              desc.depth_format,
                              desc.stencil_format,
                              desc.rasterization,
-                             desc.depth_stencil,
                              true);
 }
 
@@ -3890,8 +3854,8 @@ void submit_and_present(Device* device, Span<CommandBuffer* const> commands, Tim
     submit_commands(commands, command_device, completion, present_context.acquired, present_context.rendered);
     swapchain->initialized[swapchain->image_index] = true;
 
-    const VkSwapchainPresentFenceInfoEXT fence_info{
-        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT,
+    const VkSwapchainPresentFenceInfoKHR fence_info{
+        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_KHR,
         .swapchainCount = 1,
         .pFences = &present_context.presented,
     };
@@ -3993,11 +3957,7 @@ void destroy_texture(Texture* texture) noexcept
     delete texture;
 
     if (image)
-    {
-        device->defer_delete([image](Device& owner, uint64_t) noexcept {
-            vkDestroyImage(owner.device, image, nullptr);
-        });
-    }
+        vkDestroyImage(device->device, image, nullptr);
 }
 
 void destroy_render_view(RenderView* render_view) noexcept
@@ -4011,9 +3971,7 @@ void destroy_render_view(RenderView* render_view) noexcept
     const VkImageView view = render_view->view;
     *render_view = {};
     delete render_view;
-    device->defer_delete([view](Device& owner, uint64_t) noexcept {
-        vkDestroyImageView(owner.device, view, nullptr);
-    });
+    vkDestroyImageView(device->device, view, nullptr);
 }
 
 void destroy_pso(PSO* pso) noexcept
@@ -4027,9 +3985,7 @@ void destroy_pso(PSO* pso) noexcept
     pso->state = nullptr;
     pso->pso = VK_NULL_HANDLE;
     delete pso;
-    device->defer_delete([handle](Device& owner, uint64_t) noexcept {
-        vkDestroyPipeline(owner.device, handle, nullptr);
-    });
+    vkDestroyPipeline(device->device, handle, nullptr);
 }
 
 void bind_pso(CommandBuffer* commands, const PSO* pso) noexcept
@@ -4188,6 +4144,57 @@ void set_sampler_descriptor_heap(CommandBuffer* commands, GpuRange heap) noexcep
     commands->state->fn.cmd_bind_sampler_heap(commands->command_buffer, &bind_info);
 }
 
+void set_viewport(CommandBuffer* commands, const Viewport& viewport) noexcept
+{
+    const bool valid = commands && commands->recording;
+    assert(valid && "set_viewport requires a recording command buffer");
+    const VkViewport vk_viewport{
+        .x = viewport.x,
+        .y = viewport.y,
+        .width = viewport.width,
+        .height = viewport.height,
+        .minDepth = viewport.min_depth,
+        .maxDepth = viewport.max_depth,
+    };
+    vkCmdSetViewportWithCount(commands->command_buffer, 1, &vk_viewport);
+}
+
+void set_scissor(CommandBuffer* commands, const Scissor& scissor) noexcept
+{
+    const bool valid = commands && commands->recording;
+    assert(valid && "set_scissor requires a recording command buffer");
+    const VkRect2D vk_scissor{
+        .offset = {.x = scissor.x, .y = scissor.y},
+        .extent = {.width = scissor.width, .height = scissor.height},
+    };
+    vkCmdSetScissorWithCount(commands->command_buffer, 1, &vk_scissor);
+}
+
+void set_depth_stencil(CommandBuffer* commands, const DepthStencilState& state) noexcept
+{
+    const bool valid = commands && commands->recording;
+    assert(valid && "set_depth_stencil requires a recording command buffer");
+
+    vkCmdSetDepthTestEnable(commands->command_buffer, state.depth_test);
+    if (state.depth_test)
+    {
+        vkCmdSetDepthWriteEnable(commands->command_buffer, state.depth_write);
+        vkCmdSetDepthCompareOp(commands->command_buffer, to_vk(state.depth_compare));
+    }
+    vkCmdSetStencilTestEnable(commands->command_buffer, state.stencil_test);
+    if (!state.stencil_test)
+        return;
+
+    const VkStencilOpState front = to_vk(state.front);
+    const VkStencilOpState back = to_vk(state.back);
+    vkCmdSetStencilOp(commands->command_buffer, VK_STENCIL_FACE_FRONT_BIT, front.failOp, front.passOp, front.depthFailOp, front.compareOp);
+    vkCmdSetStencilOp(commands->command_buffer, VK_STENCIL_FACE_BACK_BIT, back.failOp, back.passOp, back.depthFailOp, back.compareOp);
+    vkCmdSetStencilCompareMask(commands->command_buffer, VK_STENCIL_FACE_FRONT_AND_BACK, state.stencil_read_mask);
+    vkCmdSetStencilWriteMask(commands->command_buffer, VK_STENCIL_FACE_FRONT_AND_BACK, state.stencil_write_mask);
+    vkCmdSetStencilReference(commands->command_buffer, VK_STENCIL_FACE_FRONT_BIT, state.front.reference);
+    vkCmdSetStencilReference(commands->command_buffer, VK_STENCIL_FACE_BACK_BIT, state.back.reference);
+}
+
 void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc) noexcept
 {
     const bool valid = commands && commands->recording && !commands->rendering &&
@@ -4291,16 +4298,9 @@ void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc) noexc
     };
     vkCmdBeginRendering(commands->command_buffer, &rendering_info);
 
-    const VkViewport viewport{
-        .width = static_cast<float>(width),
-        .height = static_cast<float>(height),
-        .maxDepth = 1.0f,
-    };
-    const VkRect2D scissor{
-        .extent = {.width = width, .height = height},
-    };
-    vkCmdSetViewport(commands->command_buffer, 0, 1, &viewport);
-    vkCmdSetScissor(commands->command_buffer, 0, 1, &scissor);
+    set_viewport(commands, {.width = static_cast<float>(width), .height = static_cast<float>(height)});
+    set_scissor(commands, {.width = width, .height = height});
+    set_depth_stencil(commands, {});
     commands->rendering = true;
 }
 

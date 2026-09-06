@@ -32,14 +32,16 @@ conventional feature checked by device creation.
 | [`VK_EXT_mesh_shader`][mesh-shader] | Direct and indirect mesh-workgroup draws. Task shaders are unsupported. |
 | Buffer device address | Gives GPU heaps 64-bit shader addresses for their lifetime and enables typed pointer fields in shared structures. |
 | Vulkan 1.3 `synchronization2` and `dynamicRendering` | Resource-free barriers and rendering without render-pass or framebuffer objects. |
-| Timeline semaphores | Application-visible completion points plus private command and object retirement. |
+| Core Vulkan dynamic state | Command-set viewport, scissor, and exposed depth/stencil state. |
+| Timeline semaphores | Application-visible completion points plus private command-context retirement. |
 | Shader and layout features | Scalar layout, float16, 16-bit push/storage access, draw parameters, independent blending, and formatless storage-image access. |
 | Texture features | At least BC or ASTC LDR compression; exact format and usage support remains queryable. |
 | Win32 WSI | `VK_KHR_surface`, `VK_KHR_win32_surface`, `VK_KHR_swapchain`, and the maintenance extensions listed below. |
 
 Windowed devices also require `VK_KHR_get_surface_capabilities2`,
-`VK_EXT_surface_maintenance1`, and [`VK_EXT_swapchain_maintenance1`][swapchain-maintenance].
-The last extension supplies a completion fence for each presentation.
+`VK_KHR_surface_maintenance1`, and [`VK_KHR_swapchain_maintenance1`][swapchain-maintenance]. The
+original EXT variants are accepted as a paired fallback. Swapchain maintenance supplies a completion
+fence for each presentation.
 Debug builds enable `VK_EXT_debug_utils` and the Khronos validation layer when available.
 
 ## GPU heaps and application-side allocation
@@ -55,7 +57,9 @@ provide addressable data storage; the two descriptor memory types provide mapped
 
 The backend has no data suballocator. The optional utility library provides fixed-16-byte
 `BumpAllocator` and reusable `HeapAllocator` policies over `GpuHeap::range`; the graphics API does not
-depend on either policy.
+depend on either policy. `BumpAllocator::allocate_atomic()` provides relaxed-atomic concurrent worker
+reservations that return disjoint mapped ranges. All other allocator operations require exclusive access
+and must not overlap `allocate()` or `allocate_atomic()`.
 
 ## GPU pointers
 
@@ -77,9 +81,8 @@ struct Root
 
 The shared ABI requires a 64-bit pointer target. The GPU dereferences pointers through the
 `SPV_KHR_physical_storage_buffer` model, while the CPU treats GPU addresses as opaque values.
-Pointer targets need valid, stable storage through GPU completion. Destroying a whole `GpuHeap`
-after its final use is recorded defers physical Vulkan destruction, but reuse of an
-application-managed suballocation remains the application's timeline responsibility.
+Pointer targets need valid, stable storage through GPU completion. Suballocation reuse and owning
+heap lifetime are the application's timeline responsibility.
 
 Commands that need an address and byte count accept `GpuRange`. The backend passes that numeric
 address directly to Vulkan; command recording does not recover a public buffer object or retain its
@@ -139,9 +142,8 @@ the same allocator after GPU use has completed. The API does not track texture-t
 texture-to-descriptor dependencies.
 
 Texture upload and readback go through buffer-backed `GpuRange` values with
-`copy_memory_to_texture()` and `copy_texture_to_memory()`. Destroying a texture defers the Vulkan
-image destruction, but the application must still wait for its timeline point before recycling the
-corresponding texture-heap range.
+`copy_memory_to_texture()` and `copy_texture_to_memory()`. The application retires texture-heap ranges
+with its submission timeline.
 
 ## Root ABI
 
@@ -193,12 +195,15 @@ for actual read/write hazards and use timeline points for reuse of mutable CPU/G
 
 Graphics, mesh, and compute PSOs consume SPIR-V directly. Vulkan 1.4 maintenance5 lets pipeline
 stages take inline `VkShaderModuleCreateInfo`, and descriptor-heap pipelines need no pipeline
-layout. The public PSO descriptions retain only the fixed-function state used by the project.
+layout. Graphics and mesh PSOs retain attachment compatibility, rasterization, and blend state;
+viewport, scissor, and the public depth/stencil state are set independently on the command buffer.
 
 Rendering uses `vkCmdBeginRendering` and `vkCmdEndRendering`. `RenderView` represents the persistent
 image view needed for attachment use, but there is no render-pass or framebuffer object. Attachment
 load/store state and clears are specified at the rendering call. Barriers remain explicit and are
-not implied by rendering boundaries.
+not implied by rendering boundaries. Each `begin_render_pass()` sets a full render-area viewport and
+scissor and disables depth/stencil, preventing state from leaking between passes. Applications call
+`set_viewport()`, `set_scissor()`, or `set_depth_stencil()` after beginning a pass to override those defaults.
 
 The raster path has empty fixed vertex input because shaders fetch through GPU pointers. Mesh PSOs
 use `VK_EXT_mesh_shader` and support direct and indirect meshlet draws. Both paths share the same
@@ -216,19 +221,16 @@ last used mutable upload data, readback storage, a texture placement, indirect a
 descriptor slot before modifying or recycling it.
 
 The optional utility `DeleteQueue` runs deferred callbacks once their nondecreasing application
-timeline values complete. Applications normally tick it once per frame and destroy directly after
-draining the GPU at shutdown.
+timeline values complete. Applications normally tick it once per frame. At shutdown, call
+`wait_idle()` and then drain the queue before destroying the device.
 
-After an object's final use has been recorded, it may be destroyed even before that command buffer
-is submitted. Its public value becomes invalid immediately, while the backend keeps the Vulkan
-object alive for the recorded work and retires it after completion. The same rule applies to whole
-heaps once no future recording or live suballocation needs them. The backend does not recycle
-application allocator entries or descriptor slots; `wait_idle()` remains an intentional whole-device
-drain.
+The backend does not recycle application allocator entries or descriptor slots; `wait_idle()` remains
+an intentional whole-device drain.
 
 For presentation, `acquire()` returns a swapchain-owned `RenderView` and extent, or an empty frame
-while the drawable extent is zero. Binary WSI semaphores remain private, while `VK_EXT_swapchain_maintenance1` present fences support safe reuse
-and swapchain replacement without draining unrelated queue work.
+while the drawable extent is zero. Binary WSI semaphores remain private, while
+`VK_KHR_swapchain_maintenance1` present fences support safe reuse and swapchain replacement without
+draining unrelated queue work.
 
 ## Validation
 
@@ -244,5 +246,5 @@ of direct matches, Vulkan adaptations, and intentionally unsupported areas.
 [address-commands]: https://docs.vulkan.org/refpages/latest/refpages/source/VK_KHR_device_address_commands.html
 [unified-layouts]: https://docs.vulkan.org/refpages/latest/refpages/source/VK_KHR_unified_image_layouts.html
 [mesh-shader]: https://docs.vulkan.org/refpages/latest/refpages/source/VK_EXT_mesh_shader.html
-[swapchain-maintenance]: https://docs.vulkan.org/refpages/latest/refpages/source/VK_EXT_swapchain_maintenance1.html
+[swapchain-maintenance]: https://docs.vulkan.org/refpages/latest/refpages/source/VK_KHR_swapchain_maintenance1.html
 [spirv-heap]: https://github.khronos.org/SPIRV-Registry/extensions/EXT/SPV_EXT_descriptor_heap.html

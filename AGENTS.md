@@ -9,6 +9,12 @@
   Document those preconditions and enforce programmer errors with asserts.
 - Data and parameters passed directly from the user to Vulkan are the user's responsibility. Do not duplicate Vulkan validation or maintain shadow state
   solely to validate them; users should enable the Vulkan validation layer during development.
+- NoGraphicsAPI resource destruction is immediate. In applications, examples, and tests, destroy resources only after no recorded or executing GPU frame
+  uses them. Wait for the submission timeline value covering the final use, or use the optional NoGraphicsAPIUtility `DeleteQueue` to defer destruction.
+- At shutdown, call `wait_idle`, drain every NoGraphicsAPIUtility `DeleteQueue`, and then destroy resources and the device.
+- Wait for every submitted frame to drain before calling `destroy_device`.
+- Keep each public resource creation function next to its matching destruction function. Keep the shared lifetime policy in one place rather than repeating it
+  for individual resource types.
 - Do not abort for programming errors. Enforce their documented preconditions with asserts and leave release builds free of those checks.
 - Use error codes and error messages only for invalid external input data and initialization failures.
 - Do not check for memory allocation failures. We cannot recover from running out of memory; managing memory usage properly is the user's responsibility.

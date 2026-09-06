@@ -24,8 +24,8 @@ implemented; [the Metal 4 design](docs/metal-porting.md) records the proposed ma
 - **Barriers describe execution and memory hazards.** The public API exposes global stage/access
   barriers, not per-resource transition lists. Normal textures remain in one unified layout.
 - **Pipeline binding state stays small.** There are no public buffer objects, descriptor sets,
-  descriptor layouts, pipeline layouts, or sampler objects. PSOs contain shader and fixed-function
-  state, while data arrives through the root and descriptor heaps.
+  descriptor layouts, pipeline layouts, or sampler objects. Viewport, scissor, and exposed
+  depth/stencil behavior are command state rather than PSO permutations, while data arrives through the root and descriptor heaps.
 - **Submission is explicit and asynchronous.** Applications provide timeline points for reuse and
   deferred destruction. Submitted command buffers are one-shot.
 
@@ -44,10 +44,7 @@ or `VkPipelineLayout`. Its central extensions are:
   `VK_IMAGE_LAYOUT_GENERAL`;
 - `VK_EXT_mesh_shader` for mesh pipelines and dispatch.
 
-Win32 presentation uses `VK_KHR_surface`, `VK_KHR_win32_surface`,
-`VK_KHR_get_surface_capabilities2`, `VK_EXT_surface_maintenance1`, `VK_KHR_swapchain`, and
-`VK_EXT_swapchain_maintenance1`.
-Debug builds also enable `VK_EXT_debug_utils` and the Khronos validation layer when available.
+Debug builds enable `VK_EXT_debug_utils` and the Khronos validation layer when available.
 
 Vulkan 1.4 supplies buffer device addresses, timeline semaphores, dynamic rendering,
 synchronization2, scalar block layout, and the remaining core features. See
@@ -122,8 +119,8 @@ Requirements:
 - a Vulkan 1.4 loader and device exposing the required descriptor-heap, device-address-command,
   untyped-pointer, and mesh extensions above, plus their required BDA, synchronization, and
   16-bit/scalar-layout features;
-- coherent CPU-visible GPU memory (for example through PCIe Resizable BAR on a discrete GPU or UMA on
-  an integrated GPU), plus device-local memory compatible with the supported buffers and textures;
+- coherent CPU-visible GPU memory through a PCIe BAR on a discrete GPU or UMA on an integrated GPU,
+  plus device-local memory compatible with the supported buffers and textures;
 - Slang 2026.14.1+ and SPIRV-Tools 2026.3+ when building the examples.
 
 MSVC and clang-cl are supported on Windows. GNU and Clang can build the headless library on other
@@ -153,7 +150,9 @@ target_link_libraries(my_application PRIVATE
 NoGraphicsAPIUtility provides shared C++/Slang types, math, data and texture suballocation, and a
 timeline-driven `DeleteQueue`. These are optional application-side policies; NoGraphicsAPI does not
 depend on them. The queue delays allocator reuse and resource destruction until the application
-timeline completes.
+timeline completes. `BumpAllocator::allocate_atomic()` supports relaxed-atomic concurrent reservations
+from worker threads and returns disjoint mapped ranges. Every other allocator operation requires
+exclusive access and must not overlap `allocate()` or `allocate_atomic()`.
 
 For repository development on Windows, enable the examples and tests explicitly. Building examples
 requires the Slang and SPIR-V Tools versions listed above.
@@ -176,18 +175,70 @@ The Windows examples use the normal swapchain path:
 They can be run from their corresponding directories under `build/examples` when
 `NOGRAPHICSAPI_BUILD_EXAMPLES` is enabled.
 
+## Hardware support
+
+Driver support was checked on 5 September 2026 against the latest available packages; linked reports
+are representative snapshots. `create_device()` remains authoritative; Vulkan 1.4 alone does not
+provide the required new extensions.
+
+The latest available Windows drivers are [AMD Adrenalin 26.9.1](https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-9-1.html)
+and [NVIDIA 616.64 WHQL](https://us.download.nvidia.com/Windows/616.64/616.64-win11-win10-release-notes.pdf).
+
+| Architecture | Current driver | Products | CPU-visible heap | Required extensions |
+| --- | --- | --- | --- | --- |
+| AMD RDNA 2 (dGPU) | Windows / Adrenalin 26.9.1 | [Radeon RX 6000][rdna2-rebar] | PCIe ReBAR or 🔴 [256 MiB fixed BAR][rdna2-fixed] | 🔴 Unsupported |
+| AMD RDNA 2 (iGPU) | Windows / Adrenalin 26.9.1 | [Radeon 600M](https://vulkan.gpuinfo.org/displayreport.php?id=47714) | UMA | 🔴 Unsupported |
+| AMD RDNA 2 (iGPU) | Linux / Mesa RADV 26.2+ | [Steam Deck](https://vulkan.gpuinfo.org/displayreport.php?id=51189) | UMA | Supported |
+| AMD RDNA 3 (dGPU) | Windows / Adrenalin 26.9.1 | [Radeon RX 7000](https://vulkan.gpuinfo.org/displayreport.php?id=51443) | PCIe ReBAR | Supported |
+| AMD RDNA 3 (iGPU) | Windows / Adrenalin 26.9.1 | [Radeon 700M](https://vulkan.gpuinfo.org/displayreport.php?id=49646) | UMA | Supported |
+| AMD RDNA 4 (dGPU) | Windows / Adrenalin 26.9.1 | [Radeon RX 9000](https://vulkan.gpuinfo.org/displayreport.php?id=51293) | PCIe ReBAR | Supported |
+| NVIDIA Turing (dGPU) | Windows / NVIDIA 616.64 | [GeForce RTX 20][turing] | 🔴 [256 MiB fixed BAR][turing-rebar] (214 MiB exposed) | Supported |
+| NVIDIA Ampere (dGPU) | Windows / NVIDIA 616.64 | [GeForce RTX 30](https://vulkan.gpuinfo.org/displayreport.php?id=51549) | PCIe ReBAR | Supported |
+| NVIDIA Ada Lovelace (dGPU) | Windows / NVIDIA 616.64 | [GeForce RTX 40](https://vulkan.gpuinfo.org/displayreport.php?id=51469) | PCIe ReBAR | Supported |
+| NVIDIA Blackwell (dGPU) | Windows / NVIDIA 616.64 | [GeForce RTX 50](https://vulkan.gpuinfo.org/displayreport.php?id=51573) | PCIe ReBAR | Supported |
+
+🔴 marks missing required extensions or a capacity-limited fixed BAR. All checked ReBAR GPUs expose
+their main VRAM heap as CPU-visible; availability depends on platform firmware. A fixed BAR can still
+satisfy the memory requirement, but limits the default CPU-visible heaps; GPU-only allocations
+can use separate VRAM.
+
+Checked UMA heap sizes are 5.1 GiB on a Windows
+[Radeon 680M](https://vulkan.gpuinfo.org/displayreport.php?id=47714), 5.8 GiB on
+[Steam Deck](https://vulkan.gpuinfo.org/displayreport.php?id=51189), and 21.2 GiB on a Windows
+[Radeon 780M](https://vulkan.gpuinfo.org/displayreport.php?id=49646); they vary with system configuration.
+
+Current Windows RDNA 2 reports lack `VK_EXT_descriptor_heap`; the checked RDNA 3 and RDNA 4 AMD GPUs
+and all listed NVIDIA GPUs advertise every required extension. With Mesa
+[RADV 26.2 or newer](https://docs.mesa3d.org/relnotes/26.2.0.html), Steam Deck also has all required
+extensions. Linux/SteamOS window presentation is not implemented yet and is planned for a near-term update.
+
+🔴 [Pascal / GeForce GTX 10](https://vulkan.gpuinfo.org/displayreport.php?id=51084) is below the NVIDIA
+floor: it lacks all four new extensions and exposes a 214 MiB fixed BAR.
+
+Intel Windows support is not verified. The latest public
+[Arc report](https://vulkan.gpuinfo.org/displayreport.php?id=51355) lacks the descriptor-heap,
+device-address-command, and shader-untyped-pointer extensions. Mesa ANV
+[26.2 or newer](https://docs.mesa3d.org/relnotes/26.2.0.html) exposes the required extensions on Linux,
+but this repository currently lacks Linux swap chain support (to be implemented).
+
+[rdna2-rebar]: https://vulkan.gpuinfo.org/displayreport.php?id=42800
+[rdna2-fixed]: https://vulkan.gpuinfo.org/displayreport.php?id=48951
+[turing]: https://vulkan.gpuinfo.org/displayreport.php?id=51475
+[turing-rebar]: https://www.nvidia.com/en-us/geforce/graphics-cards/compare/?section=compare-specs
+
 ## Current scope
 
 Implemented today: graphics, mesh, and compute PSOs; direct and indirect work; GPU-address copies;
-application-owned descriptor heaps; common texture types and views; dynamic rendering; global
-barriers; timeline submission; deferred destruction; and Win32 presentation.
+application-owned descriptor heaps; common texture types and views; dynamic rendering and
+viewport/scissor/depth-stencil state; global barriers; timeline submission; deferred destruction; and Win32 presentation.
 
-This is a deliberately single-threaded, single-queue prototype and a low-level thin wrapper, not a
-validation layer. API preconditions are generally enforced by debug assertions; use the Vulkan
-validation layer during development. Ray tracing, task shaders, sparse memory, device-generated
-command graphs beyond the existing indirect operations, pipeline caching, MSAA, non-Win32
-presentation, and a Metal backend are outside the current implementation. The public header remains
-the source of truth for the exact API surface.
+This is a deliberately single-threaded, single-queue graphics API and a low-level thin wrapper, not a
+validation layer. The utility `BumpAllocator::allocate_atomic()` worker-reservation path is the sole
+concurrent exception. API preconditions are generally enforced by debug assertions; use the Vulkan
+validation layer during development. Ray tracing, task shaders, sparse memory, device-generated command
+graphs beyond the existing indirect operations, pipeline caching, MSAA, non-Win32 presentation, and a
+Metal backend are outside the current implementation. The public header remains the source of truth for
+the exact API surface.
 
 Further reading:
 

@@ -23,17 +23,27 @@ void DeleteQueue::tick() noexcept
     if (count_ == 0)
         return;
 
-    assert(!ticking_ && "delete queue callbacks cannot call tick on the same queue");
     assert(timeline_);
+    collect(timeline_completed_value(timeline_));
+}
+
+void DeleteQueue::drain() noexcept
+{
+    collect(UINT64_MAX);
+}
+
+void DeleteQueue::collect(uint64_t completed_value) noexcept
+{
+    assert(!ticking_ && "delete queue callbacks cannot recursively collect the same queue");
     ticking_ = true;
-    const uint64_t completed_value = timeline_completed_value(timeline_);
     while (count_ != 0)
     {
         Entry& entry = entries_[head_];
         if (entry.retire_value > completed_value)
             break;
 
-        entry.invoke(entry.callback);
+        entry.callback();
+        entry.callback.clear();
         head_ = head_ + 1 == capacity_ ? 0 : head_ + 1;
         --count_;
     }

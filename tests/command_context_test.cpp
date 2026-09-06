@@ -86,14 +86,38 @@ bool test_descriptor_heaps(gpu::Device* device, const gpu::DeviceCaps& caps, gpu
     gpu::CommandBuffer* commands = gpu::begin_commands(device);
     gpu::set_texture_descriptor_heap(commands, gpu::gpu_range(texture_heap));
     gpu::set_sampler_descriptor_heap(commands, gpu::gpu_range(sampler_heap));
+    gpu::set_viewport(commands, {.x = 1.0f, .y = 2.0f, .width = 3.0f, .height = 4.0f, .min_depth = 0.25f, .max_depth = 0.75f});
+    gpu::set_scissor(commands, {.x = 5, .y = 6, .width = 7, .height = 8});
+    gpu::set_depth_stencil(commands, {
+        .depth_test = true,
+        .depth_write = true,
+        .depth_compare = gpu::CompareOp::greater_equal,
+        .stencil_test = true,
+        .stencil_read_mask = 0x7f,
+        .stencil_write_mask = 0x3f,
+        .front = {
+            .compare = gpu::CompareOp::equal,
+            .fail = gpu::StencilOp::replace,
+            .pass = gpu::StencilOp::increment_wrap,
+            .depth_fail = gpu::StencilOp::decrement_clamp,
+            .reference = 11,
+        },
+        .back = {
+            .compare = gpu::CompareOp::not_equal,
+            .fail = gpu::StencilOp::zero,
+            .pass = gpu::StencilOp::invert,
+            .depth_fail = gpu::StencilOp::increment_clamp,
+            .reference = 17,
+        },
+    });
     const gpu::TimelinePoint completion{
         .semaphore = timeline,
         .value = ++next_timeline_value,
     };
-    gpu::destroy_gpu_heap(texture_heap);
-    gpu::destroy_gpu_heap(sampler_heap);
     gpu::submit({commands}, completion);
     gpu::wait_timeline(completion);
+    gpu::destroy_gpu_heap(texture_heap);
+    gpu::destroy_gpu_heap(sampler_heap);
     return true;
 }
 
@@ -336,6 +360,8 @@ bool test_placed_textures(gpu::Device* device,
         .semaphore = timeline,
         .value = ++next_timeline_value,
     };
+    gpu::submit({commands}, final_completion);
+    gpu::wait_timeline(final_completion);
     gpu::destroy_render_view(depth_stencil_render_view);
     gpu::destroy_render_view(color_render_view);
     gpu::destroy_texture(depth_stencil);
@@ -347,8 +373,6 @@ bool test_placed_textures(gpu::Device* device,
     gpu::destroy_texture(first);
     gpu::destroy_texture_heap(recording_heap);
     gpu::destroy_texture_heap(texture_heap);
-    gpu::submit({commands}, final_completion);
-    gpu::wait_timeline(final_completion);
     return true;
 }
 
@@ -400,6 +424,7 @@ int main()
         return 1;
     }
 
+    gpu::wait_timeline(final_completion);
     gpu::destroy_timeline_semaphore(timeline);
     gpu::destroy_device(device);
     return 0;
