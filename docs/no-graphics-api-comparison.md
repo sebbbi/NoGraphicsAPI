@@ -20,7 +20,7 @@ implementation copies a small CPU root structure into Vulkan push-data state.
 | Samplers | Adapted | An application-owned sampler descriptor heap replaces the post's Metal-style embedded samplers. |
 | Root data | Adapted | CPU root bytes are copied with `vkCmdPushDataEXT`; the post passes GPU root pointers. |
 | Pipeline binding model | Direct | Pipelines use no descriptor-set layout, pipeline layout, or resource signature. |
-| Raster state | Partial | Fixed render state remains baked into PSOs rather than split or dynamic as explored by the post. |
+| Raster state | Partial | Viewport, scissor, and exposed depth/stencil behavior are command state; rasterization and blending remain baked into PSOs. |
 | Barriers | Direct in spirit | One global dependency names stages and accesses, with no resource or image-layout lists. |
 | Textures | Mostly direct | The application places opaque textures in its own GPU-only texture heap, restricted to one device-selected memory type. |
 | Commands and completion | Mostly direct | One-shot command buffers and caller-owned timeline points provide asynchronous reuse tracking. |
@@ -136,9 +136,9 @@ Vertex shaders fetch through GPU pointers, mesh shaders use the mesh path, and t
 are not declared to a pipeline. Descriptor-heap pipelines are created with a null Vulkan layout.
 
 Opaque PSO handles remain because Vulkan still compiles pipeline objects. The current prototype
-bakes raster, blend, depth/stencil, and attachment compatibility into those PSOs. That is more
-conventional than the post's permutation-reduction direction, which separates or programs more of
-this state. Dynamic rendering still removes render-pass and framebuffer objects.
+bakes rasterization, blend, and attachment compatibility into those PSOs. Viewport, scissor, and the
+public depth/stencil state are applied independently with `set_viewport()`, `set_scissor()`, and
+`set_depth_stencil()`, reducing PSO permutations. Dynamic rendering still removes render-pass and framebuffer objects.
 
 Static-constant structures are not implemented. Slang/Vulkan specialization constants do not expose
 the post's single shared C-compatible structure ABI.
@@ -213,8 +213,8 @@ preserve the post's main model while adapting it to `VK_EXT_descriptor_heap` and
 
 **Prototype scope.** Vulkan already supports task shaders, public queue selection and multiple queues,
 GPU-addressed indirect draw counts through `vkCmdDraw*IndirectCount2KHR`, and optional BDA
-capture/replay address preservation. This backend does not expose them. Fixed render and attachment
-state in PSOs is also largely a current implementation choice.
+capture/replay address preservation. This backend does not expose them. Remaining rasterization,
+blend, and attachment state in PSOs is also largely a current implementation choice.
 
 **Available through an additional extension.** GPU-root indirect work has an existing but heavier
 path: `VK_EXT_device_generated_commands` and its descriptor-heap push-data tokens can source

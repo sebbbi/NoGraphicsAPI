@@ -103,7 +103,6 @@ int main() {
         .color_targets = {{.format = Format::bgra8_srgb}},
         .depth_format = Format::d32_float,
         .rasterization = { .cull = CullMode::clockwise },
-        .depth_stencil = { .depth_test = true, .depth_write = true },
     });
 
     // GPU resources
@@ -197,6 +196,7 @@ int main() {
 			},
 		});
 
+		set_depth_stencil(commands, {.depth_test = true, .depth_write = true});
 		bind_pso(commands, cube_pso);
 
         float4x4 projection = math::perspective_rh_zo(45.0f * numbers::pi_v<float> / 180.0f,

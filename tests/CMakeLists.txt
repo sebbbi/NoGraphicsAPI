@@ -10,7 +10,8 @@ add_test(NAME test_math COMMAND test_math)
 
 add_executable(test_allocators ../utility/tests/allocator_test.cpp)
 NoGraphicsAPI_disable_exceptions(test_allocators)
-target_link_libraries(test_allocators PRIVATE NoGraphicsAPIUtility::allocators)
+find_package(Threads REQUIRED)
+target_link_libraries(test_allocators PRIVATE NoGraphicsAPIUtility::allocators Threads::Threads)
 add_test(NAME test_allocators COMMAND test_allocators)
 
 if(WIN32)

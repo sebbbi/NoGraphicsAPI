@@ -63,6 +63,30 @@ GpuCpuRange<byte> BumpAllocator::allocate(uint64_t byte_size) noexcept
     return allocation;
 }
 
+GpuCpuRange<byte> BumpAllocator::allocate_atomic(uint64_t byte_size) noexcept
+{
+    assert(byte_size != 0);
+    std::atomic_ref<uint64_t> offset(offset_);
+    uint64_t allocation_offset = offset.load(std::memory_order_relaxed);
+    for (;;)
+    {
+        if (byte_size == 0 || allocation_offset > storage_.size || byte_size > storage_.size - allocation_offset)
+            return {};
+
+        const uint64_t remaining = storage_.size - allocation_offset;
+        const uint64_t aligned_size = (byte_size + alignment - 1) & ~(alignment - 1);
+        const uint64_t next_offset = allocation_offset + (aligned_size < remaining ? aligned_size : remaining);
+        if (offset.compare_exchange_weak(allocation_offset, next_offset, std::memory_order_relaxed, std::memory_order_relaxed))
+        {
+            return {
+                .cpu = offset_pointer(storage_.cpu, allocation_offset),
+                .gpu = offset_pointer(storage_.gpu, allocation_offset),
+                .size = byte_size,
+            };
+        }
+    }
+}
+
 void BumpAllocator::reset() noexcept
 {
     offset_ = 0;
