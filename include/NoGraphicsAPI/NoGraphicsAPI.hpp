@@ -500,10 +500,13 @@ struct DeviceCaps
 };
 
 // A windowed device and every call using it must remain on the native
-// window's message-pump thread. The window must outlive the device.
+// window's message-pump thread. The window must outlive the device. On
+// Linux, display must additionally be set to the xcb_connection_t that owns
+// window.
 struct DeviceDesc
 {
-    void* window = nullptr;
+    void* window = nullptr;  // HWND on Windows; xcb_window_t cast to void* on Linux.
+    void* display = nullptr; // Unused on Windows; xcb_connection_t* on Linux.
     Format swapchain_format = Format::undefined;
     uint32_t desired_swapchain_image_count = 2;
 };

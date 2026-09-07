@@ -2,7 +2,10 @@
 
 #include <cassert>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
+#if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -10,6 +13,9 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#elif defined(__linux__)
+#include <xcb/xcb.h>
+#endif
 
 using namespace gpu;
 using namespace std;
@@ -76,6 +82,8 @@ bool read_binary_file(const char* path,
         fprintf(stderr, "Invalid resource file: %s\n", path);
     return read_succeeded;
 }
+
+#if defined(_WIN32)
 
 namespace
 {
@@ -185,3 +193,139 @@ void close_example_window(void*& window) noexcept
         DestroyWindow(static_cast<HWND>(window));
     window = nullptr;
 }
+
+void* example_window_display() noexcept
+{
+    return nullptr;
+}
+
+#elif defined(__linux__)
+
+namespace
+{
+
+xcb_connection_t* g_connection = nullptr;
+xcb_atom_t g_wm_delete_window = XCB_ATOM_NONE;
+
+} // namespace
+
+void* open_example_window(const char* title,
+                          uint32_t width,
+                          uint32_t height) noexcept
+{
+    assert(title && width && height);
+    int screen_number = 0;
+    g_connection = xcb_connect(nullptr, &screen_number);
+    if (xcb_connection_has_error(g_connection))
+        return {};
+
+    const xcb_setup_t* setup = xcb_get_setup(g_connection);
+    xcb_screen_iterator_t screen_iterator = xcb_setup_roots_iterator(setup);
+    for (int index = 0; index < screen_number; ++index)
+        xcb_screen_next(&screen_iterator);
+    xcb_screen_t* screen = screen_iterator.data;
+
+    const xcb_window_t window = xcb_generate_id(g_connection);
+    const uint32_t value_mask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
+    const uint32_t value_list[]{
+        screen->black_pixel,
+        XCB_EVENT_MASK_KEY_PRESS,
+    };
+    xcb_create_window(
+        g_connection,
+        XCB_COPY_FROM_PARENT,
+        window,
+        screen->root,
+        0, 0,
+        static_cast<uint16_t>(width),
+        static_cast<uint16_t>(height),
+        0,
+        XCB_WINDOW_CLASS_INPUT_OUTPUT,
+        screen->root_visual,
+        value_mask,
+        value_list);
+
+    xcb_change_property(
+        g_connection,
+        XCB_PROP_MODE_REPLACE,
+        window,
+        XCB_ATOM_WM_NAME,
+        XCB_ATOM_STRING,
+        8,
+        static_cast<uint32_t>(strlen(title)),
+        title);
+
+    const xcb_intern_atom_cookie_t protocols_cookie =
+        xcb_intern_atom(g_connection, 1, static_cast<uint16_t>(strlen("WM_PROTOCOLS")), "WM_PROTOCOLS");
+    const xcb_intern_atom_cookie_t delete_window_cookie =
+        xcb_intern_atom(g_connection, 0, static_cast<uint16_t>(strlen("WM_DELETE_WINDOW")), "WM_DELETE_WINDOW");
+    xcb_intern_atom_reply_t* protocols_reply = xcb_intern_atom_reply(g_connection, protocols_cookie, nullptr);
+    xcb_intern_atom_reply_t* delete_window_reply = xcb_intern_atom_reply(g_connection, delete_window_cookie, nullptr);
+    if (protocols_reply && delete_window_reply)
+    {
+        g_wm_delete_window = delete_window_reply->atom;
+        xcb_change_property(
+            g_connection,
+            XCB_PROP_MODE_REPLACE,
+            window,
+            protocols_reply->atom,
+            XCB_ATOM_ATOM,
+            32,
+            1,
+            &g_wm_delete_window);
+    }
+    free(protocols_reply);
+    free(delete_window_reply);
+
+    xcb_map_window(g_connection, window);
+    xcb_flush(g_connection);
+    return reinterpret_cast<void*>(static_cast<uintptr_t>(window));
+}
+
+bool pump_example_window(void* window) noexcept
+{
+    (void)window;
+    for (xcb_generic_event_t* event = xcb_poll_for_event(g_connection); event; event = xcb_poll_for_event(g_connection))
+    {
+        const uint8_t response_type = event->response_type & 0x7f;
+        if (response_type == XCB_CLIENT_MESSAGE)
+        {
+            const xcb_client_message_event_t* client_message = reinterpret_cast<xcb_client_message_event_t*>(event);
+            if (client_message->data.data32[0] == g_wm_delete_window)
+            {
+                free(event);
+                return false;
+            }
+        }
+        else if (response_type == XCB_KEY_PRESS)
+        {
+            // Keycode 9 is Escape under the standard PC-105 layout used by virtually every X11 setup.
+            const xcb_key_press_event_t* key_press = reinterpret_cast<xcb_key_press_event_t*>(event);
+            if (key_press->detail == 9)
+            {
+                free(event);
+                return false;
+            }
+        }
+        free(event);
+    }
+    return true;
+}
+
+void close_example_window(void*& window) noexcept
+{
+    if (window && g_connection)
+        xcb_destroy_window(g_connection, static_cast<xcb_window_t>(reinterpret_cast<uintptr_t>(window)));
+    if (g_connection)
+        xcb_disconnect(g_connection);
+    g_connection = nullptr;
+    g_wm_delete_window = XCB_ATOM_NONE;
+    window = nullptr;
+}
+
+void* example_window_display() noexcept
+{
+    return g_connection;
+}
+
+#endif

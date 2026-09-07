@@ -14,6 +14,7 @@ int main()
     void* window = open_example_window("NoGraphicsAPI triangle", width, height);
     const DeviceInit device_init = create_device({
         .window = window,
+        .display = example_window_display(),
         .swapchain_format = Format::bgra8_srgb
     });
 
