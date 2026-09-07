@@ -9,26 +9,22 @@
 #include <NoGraphicsAPIUtility/math.hpp>
 #include <NoGraphicsAPIUtility/texture_allocator.hpp>
 
-#include <cassert>
-#include <cstddef>
-#include <cstdint>
-#include <cstdio>
-#include <cstring>
-#include <numbers>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 using namespace gpu;
-using namespace std;
 
 namespace {
 
-	constexpr uint32_t width = 500;
-	constexpr uint32_t height = 500;
-	constexpr uint32_t texture_width = 256;
-	constexpr uint32_t texture_height = 256;
+	constexpr uint32 width = 500;
+	constexpr uint32 height = 500;
+	constexpr uint32 texture_width = 256;
+	constexpr uint32 texture_height = 256;
 	constexpr size_t texture_byte_count = size_t(texture_width) * texture_height * 4;
-	constexpr uint64_t data_heap_size = 1024 * 1024;
-	constexpr uint64_t texture_heap_size = 256 * 1024 * 1024;
-	constexpr float radians_per_frame = 4.0f * numbers::pi_v<float> / 180.0f;
+	constexpr uint64 data_heap_size = 1024 * 1024;
+	constexpr uint64 texture_heap_size = 256 * 1024 * 1024;
+	constexpr float radians_per_frame = 4.0f * math::pi / 180.0f;
 
 	constexpr CubeVertex cube_vertices[] = {
 		{ .position = { .x = -1.0f, .y = -1.0f, .z = -1.0f, .w = 1.0f }, .uv = { .x = 0.0f, .y = 1.0f } },
@@ -62,7 +58,7 @@ namespace {
 		{ .position = { .x = -1.0f, .y = 1.0f, .z = 1.0f, .w = 1.0f }, .uv = { .x = 0.0f, .y = 0.0f } },
 	};
 
-	constexpr uint16_t cube_indices[] = {
+	constexpr uint16 cube_indices[] = {
 		0, 1, 2, 2, 3, 0,
 		4, 5, 6, 6, 7, 4,
 		8, 9, 10, 10, 11, 8,
@@ -72,22 +68,16 @@ namespace {
 	};
 
 	constexpr size_t cube_vertex_count = sizeof(cube_vertices) / sizeof(cube_vertices[0]);
-	constexpr uint32_t cube_index_count = uint32_t(sizeof(cube_indices) / sizeof(cube_indices[0]));
+	constexpr uint32 cube_index_count = uint32(sizeof(cube_indices) / sizeof(cube_indices[0]));
 
 } // namespace
 
 int main() {
 	// Init
 	void* window = open_example_window("NoGraphicsAPI spinning textured cube", width, height);
-    const DeviceInit device_init = create_device({
-        .window = window,
-        .display = example_window_display(),
-        .swapchain_format = Format::bgra8_srgb,
-    });
+    Device* device = create_device({.window = window, .display = example_window_display(), .swapchain_format = Format::bgra8_srgb}).device;
 
-    Device* device = device_init.device;
-
-    if (device_init.error != Error::none)
+    if (!window || !device)
     {
         destroy_device(device);
         close_example_window(window);
@@ -98,19 +88,23 @@ int main() {
     printf("Using %s\n", caps.device_name);
 
 	// Shaders
+    const Span<uint32> vertex_spirv = read_spirv(NOGRAPHICSAPI_CUBE_VERTEX_SPV_PATH);
+    const Span<uint32> fragment_spirv = read_spirv(NOGRAPHICSAPI_CUBE_FRAGMENT_SPV_PATH);
 	PSO* cube_pso = create_graphics_pso(device, {
-        .vertex_spirv = read_spirv(NOGRAPHICSAPI_CUBE_VERTEX_SPV_PATH),
-        .fragment_spirv = read_spirv(NOGRAPHICSAPI_CUBE_FRAGMENT_SPV_PATH),
+        .vertex_spirv = vertex_spirv,
+        .fragment_spirv = fragment_spirv,
         .color_targets = {{.format = Format::bgra8_srgb}},
         .depth_format = Format::d32_float,
         .rasterization = { .cull = CullMode::clockwise },
     });
+    free(fragment_spirv.data);
+    free(vertex_spirv.data);
 
     // GPU resources
     GpuHeap data_heap = create_gpu_heap(device, data_heap_size);
     BumpAllocator data_allocator(data_heap.range);
     const GpuCpuRange<CubeVertex> vertex_allocation = data_allocator.allocate<CubeVertex>(cube_vertex_count);
-    const GpuCpuRange<uint16_t> index_allocation = data_allocator.allocate<uint16_t>(cube_index_count);
+    const GpuCpuRange<uint16> index_allocation = data_allocator.allocate<uint16>(cube_index_count);
     const GpuCpuRange<byte> upload_allocation = data_allocator.allocate(texture_byte_count);
     memcpy(vertex_allocation.cpu, cube_vertices, sizeof(cube_vertices));
 	memcpy(index_allocation.cpu, cube_indices, sizeof(cube_indices));
@@ -151,7 +145,8 @@ int main() {
 	PlacedTexture depth{};
 	RenderView* depth_render_view = nullptr;
 	uint32x2 depth_extent{};
-	uint64_t frame_index = 0;
+	uint64 frame_index = 0;
+    const float4x4 view = math::look_at_rh({.x = 0.0f, .y = 3.0f, .z = 5.0f}, {.x = 0.0f, .y = 0.0f, .z = 0.0f}, {.x = 0.0f, .y = 1.0f, .z = 0.0f});
 
 	while (pump_example_window(window))
 	{
@@ -200,16 +195,12 @@ int main() {
 		set_depth_stencil(commands, {.depth_test = true, .depth_write = true});
 		bind_pso(commands, cube_pso);
 
-        float4x4 projection = math::perspective_rh_zo(45.0f * numbers::pi_v<float> / 180.0f,
+        float4x4 projection = math::perspective_rh_zo(45.0f * math::pi / 180.0f,
                                                      float(frame.extent.x) / float(frame.extent.y), 0.1f, 100.0f);
         projection.rows[1].y = -projection.rows[1].y;
-		const float4x4 view = math::look_at_rh({.x = 0.0f, .y = 3.0f, .z = 5.0f}, {.x = 0.0f, .y = 0.0f, .z = 0.0f}, {.x = 0.0f, .y = 1.0f, .z = 0.0f});
-        const float4x4 model = math::rotation_y(radians_per_frame * float(frame_index++));
-        const float4x4 mvp = projection * view * model;
-
 		const CubeRootArguments root {
             .vertices = vertex_allocation.gpu,
-            .transform = mvp,
+            .transform = projection * view * math::rotation_y(radians_per_frame * float(frame_index++)),
         };
 
 		draw_indexed(commands, root, gpu_range(index_allocation), IndexType::uint16, cube_index_count);
@@ -221,7 +212,7 @@ int main() {
 		submit_and_present(device, {commands}, latest_completion);
 	}
 
-	wait_timeline(latest_completion);
+    wait_idle(device);
 
 	// Cleanup
 	destroy_timeline_semaphore(latest_completion.semaphore);

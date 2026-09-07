@@ -1,9 +1,8 @@
 #include "example_support.hpp"
 
-#include <cassert>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
+#include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -14,13 +13,14 @@
 #endif
 #include <windows.h>
 #elif defined(__linux__)
+#include <string.h>
+#include <time.h>
 #include <xcb/xcb.h>
 #endif
 
 using namespace gpu;
-using namespace std;
 
-vector<uint32_t> read_spirv(const char* path)
+Span<uint32> read_spirv(const char* path) noexcept
 {
     assert(path);
     FILE* file = fopen(path, "rb");
@@ -37,8 +37,7 @@ vector<uint32_t> read_spirv(const char* path)
         return {};
     }
     const long byte_count = ftell(file);
-    if (byte_count < static_cast<long>(5 * sizeof(uint32_t)) ||
-        byte_count % static_cast<long>(sizeof(uint32_t)) != 0)
+    if (byte_count < static_cast<long>(5 * sizeof(uint32)) || byte_count % static_cast<long>(sizeof(uint32)) != 0)
     {
         fprintf(stderr, "Invalid SPIR-V file size: %s\n", path);
         fclose(file);
@@ -46,22 +45,19 @@ vector<uint32_t> read_spirv(const char* path)
     }
     rewind(file);
 
-    vector<uint32_t> code(
-        static_cast<size_t>(byte_count) / sizeof(uint32_t));
-    const bool read_succeeded =
-        fread(code.data(), sizeof(uint32_t), code.size(), file) ==
-        code.size();
+    Span<uint32> code(static_cast<uint32*>(malloc(size_t(byte_count))), size_t(byte_count) / sizeof(uint32));
+    const bool read_succeeded = fread(code.data, sizeof(uint32), code.size, file) == code.size;
     fclose(file);
-    if (!read_succeeded || code[0] != 0x07230203u)
+    if (!read_succeeded || code.data[0] != 0x07230203u)
     {
         fprintf(stderr, "Invalid SPIR-V file: %s\n", path);
+        free(code.data);
         return {};
     }
     return code;
 }
 
-bool read_binary_file(const char* path,
-                      Span<byte> data) noexcept
+bool read_binary_file(const char* path, Span<byte> data) noexcept
 {
     assert(path && data.data && data.size);
     FILE* file = fopen(path, "rb");
@@ -70,13 +66,9 @@ bool read_binary_file(const char* path,
         fprintf(stderr, "Failed to open resource file: %s\n", path);
         return false;
     }
-    const bool size_succeeded =
-        fseek(file, 0, SEEK_END) == 0 &&
-        ftell(file) == static_cast<long>(data.size);
+    const bool size_succeeded = fseek(file, 0, SEEK_END) == 0 && ftell(file) == static_cast<long>(data.size);
     rewind(file);
-    const bool read_succeeded =
-        size_succeeded &&
-        fread(data.data, 1, data.size, file) == data.size;
+    const bool read_succeeded = size_succeeded && fread(data.data, 1, data.size, file) == data.size;
     fclose(file);
     if (!read_succeeded)
         fprintf(stderr, "Invalid resource file: %s\n", path);
@@ -85,16 +77,27 @@ bool read_binary_file(const char* path,
 
 #if defined(_WIN32)
 
+double example_time_seconds() noexcept
+{
+    static double seconds_per_tick = 0.0;
+    if (seconds_per_tick == 0.0)
+    {
+        LARGE_INTEGER frequency{};
+        QueryPerformanceFrequency(&frequency);
+        seconds_per_tick = 1.0 / double(frequency.QuadPart);
+    }
+    LARGE_INTEGER counter{};
+    QueryPerformanceCounter(&counter);
+    return double(counter.QuadPart) * seconds_per_tick;
+}
+
 namespace
 {
 
 constexpr const char* window_class_name = "NoGraphicsAPI_example_window";
 constexpr DWORD window_style = WS_OVERLAPPEDWINDOW;
 
-LRESULT CALLBACK example_window_proc(HWND hwnd,
-                                     UINT message,
-                                     WPARAM wparam,
-                                     LPARAM lparam) noexcept
+LRESULT CALLBACK example_window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) noexcept
 {
     switch (message)
     {
@@ -122,9 +125,7 @@ LRESULT CALLBACK example_window_proc(HWND hwnd,
 
 } // namespace
 
-void* open_example_window(const char* title,
-                          uint32_t width,
-                          uint32_t height) noexcept
+void* open_example_window(const char* title, uint32 width, uint32 height) noexcept
 {
     assert(title && width && height);
     const HINSTANCE instance = GetModuleHandleA(nullptr);
@@ -174,9 +175,7 @@ bool pump_example_window(void* window) noexcept
         while (PeekMessageA(&message, nullptr, 0, 0, PM_REMOVE))
         {
             if (message.message == WM_QUIT)
-            {
                 return false;
-            }
             TranslateMessage(&message);
             DispatchMessageA(&message);
         }
@@ -201,6 +200,13 @@ void* example_window_display() noexcept
 
 #elif defined(__linux__)
 
+double example_time_seconds() noexcept
+{
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return double(ts.tv_sec) + double(ts.tv_nsec) * 1e-9;
+}
+
 namespace
 {
 
@@ -209,9 +215,7 @@ xcb_atom_t g_wm_delete_window = XCB_ATOM_NONE;
 
 } // namespace
 
-void* open_example_window(const char* title,
-                          uint32_t width,
-                          uint32_t height) noexcept
+void* open_example_window(const char* title, uint32 width, uint32 height) noexcept
 {
     assert(title && width && height);
     int screen_number = 0;
@@ -226,8 +230,8 @@ void* open_example_window(const char* title,
     xcb_screen_t* screen = screen_iterator.data;
 
     const xcb_window_t window = xcb_generate_id(g_connection);
-    const uint32_t value_mask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
-    const uint32_t value_list[]{
+    const uint32 value_mask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
+    const uint32 value_list[]{
         screen->black_pixel,
         XCB_EVENT_MASK_KEY_PRESS,
     };
@@ -237,8 +241,8 @@ void* open_example_window(const char* title,
         window,
         screen->root,
         0, 0,
-        static_cast<uint16_t>(width),
-        static_cast<uint16_t>(height),
+        static_cast<uint16>(width),
+        static_cast<uint16>(height),
         0,
         XCB_WINDOW_CLASS_INPUT_OUTPUT,
         screen->root_visual,
@@ -252,13 +256,13 @@ void* open_example_window(const char* title,
         XCB_ATOM_WM_NAME,
         XCB_ATOM_STRING,
         8,
-        static_cast<uint32_t>(strlen(title)),
+        static_cast<uint32>(strlen(title)),
         title);
 
     const xcb_intern_atom_cookie_t protocols_cookie =
-        xcb_intern_atom(g_connection, 1, static_cast<uint16_t>(strlen("WM_PROTOCOLS")), "WM_PROTOCOLS");
+        xcb_intern_atom(g_connection, 1, static_cast<uint16>(strlen("WM_PROTOCOLS")), "WM_PROTOCOLS");
     const xcb_intern_atom_cookie_t delete_window_cookie =
-        xcb_intern_atom(g_connection, 0, static_cast<uint16_t>(strlen("WM_DELETE_WINDOW")), "WM_DELETE_WINDOW");
+        xcb_intern_atom(g_connection, 0, static_cast<uint16>(strlen("WM_DELETE_WINDOW")), "WM_DELETE_WINDOW");
     xcb_intern_atom_reply_t* protocols_reply = xcb_intern_atom_reply(g_connection, protocols_cookie, nullptr);
     xcb_intern_atom_reply_t* delete_window_reply = xcb_intern_atom_reply(g_connection, delete_window_cookie, nullptr);
     if (protocols_reply && delete_window_reply)
@@ -279,7 +283,7 @@ void* open_example_window(const char* title,
 
     xcb_map_window(g_connection, window);
     xcb_flush(g_connection);
-    return reinterpret_cast<void*>(static_cast<uintptr_t>(window));
+    return reinterpret_cast<void*>(static_cast<uintptr>(window));
 }
 
 bool pump_example_window(void* window) noexcept
@@ -287,7 +291,7 @@ bool pump_example_window(void* window) noexcept
     (void)window;
     for (xcb_generic_event_t* event = xcb_poll_for_event(g_connection); event; event = xcb_poll_for_event(g_connection))
     {
-        const uint8_t response_type = event->response_type & 0x7f;
+        const uint8 response_type = event->response_type & 0x7f;
         if (response_type == XCB_CLIENT_MESSAGE)
         {
             const xcb_client_message_event_t* client_message = reinterpret_cast<xcb_client_message_event_t*>(event);
@@ -315,7 +319,7 @@ bool pump_example_window(void* window) noexcept
 void close_example_window(void*& window) noexcept
 {
     if (window && g_connection)
-        xcb_destroy_window(g_connection, static_cast<xcb_window_t>(reinterpret_cast<uintptr_t>(window)));
+        xcb_destroy_window(g_connection, static_cast<xcb_window_t>(reinterpret_cast<uintptr>(window)));
     if (g_connection)
         xcb_disconnect(g_connection);
     g_connection = nullptr;

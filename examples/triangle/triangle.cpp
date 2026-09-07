@@ -1,26 +1,19 @@
 #include "example_support.hpp"
 
-#include <cstdint>
-#include <cstdio>
+#include <stdio.h>
+#include <stdlib.h>
 
 using namespace gpu;
-using namespace std;
 
 int main()
 {
-    constexpr uint32_t width = 512;
-    constexpr uint32_t height = 512;
+    constexpr uint32 width = 512;
+    constexpr uint32 height = 512;
 
     void* window = open_example_window("NoGraphicsAPI triangle", width, height);
-    const DeviceInit device_init = create_device({
-        .window = window,
-        .display = example_window_display(),
-        .swapchain_format = Format::bgra8_srgb
-    });
+    Device* device = create_device({.window = window, .display = example_window_display(), .swapchain_format = Format::bgra8_srgb}).device;
 
-    Device* device = device_init.device;
-
-    if (device_init.error != Error::none)
+    if (!window || !device)
     {
         destroy_device(device);
         close_example_window(window);
@@ -29,11 +22,15 @@ int main()
 
     printf("Using %s\n", get_device_caps(device).device_name);
 
+    const Span<uint32> vertex_spirv = read_spirv(NOGRAPHICSAPI_VERTEX_SPV_PATH);
+    const Span<uint32> fragment_spirv = read_spirv(NOGRAPHICSAPI_FRAGMENT_SPV_PATH);
     PSO* triangle_pso = create_graphics_pso(device, {
-        .vertex_spirv = read_spirv(NOGRAPHICSAPI_VERTEX_SPV_PATH),
-        .fragment_spirv = read_spirv(NOGRAPHICSAPI_FRAGMENT_SPV_PATH),
+        .vertex_spirv = vertex_spirv,
+        .fragment_spirv = fragment_spirv,
         .color_targets = { { .format = Format::bgra8_srgb } }
     });
+    free(fragment_spirv.data);
+    free(vertex_spirv.data);
 
     TimelinePoint latest_completion{ .semaphore = create_timeline_semaphore(device) };
 
@@ -53,7 +50,7 @@ int main()
         submit_and_present(device, { commands }, latest_completion);
     }
 
-	wait_timeline(latest_completion);
+    wait_idle(device);
 
     destroy_timeline_semaphore(latest_completion.semaphore);
     destroy_pso(triangle_pso);

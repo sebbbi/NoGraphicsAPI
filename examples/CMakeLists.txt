@@ -9,6 +9,7 @@ target_link_libraries(NoGraphicsAPI_example_support PUBLIC NoGraphicsAPI::NoGrap
 target_include_directories(NoGraphicsAPI_example_support PUBLIC common)
 if(WIN32)
     target_link_libraries(NoGraphicsAPI_example_support PUBLIC user32)
+    target_compile_definitions(NoGraphicsAPI_example_support PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(NoGraphicsAPI_example_support PUBLIC PkgConfig::XCB)
@@ -17,3 +18,18 @@ endif()
 add_subdirectory(triangle)
 add_subdirectory(cube)
 add_subdirectory(deferred_renderer)
+
+function(NoGraphicsAPI_make_release_gui target)
+    if(WIN32)
+        set_target_properties(${target} PROPERTIES
+            WIN32_EXECUTABLE "$<$<CONFIG:Release>:TRUE>"
+        )
+        target_link_options(${target} PRIVATE
+            "$<$<CONFIG:Release>:/ENTRY:mainCRTStartup>"
+        )
+    endif()
+endfunction()
+
+NoGraphicsAPI_make_release_gui(example_triangle)
+NoGraphicsAPI_make_release_gui(example_cube)
+NoGraphicsAPI_make_release_gui(example_deferred_renderer)

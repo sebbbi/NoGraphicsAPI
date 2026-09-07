@@ -3,7 +3,7 @@
 #include <NoGraphicsAPI/NoGraphicsAPI.hpp>
 #include <NoGraphicsAPIUtility/fixed_function.hpp>
 
-#include <cassert>
+#include <assert.h>
 
 namespace gpu
 {
@@ -12,7 +12,7 @@ class DeleteQueue
 {
 public:
     // Capacity must be nonzero, every callback must run before destruction, and the timeline must be live when tick() is called.
-    explicit DeleteQueue(TimelineSemaphore* timeline, uint32_t capacity) noexcept;
+    explicit DeleteQueue(TimelineSemaphore* timeline, uint32 capacity) noexcept;
     ~DeleteQueue() noexcept;
 
     DeleteQueue(const DeleteQueue&) = delete;
@@ -22,7 +22,7 @@ public:
 
     // Retire values must be enqueued in nondecreasing order. Callbacks use 128 inline bytes and must satisfy FixedFunction's requirements.
     template<typename Callback>
-    void defer(uint64_t retire_value, Callback callback) noexcept
+    void defer(uint64 retire_value, Callback callback) noexcept
     {
         assert(count_ < capacity_ && "delete queue capacity exhausted");
 
@@ -42,18 +42,18 @@ public:
 private:
     struct Entry
     {
-        uint64_t retire_value;
+        uint64 retire_value;
         FixedFunction<128> callback;
     };
 
-    void collect(uint64_t completed_value) noexcept; // Callbacks cannot recursively collect the same queue.
+    void collect(uint64 completed_value) noexcept; // Callbacks cannot recursively collect the same queue.
 
     TimelineSemaphore* timeline_ = nullptr;
     Entry* entries_ = nullptr;
-    uint32_t capacity_ = 0;
-    uint32_t head_ = 0;
-    uint32_t tail_ = 0;
-    uint32_t count_ = 0;
+    uint32 capacity_ = 0;
+    uint32 head_ = 0;
+    uint32 tail_ = 0;
+    uint32 count_ = 0;
     bool ticking_ = false;
 };
 

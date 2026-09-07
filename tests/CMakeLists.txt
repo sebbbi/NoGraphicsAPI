@@ -30,10 +30,10 @@ add_executable(test_command_context command_context_test.cpp)
 NoGraphicsAPI_disable_exceptions(test_command_context)
 target_link_libraries(test_command_context PRIVATE NoGraphicsAPI::NoGraphicsAPI)
 add_test(NAME test_command_context COMMAND test_command_context)
-set_tests_properties(test_command_context PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(test_placed_texture placed_texture_test.cpp)
 NoGraphicsAPI_disable_exceptions(test_placed_texture)
 target_link_libraries(test_placed_texture PRIVATE NoGraphicsAPIUtility::textures)
 add_test(NAME test_placed_texture COMMAND test_placed_texture)
-set_tests_properties(test_placed_texture PROPERTIES SKIP_RETURN_CODE 77)
+set_tests_properties(test_command_context test_placed_texture PROPERTIES
+    SKIP_RETURN_CODE 77 TIMEOUT 60 FAIL_REGULAR_EXPRESSION "Validation Error")

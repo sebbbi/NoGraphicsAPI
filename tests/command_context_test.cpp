@@ -1,22 +1,21 @@
 #include <NoGraphicsAPI/NoGraphicsAPI.hpp>
 
-#include <cstddef>
-#include <cstdint>
+#include <stddef.h>
 
 namespace
 {
 
 constexpr int skipped = 77;
-constexpr std::size_t batch_command_count = 20;
-constexpr std::uint32_t batch_submission_count = 4;
-constexpr std::uint32_t test_gpu_heap_size = 1024u * 1024u;
+constexpr size_t batch_command_count = 20;
+constexpr uint32 batch_submission_count = 4;
+constexpr uint32 test_gpu_heap_size = 1024u * 1024u;
 
-constexpr std::uint64_t element_count(std::uint64_t byte_count, std::uint64_t element_size) noexcept
+constexpr uint64 element_count(uint64 byte_count, uint64 element_size) noexcept
 {
     return 1 + (byte_count - 1) / element_size;
 }
 
-bool valid_size_align(gpu::SizeAlign size_align, std::uint64_t common_alignment) noexcept
+bool valid_size_align(gpu::SizeAlign size_align, uint64 common_alignment) noexcept
 {
     return size_align.size != 0 && size_align.align != 0 && (size_align.align & (size_align.align - 1)) == 0 &&
            common_alignment >= size_align.align && common_alignment % size_align.align == 0;
@@ -24,26 +23,26 @@ bool valid_size_align(gpu::SizeAlign size_align, std::uint64_t common_alignment)
 
 bool test_gpu_heaps(gpu::Device* device) noexcept
 {
-    constexpr std::uint64_t sizes[]{1, 15, 16, 17, test_gpu_heap_size};
-    constexpr std::size_t size_count = sizeof(sizes) / sizeof(sizes[0]);
+    constexpr uint64 sizes[]{1, 15, 16, 17, test_gpu_heap_size};
+    constexpr size_t size_count = sizeof(sizes) / sizeof(sizes[0]);
     gpu::GpuHeap heaps[size_count]{};
     bool valid = true;
-    for (std::size_t index = 0; index < size_count; ++index)
+    for (size_t index = 0; index < size_count; ++index)
     {
         heaps[index] = gpu::create_gpu_heap(device, sizes[index]);
         const gpu::GpuRange range = gpu::gpu_range(heaps[index]);
         const gpu::GpuRange nested_range = gpu::gpu_range(heaps[index].range);
         valid = valid && heaps[index].range.cpu && heaps[index].range.gpu && heaps[index].range.size == sizes[index] && heaps[index].owner &&
-                reinterpret_cast<std::uintptr_t>(heaps[index].range.cpu) % 16 == 0 &&
-                reinterpret_cast<std::uintptr_t>(heaps[index].range.gpu) % 16 == 0 &&
+                reinterpret_cast<uintptr>(heaps[index].range.cpu) % 16 == 0 &&
+                reinterpret_cast<uintptr>(heaps[index].range.gpu) % 16 == 0 &&
                 range.gpu == heaps[index].range.gpu && range.size == heaps[index].range.size &&
                 nested_range.gpu == range.gpu && nested_range.size == range.size;
     }
     const gpu::GpuHeap readback = gpu::create_gpu_heap(device, 1, gpu::MemoryType::readback);
     const gpu::GpuHeap gpu_only = gpu::create_gpu_heap(device, 1, gpu::MemoryType::gpu_only);
-    valid = valid && readback.range.cpu && readback.range.gpu && reinterpret_cast<std::uintptr_t>(readback.range.cpu) % 16 == 0 &&
-            reinterpret_cast<std::uintptr_t>(readback.range.gpu) % 16 == 0 && readback.range.size == 1 && readback.owner &&
-            !gpu_only.range.cpu && gpu_only.range.gpu && reinterpret_cast<std::uintptr_t>(gpu_only.range.gpu) % 16 == 0 &&
+    valid = valid && readback.range.cpu && readback.range.gpu && reinterpret_cast<uintptr>(readback.range.cpu) % 16 == 0 &&
+            reinterpret_cast<uintptr>(readback.range.gpu) % 16 == 0 && readback.range.size == 1 && readback.owner &&
+            !gpu_only.range.cpu && gpu_only.range.gpu && reinterpret_cast<uintptr>(gpu_only.range.gpu) % 16 == 0 &&
             gpu_only.range.size == 1 && gpu_only.owner;
     for (const gpu::GpuHeap& heap : heaps)
         gpu::destroy_gpu_heap(heap);
@@ -52,22 +51,23 @@ bool test_gpu_heaps(gpu::Device* device) noexcept
     return valid;
 }
 
-bool test_descriptor_heaps(gpu::Device* device, const gpu::DeviceCaps& caps, gpu::TimelineSemaphore* timeline,
-                           std::uint64_t& next_timeline_value) noexcept
+bool test_descriptor_heaps(gpu::Device* device, const gpu::DeviceCaps& caps, gpu::TimelineSemaphore* timeline, uint64& next_timeline_value) noexcept
 {
     const gpu::GpuHeap texture_heap = gpu::create_gpu_heap(device, caps.texture_descriptor_size, gpu::MemoryType::texture_descriptor_heap);
     if (!texture_heap.range.cpu || !texture_heap.range.gpu || texture_heap.range.size != caps.texture_descriptor_size ||
-        !texture_heap.owner || reinterpret_cast<std::uintptr_t>(texture_heap.range.cpu) % 16 != 0 ||
-        reinterpret_cast<std::uintptr_t>(texture_heap.range.gpu) % 16 != 0)
+        !texture_heap.owner || reinterpret_cast<uintptr>(texture_heap.range.cpu) % 16 != 0 ||
+        reinterpret_cast<uintptr>(texture_heap.range.gpu) % 16 != 0)
     {
+        gpu::destroy_gpu_heap(texture_heap);
         return false;
     }
     const gpu::GpuHeap sampler_heap =
         gpu::create_gpu_heap(device, caps.sampler_descriptor_size, gpu::MemoryType::sampler_descriptor_heap);
     if (!sampler_heap.range.cpu || !sampler_heap.range.gpu || sampler_heap.range.size != caps.sampler_descriptor_size ||
-        !sampler_heap.owner || reinterpret_cast<std::uintptr_t>(sampler_heap.range.cpu) % 16 != 0 ||
-        reinterpret_cast<std::uintptr_t>(sampler_heap.range.gpu) % 16 != 0)
+        !sampler_heap.owner || reinterpret_cast<uintptr>(sampler_heap.range.cpu) % 16 != 0 ||
+        reinterpret_cast<uintptr>(sampler_heap.range.gpu) % 16 != 0)
     {
+        gpu::destroy_gpu_heap(sampler_heap);
         gpu::destroy_gpu_heap(texture_heap);
         return false;
     }
@@ -121,17 +121,14 @@ bool test_descriptor_heaps(gpu::Device* device, const gpu::DeviceCaps& caps, gpu
     return true;
 }
 
-bool test_batch_growth_and_reuse(gpu::Device* device,
-                                 gpu::TimelineSemaphore* timeline,
-                                 std::uint64_t& next_timeline_value,
-                                 gpu::TimelinePoint& final_completion) noexcept
+bool test_batch_growth_and_reuse(gpu::Device* device, gpu::TimelineSemaphore* timeline, uint64& next_timeline_value) noexcept
 {
     gpu::CommandBuffer* high_water_commands[batch_command_count]{};
     bool valid = true;
-    for (std::uint32_t submission = 0; submission < batch_submission_count; ++submission)
+    for (uint32 submission = 0; submission < batch_submission_count; ++submission)
     {
         gpu::CommandBuffer* commands[batch_command_count]{};
-        for (std::size_t index = 0; index < batch_command_count; ++index)
+        for (size_t index = 0; index < batch_command_count; ++index)
         {
             commands[index] = gpu::begin_commands(device);
             if (submission == 0)
@@ -140,14 +137,14 @@ bool test_batch_growth_and_reuse(gpu::Device* device,
                 valid = valid && commands[index] == high_water_commands[index];
         }
 
-        final_completion = {
+        const gpu::TimelinePoint completion{
             .semaphore = timeline,
             .value = ++next_timeline_value,
         };
-        gpu::submit(commands, final_completion);
+        gpu::submit(commands, completion);
         if (submission < 2)
         {
-            gpu::wait_timeline(final_completion);
+            gpu::wait_timeline(completion);
             gpu::wait_idle(device);
         }
     }
@@ -171,9 +168,7 @@ gpu::Format combined_depth_stencil_format(gpu::Device* device) noexcept
     return gpu::Format::undefined;
 }
 
-void record_attachment_subresource_passes(gpu::CommandBuffer* commands,
-                                          gpu::RenderView* color_view,
-                                          gpu::RenderView* depth_stencil_view) noexcept
+void record_attachment_subresource_passes(gpu::CommandBuffer* commands, gpu::RenderView* color_view, gpu::RenderView* depth_stencil_view) noexcept
 {
     if (color_view)
     {
@@ -204,13 +199,9 @@ void record_attachment_subresource_passes(gpu::CommandBuffer* commands,
     }
 }
 
-bool test_placed_textures(gpu::Device* device,
-                          const gpu::DeviceCaps& caps,
-                          gpu::TimelineSemaphore* timeline,
-                          std::uint64_t& next_timeline_value,
-                          gpu::TimelinePoint& final_completion) noexcept
+bool test_placed_textures(gpu::Device* device, const gpu::DeviceCaps& caps, gpu::TimelineSemaphore* timeline, uint64& next_timeline_value) noexcept
 {
-    const std::uint64_t texture_heap_alignment = caps.texture_heap_alignment;
+    const uint64 texture_heap_alignment = caps.texture_heap_alignment;
     constexpr gpu::TextureDesc first_desc{
         .extent = {.x = 17, .y = 9, .z = 1},
         .usage = gpu::TextureUsage::sampled,
@@ -225,8 +216,8 @@ bool test_placed_textures(gpu::Device* device,
     if (!valid_size_align(first_size_align, texture_heap_alignment) || !valid_size_align(second_size_align, texture_heap_alignment))
         return false;
 
-    std::uint64_t heap_elements = element_count(first_size_align.size, texture_heap_alignment);
-    const std::uint64_t second_offset = heap_elements * texture_heap_alignment;
+    uint64 heap_elements = element_count(first_size_align.size, texture_heap_alignment);
+    const uint64 second_offset = heap_elements * texture_heap_alignment;
     heap_elements += element_count(second_size_align.size, texture_heap_alignment);
 
     constexpr gpu::TextureUsage broad_usage =
@@ -240,7 +231,7 @@ bool test_placed_textures(gpu::Device* device,
         .usage = broad_usage,
     };
     gpu::SizeAlign broad_3d_size_align{};
-    std::uint64_t broad_3d_offset = 0;
+    uint64 broad_3d_offset = 0;
     if (has_broad_3d)
     {
         broad_3d_size_align = gpu::get_texture_size_align(device, broad_3d_desc);
@@ -259,7 +250,7 @@ bool test_placed_textures(gpu::Device* device,
     const gpu::SizeAlign mutable_size_align = gpu::get_texture_size_align(device, mutable_desc);
     if (!valid_size_align(mutable_size_align, texture_heap_alignment))
         return false;
-    const std::uint64_t mutable_offset = heap_elements * texture_heap_alignment;
+    const uint64 mutable_offset = heap_elements * texture_heap_alignment;
     heap_elements += element_count(mutable_size_align.size, texture_heap_alignment);
 
     gpu::Format compressed_format = gpu::Format::undefined;
@@ -275,7 +266,7 @@ bool test_placed_textures(gpu::Device* device,
         .usage = gpu::TextureUsage::sampled,
     };
     gpu::SizeAlign compressed_size_align{};
-    std::uint64_t compressed_offset = 0;
+    uint64 compressed_offset = 0;
     if (has_compressed)
     {
         compressed_size_align = gpu::get_texture_size_align(device, compressed_desc);
@@ -295,7 +286,7 @@ bool test_placed_textures(gpu::Device* device,
         .usage = color_usage,
     };
     gpu::SizeAlign color_size_align{};
-    std::uint64_t color_offset = 0;
+    uint64 color_offset = 0;
     if (has_color)
     {
         color_size_align = gpu::get_texture_size_align(device, color_desc);
@@ -319,7 +310,7 @@ bool test_placed_textures(gpu::Device* device,
         .usage = sampled_depth_stencil ? sampled_depth_stencil_usage : gpu::TextureUsage::depth_stencil_attachment,
     };
     gpu::SizeAlign depth_stencil_size_align{};
-    std::uint64_t depth_stencil_offset = 0;
+    uint64 depth_stencil_offset = 0;
     if (has_depth_stencil)
     {
         depth_stencil_size_align = gpu::get_texture_size_align(device, depth_stencil_desc);
@@ -329,7 +320,7 @@ bool test_placed_textures(gpu::Device* device,
         heap_elements += element_count(depth_stencil_size_align.size, texture_heap_alignment);
     }
 
-    const std::uint64_t heap_size = heap_elements * texture_heap_alignment;
+    const uint64 heap_size = heap_elements * texture_heap_alignment;
     gpu::TextureHeap texture_heap = gpu::create_texture_heap(device, heap_size);
     gpu::Texture* first = gpu::create_texture(device, first_desc, texture_heap, 0);
     gpu::Texture* second = gpu::create_texture(device, second_desc, texture_heap, second_offset);
@@ -356,12 +347,12 @@ bool test_placed_textures(gpu::Device* device,
     gpu::RenderView* depth_stencil_render_view =
         depth_stencil ? gpu::create_render_view(depth_stencil, {.mip_level = 1, .slice = 1}) : nullptr;
     record_attachment_subresource_passes(commands, color_render_view, depth_stencil_render_view);
-    final_completion = {
+    const gpu::TimelinePoint completion{
         .semaphore = timeline,
         .value = ++next_timeline_value,
     };
-    gpu::submit({commands}, final_completion);
-    gpu::wait_timeline(final_completion);
+    gpu::submit({commands}, completion);
+    gpu::wait_timeline(completion);
     gpu::destroy_render_view(depth_stencil_render_view);
     gpu::destroy_render_view(color_render_view);
     gpu::destroy_texture(depth_stencil);
@@ -388,44 +379,17 @@ int main()
 
     gpu::Device* device = device_init.device;
     const gpu::DeviceCaps& caps = gpu::get_device_caps(device);
-    if (caps.texture_heap_alignment == 0 ||
-        (caps.texture_heap_alignment & (caps.texture_heap_alignment - 1)) != 0 ||
-        caps.texture_descriptor_size == 0 ||
-        caps.sampler_descriptor_size == 0 ||
-        !test_gpu_heaps(device))
-    {
-        gpu::destroy_device(device);
-        return 1;
-    }
     gpu::TimelineSemaphore* timeline = gpu::create_timeline_semaphore(device);
-    std::uint64_t next_timeline_value = 0;
-    gpu::TimelinePoint final_completion{};
-    if (!test_descriptor_heaps(device, caps, timeline, next_timeline_value))
-    {
-        gpu::destroy_timeline_semaphore(timeline);
-        gpu::destroy_device(device);
-        return 1;
-    }
-
-    if (!test_placed_textures(device, caps, timeline, next_timeline_value, final_completion))
-    {
-        gpu::destroy_timeline_semaphore(timeline);
-        gpu::destroy_device(device);
-        return 1;
-    }
-
-    if (!test_batch_growth_and_reuse(device, timeline, next_timeline_value,
-                                     final_completion))
-    {
-        gpu::wait_timeline(final_completion);
-        gpu::wait_idle(device);
-        gpu::destroy_timeline_semaphore(timeline);
-        gpu::destroy_device(device);
-        return 1;
-    }
-
-    gpu::wait_timeline(final_completion);
+    uint64 next_timeline_value = 0;
+    const bool valid = caps.texture_heap_alignment != 0 &&
+                       (caps.texture_heap_alignment & (caps.texture_heap_alignment - 1)) == 0 &&
+                       caps.texture_descriptor_size != 0 && caps.sampler_descriptor_size != 0 &&
+                       test_gpu_heaps(device) &&
+                       test_descriptor_heaps(device, caps, timeline, next_timeline_value) &&
+                       test_placed_textures(device, caps, timeline, next_timeline_value) &&
+                       test_batch_growth_and_reuse(device, timeline, next_timeline_value);
+    gpu::wait_idle(device);
     gpu::destroy_timeline_semaphore(timeline);
     gpu::destroy_device(device);
-    return 0;
+    return valid ? 0 : 1;
 }

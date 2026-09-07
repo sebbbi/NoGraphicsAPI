@@ -44,7 +44,8 @@ or `VkPipelineLayout`. Its central extensions are:
   `VK_IMAGE_LAYOUT_GENERAL`;
 - `VK_EXT_mesh_shader` for mesh pipelines and dispatch.
 
-Debug builds enable `VK_EXT_debug_utils` and the Khronos validation layer when available.
+NoGraphicsAPI is a low-level, thin Vulkan wrapper. Debug builds enable `VK_EXT_debug_utils` and the
+Khronos validation layer when available.
 
 Vulkan 1.4 supplies buffer device addresses, timeline semaphores, dynamic rendering,
 synchronization2, scalar block layout, and the remaining core features. See
@@ -150,9 +151,7 @@ target_link_libraries(my_application PRIVATE
 NoGraphicsAPIUtility provides shared C++/Slang types, math, data and texture suballocation, and a
 timeline-driven `DeleteQueue`. These are optional application-side policies; NoGraphicsAPI does not
 depend on them. The queue delays allocator reuse and resource destruction until the application
-timeline completes. `BumpAllocator::allocate_atomic()` supports relaxed-atomic concurrent reservations
-from worker threads and returns disjoint mapped ranges. Every other allocator operation requires
-exclusive access and must not overlap `allocate()` or `allocate_atomic()`.
+timeline completes. `BumpAllocator::allocate_atomic()` supports relaxed-atomic concurrent reservations from worker threads.
 
 For repository development on Windows, enable the examples and tests explicitly. Building examples
 requires the Slang and SPIR-V Tools versions listed above.
@@ -186,16 +185,17 @@ and [NVIDIA 616.64 WHQL](https://us.download.nvidia.com/Windows/616.64/616.64-wi
 
 | Architecture | Current driver | Products | CPU-visible heap | Required extensions |
 | --- | --- | --- | --- | --- |
-| AMD RDNA 2 (dGPU) | Windows / Adrenalin 26.9.1 | [Radeon RX 6000][rdna2-rebar] | PCIe ReBAR or 🔴 [256 MiB fixed BAR][rdna2-fixed] | 🔴 Unsupported |
-| AMD RDNA 2 (iGPU) | Windows / Adrenalin 26.9.1 | [Radeon 600M](https://vulkan.gpuinfo.org/displayreport.php?id=47714) | UMA | 🔴 Unsupported |
+| AMD RDNA 2 (dGPU) | Windows / Adrenalin 26.9.1 | [RX 6000][rdna2-rebar] | PCIe ReBAR or<br>🔴 [256 MiB fixed BAR][rdna2-fixed] | 🔴 Unsupported |
+| AMD RDNA 2 (iGPU) | Windows / Adrenalin 26.9.1 | [600M](https://vulkan.gpuinfo.org/displayreport.php?id=47714) | UMA | 🔴 Unsupported |
 | AMD RDNA 2 (iGPU) | Linux / Mesa RADV 26.2+ | [Steam Deck](https://vulkan.gpuinfo.org/displayreport.php?id=51189) | UMA | Supported |
-| AMD RDNA 3 (dGPU) | Windows / Adrenalin 26.9.1 | [Radeon RX 7000](https://vulkan.gpuinfo.org/displayreport.php?id=51443) | PCIe ReBAR | Supported |
-| AMD RDNA 3 (iGPU) | Windows / Adrenalin 26.9.1 | [Radeon 700M](https://vulkan.gpuinfo.org/displayreport.php?id=49646) | UMA | Supported |
-| AMD RDNA 4 (dGPU) | Windows / Adrenalin 26.9.1 | [Radeon RX 9000](https://vulkan.gpuinfo.org/displayreport.php?id=51293) | PCIe ReBAR | Supported |
-| NVIDIA Turing (dGPU) | Windows / NVIDIA 616.64 | [GeForce RTX 20][turing] | 🔴 [256 MiB fixed BAR][turing-rebar] (214 MiB exposed) | Supported |
-| NVIDIA Ampere (dGPU) | Windows / NVIDIA 616.64 | [GeForce RTX 30](https://vulkan.gpuinfo.org/displayreport.php?id=51549) | PCIe ReBAR | Supported |
-| NVIDIA Ada Lovelace (dGPU) | Windows / NVIDIA 616.64 | [GeForce RTX 40](https://vulkan.gpuinfo.org/displayreport.php?id=51469) | PCIe ReBAR | Supported |
-| NVIDIA Blackwell (dGPU) | Windows / NVIDIA 616.64 | [GeForce RTX 50](https://vulkan.gpuinfo.org/displayreport.php?id=51573) | PCIe ReBAR | Supported |
+| AMD RDNA 3 (dGPU) | Windows / Adrenalin 26.9.1 | [RX 7000](https://vulkan.gpuinfo.org/displayreport.php?id=51443) | PCIe ReBAR | Supported |
+| AMD RDNA 3 (iGPU) | Windows / Adrenalin 26.9.1 | [700M](https://vulkan.gpuinfo.org/displayreport.php?id=49646) | UMA | Supported |
+| AMD RDNA 4 (dGPU) | Windows / Adrenalin 26.9.1 | [RX 9000](https://vulkan.gpuinfo.org/displayreport.php?id=51293) | PCIe ReBAR | Supported |
+| NVIDIA Turing | Windows / NVIDIA 616.64 | [GTX 1600][gtx16] | 🔴 [256 MiB fixed BAR][turing-rebar] (214 MiB exposed) | Supported |
+| NVIDIA Turing | Windows / NVIDIA 616.64 | [RTX 2000][turing] | 🔴 [256 MiB fixed BAR][turing-rebar] (214 MiB exposed) | Supported |
+| NVIDIA Ampere | Windows / NVIDIA 616.64 | [RTX 3000](https://vulkan.gpuinfo.org/displayreport.php?id=51549) | PCIe ReBAR | Supported |
+| NVIDIA Ada Lovelace | Windows / NVIDIA 616.64 | [RTX 4000](https://vulkan.gpuinfo.org/displayreport.php?id=51469) | PCIe ReBAR | Supported |
+| NVIDIA Blackwell | Windows / NVIDIA 616.64 | [RTX 5000](https://vulkan.gpuinfo.org/displayreport.php?id=51573) | PCIe ReBAR | Supported |
 
 🔴 marks missing required extensions or a capacity-limited fixed BAR. All checked ReBAR GPUs expose
 their main VRAM heap as CPU-visible; availability depends on platform firmware. A fixed BAR can still
@@ -223,22 +223,22 @@ but this repository currently lacks Linux swap chain support (to be implemented)
 
 [rdna2-rebar]: https://vulkan.gpuinfo.org/displayreport.php?id=42800
 [rdna2-fixed]: https://vulkan.gpuinfo.org/displayreport.php?id=48951
+[gtx16]: https://vulkan.gpuinfo.org/displayreport.php?id=51563
 [turing]: https://vulkan.gpuinfo.org/displayreport.php?id=51475
 [turing-rebar]: https://www.nvidia.com/en-us/geforce/graphics-cards/compare/?section=compare-specs
 
 ## Current scope
 
+The library has been reviewed with GPT-6 Astra Ultra, but remains a prototype and may contain bugs. Please report issues.
+
 Implemented today: graphics, mesh, and compute PSOs; direct and indirect work; GPU-address copies;
 application-owned descriptor heaps; common texture types and views; dynamic rendering and
 viewport/scissor/depth-stencil state; global barriers; timeline submission; deferred destruction; and Win32 presentation.
 
-This is a deliberately single-threaded, single-queue graphics API and a low-level thin wrapper, not a
-validation layer. The utility `BumpAllocator::allocate_atomic()` worker-reservation path is the sole
-concurrent exception. API preconditions are generally enforced by debug assertions; use the Vulkan
-validation layer during development. Ray tracing, task shaders, sparse memory, device-generated command
-graphs beyond the existing indirect operations, pipeline caching, MSAA, non-Win32 presentation, and a
-Metal backend are outside the current implementation. The public header remains the source of truth for
-the exact API surface.
+This is a deliberately single-threaded, single-queue graphics API. Ray tracing, task shaders, sparse memory,
+device-generated command graphs beyond the existing indirect operations, pipeline caching, MSAA, non-Win32
+presentation, and a Metal backend are outside the current implementation. The public header remains the source
+of truth for the exact API surface.
 
 Further reading:
 

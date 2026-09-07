@@ -8,14 +8,14 @@ namespace gpu
 struct PlacedTexture
 {
     Texture* texture;
-    uint32_t token;
+    uint32 token;
 };
 
 class TextureAllocator
 {
 public:
     // max_textures must be 1..HeapAllocator::maximum_allocation_count.
-    TextureAllocator(Device* device, const TextureHeap& heap, uint32_t max_textures) noexcept;
+    TextureAllocator(Device* device, const TextureHeap& heap, uint32 max_textures) noexcept;
 
     TextureAllocator(const TextureAllocator&) = delete;
     TextureAllocator& operator=(const TextureAllocator&) = delete;

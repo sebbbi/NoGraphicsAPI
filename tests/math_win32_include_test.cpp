@@ -15,8 +15,10 @@
 
 static_assert(math::min(3, 7) == 3);
 static_assert(math::max(3, 7) == 7);
-static_assert(math::min(float3 { 3.0f, 8.0f, -2.0f }, float3 { 5.0f, 4.0f, -1.0f }) == float3 { 3.0f, 4.0f, -2.0f });
-static_assert(math::max(float3 { 3.0f, 8.0f, -2.0f }, float3 { 5.0f, 4.0f, -1.0f }) == float3 { 5.0f, 8.0f, -1.0f });
+static_assert(math::min(float3 { .x = 3.0f, .y = 8.0f, .z = -2.0f }, float3 { .x = 5.0f, .y = 4.0f, .z = -1.0f }) ==
+              float3 { .x = 3.0f, .y = 4.0f, .z = -2.0f });
+static_assert(math::max(float3 { .x = 3.0f, .y = 8.0f, .z = -2.0f }, float3 { .x = 5.0f, .y = 4.0f, .z = -1.0f }) ==
+              float3 { .x = 5.0f, .y = 8.0f, .z = -1.0f });
 
 int main() {
 	return 0;
