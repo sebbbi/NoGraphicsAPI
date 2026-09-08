@@ -124,8 +124,6 @@ Requirements:
   plus device-local memory compatible with the supported buffers and textures;
 - Slang 2026.14.1+ and SPIRV-Tools 2026.3+ when building the examples.
 
-Verify with `slangc --version` and `spirv-val --version` that the executables meet version requirements;
-  the Vulkan SDK may bundle an older version.
 MSVC and clang-cl are supported on Windows. GNU and Clang can build the headless library on other
 platforms. MinGW, 32-bit x86, and ARM targets are not supported.
 
@@ -156,17 +154,7 @@ depend on them. The queue delays allocator reuse and resource destruction until 
 timeline completes. `BumpAllocator::allocate_atomic()` supports relaxed-atomic concurrent reservations from worker threads.
 
 For repository development on Windows, enable the examples and tests explicitly. Building examples
-requires the Slang and SPIR-V Tools versions listed above. The repository's `CMakePresets.json`
-defines presets that ask CMake to generate a Visual Studio 2022 x64 solution and select the build
-configuration:
-
-```sh
-cmake --preset msvc
-cmake --build --preset msvc-release
-ctest --preset msvc-release --output-on-failure
-```
-
-For a single-configuration generator, the equivalent commands are:
+requires the Slang and SPIR-V Tools versions listed above.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNOGRAPHICSAPI_BUILD_EXAMPLES=ON -DNOGRAPHICSAPI_BUILD_TESTS=ON
@@ -200,21 +188,14 @@ and [NVIDIA 616.64 WHQL](https://us.download.nvidia.com/Windows/616.64/616.64-wi
 | AMD RDNA 2 (dGPU) | Windows / Adrenalin 26.9.1 | [RX 6000][rdna2-rebar] | PCIe ReBAR or<br>🔴 [256 MiB fixed BAR][rdna2-fixed] | 🔴 Unsupported |
 | AMD RDNA 2 (iGPU) | Windows / Adrenalin 26.9.1 | [600M](https://vulkan.gpuinfo.org/displayreport.php?id=47714) | UMA | 🔴 Unsupported |
 | AMD RDNA 2 (iGPU) | Linux / Mesa RADV 26.2+ | [Steam Deck](https://vulkan.gpuinfo.org/displayreport.php?id=51189) | UMA | Supported |
-| AMD RDNA 3 (dGPU) | Windows / Adrenalin 26.9.1 | [Radeon RX 7000](https://vulkan.gpuinfo.org/displayreport.php?id=51443) | PCIe ReBAR | Supported |
-| AMD RDNA 3 (iGPU) | Windows / Adrenalin 26.9.1 | [Radeon 700M](https://vulkan.gpuinfo.org/displayreport.php?id=49646) | UMA | Supported |
-| AMD RDNA 4 (dGPU) | Windows / Adrenalin 26.9.1 | [Radeon RX 9000](https://vulkan.gpuinfo.org/displayreport.php?id=51293) | PCIe ReBAR | Supported |
-| NVIDIA Turing (dGPU) | Windows / NVIDIA 616.64 | [GeForce GTX 16][turing-16] / [GeForce RTX 20][turing-20] | 🔴 [256 MiB fixed BAR][turing-rebar] (214 MiB exposed) | Supported |
-| NVIDIA Ampere (dGPU) | Windows / NVIDIA 616.64 | [GeForce RTX 30](https://vulkan.gpuinfo.org/displayreport.php?id=51549) | PCIe ReBAR | Supported |
-| NVIDIA Ada Lovelace (dGPU) | Windows / NVIDIA 616.64 | [GeForce RTX 40](https://vulkan.gpuinfo.org/displayreport.php?id=51469) | PCIe ReBAR | Supported |
-| NVIDIA Blackwell (dGPU) | Windows / NVIDIA 616.64 | [GeForce RTX 50](https://vulkan.gpuinfo.org/displayreport.php?id=51573) | PCIe ReBAR | Supported |
 | AMD RDNA 3 (dGPU) | Windows / Adrenalin 26.9.1 | [RX 7000](https://vulkan.gpuinfo.org/displayreport.php?id=51443) | PCIe ReBAR | Supported |
 | AMD RDNA 3 (iGPU) | Windows / Adrenalin 26.9.1 | [700M](https://vulkan.gpuinfo.org/displayreport.php?id=49646) | UMA | Supported |
 | AMD RDNA 4 (dGPU) | Windows / Adrenalin 26.9.1 | [RX 9000](https://vulkan.gpuinfo.org/displayreport.php?id=51293) | PCIe ReBAR | Supported |
-| NVIDIA Turing | Windows / NVIDIA 616.64 | [GTX 1600][gtx16] | 🔴 [256 MiB fixed BAR][turing-rebar] (214 MiB exposed) | Supported |
-| NVIDIA Turing | Windows / NVIDIA 616.64 | [RTX 2000][turing] | 🔴 [256 MiB fixed BAR][turing-rebar] (214 MiB exposed) | Supported |
-| NVIDIA Ampere | Windows / NVIDIA 616.64 | [RTX 3000](https://vulkan.gpuinfo.org/displayreport.php?id=51549) | PCIe ReBAR | Supported |
-| NVIDIA Ada Lovelace | Windows / NVIDIA 616.64 | [RTX 4000](https://vulkan.gpuinfo.org/displayreport.php?id=51469) | PCIe ReBAR | Supported |
-| NVIDIA Blackwell | Windows / NVIDIA 616.64 | [RTX 5000](https://vulkan.gpuinfo.org/displayreport.php?id=51573) | PCIe ReBAR | Supported |
+| NVIDIA Turing | Windows / NVIDIA 616.64 | [GTX 16 series][gtx16] | 🔴 [256 MiB fixed BAR][turing-rebar] (214 MiB exposed) | Supported |
+| NVIDIA Turing | Windows / NVIDIA 616.64 | [RTX 20 series][turing] | 🔴 [256 MiB fixed BAR][turing-rebar] (214 MiB exposed) | Supported |
+| NVIDIA Ampere | Windows / NVIDIA 616.64 | [RTX 30 series](https://vulkan.gpuinfo.org/displayreport.php?id=51549) | PCIe ReBAR | Supported |
+| NVIDIA Ada Lovelace | Windows / NVIDIA 616.64 | [RTX 40 series](https://vulkan.gpuinfo.org/displayreport.php?id=51469) | PCIe ReBAR | Supported |
+| NVIDIA Blackwell | Windows / NVIDIA 616.64 | [RTX 50 series](https://vulkan.gpuinfo.org/displayreport.php?id=51573) | PCIe ReBAR | Supported |
 
 🔴 marks missing required extensions or a capacity-limited fixed BAR. All checked ReBAR GPUs expose
 their main VRAM heap as CPU-visible; availability depends on platform firmware. A fixed BAR can still
@@ -242,8 +223,8 @@ but this repository currently lacks Linux swap chain support (to be implemented)
 
 [rdna2-rebar]: https://vulkan.gpuinfo.org/displayreport.php?id=42800
 [rdna2-fixed]: https://vulkan.gpuinfo.org/displayreport.php?id=48951
-[turing-16]: https://vulkan.gpuinfo.org/displayreport.php?id=51396
-[turing-20]: https://vulkan.gpuinfo.org/displayreport.php?id=51475
+[gtx16]: https://vulkan.gpuinfo.org/displayreport.php?id=51563
+[turing]: https://vulkan.gpuinfo.org/displayreport.php?id=51475
 [turing-rebar]: https://www.nvidia.com/en-us/geforce/graphics-cards/compare/?section=compare-specs
 
 ## Current scope
