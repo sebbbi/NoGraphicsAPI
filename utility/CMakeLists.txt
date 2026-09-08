@@ -4,6 +4,7 @@ set_target_properties(NoGraphicsAPIUtility_types PROPERTIES EXPORT_NAME types)
 target_compile_features(NoGraphicsAPIUtility_types INTERFACE cxx_std_20)
 target_include_directories(NoGraphicsAPIUtility_types INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 

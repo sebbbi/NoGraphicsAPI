@@ -16,11 +16,9 @@
 #		undef max
 #	endif
 
-#	include <bit>
-#	include <cassert>
-#	include <cmath>
-#	include <cstddef>
-#	include <type_traits>
+#	include <assert.h>
+#	include <math.h>
+#	include <stddef.h>
 
 	static_assert(sizeof(void*) == 8, "NoGraphicsAPI math requires a 64-bit pointer ABI");
 
@@ -51,31 +49,19 @@ namespace NoGraphicsAPI_math_detail {
 		return result;
 	}
 
-	inline __m128 linear_combination(__m128 coefficients,
-	                                 __m128 row0,
-	                                 __m128 row1,
-	                                 __m128 row2,
-	                                 __m128 row3) noexcept {
+	inline __m128 linear_combination(__m128 coefficients, __m128 row0, __m128 row1, __m128 row2, __m128 row3) noexcept {
 		__m128 result = _mm_mul_ps(_mm_permute_ps(coefficients, 0x00), row0);
 		result = _mm_fmadd_ps(_mm_permute_ps(coefficients, 0x55), row1, result);
 		result = _mm_fmadd_ps(_mm_permute_ps(coefficients, 0xaa), row2, result);
 		return _mm_fmadd_ps(_mm_permute_ps(coefficients, 0xff), row3, result);
 	}
 
-	inline __m128 linear_combination(const float4& coefficients,
-	                                 const float4& row0,
-	                                 const float4& row1,
-	                                 const float4& row2,
-	                                 const float4& row3) noexcept {
+	inline __m128 linear_combination(const float4& coefficients, const float4& row0, const float4& row1, const float4& row2, const float4& row3) noexcept {
 		return linear_combination(
 			load(coefficients), load(row0), load(row1), load(row2), load(row3));
 	}
 
-	inline __m256 linear_combination(__m256 coefficients,
-	                                 __m256 row0,
-	                                 __m256 row1,
-	                                 __m256 row2,
-	                                 __m256 row3) noexcept {
+	inline __m256 linear_combination(__m256 coefficients, __m256 row0, __m256 row1, __m256 row2, __m256 row3) noexcept {
 		__m256 result = _mm256_mul_ps(_mm256_permute_ps(coefficients, 0x00), row0);
 		result = _mm256_fmadd_ps(_mm256_permute_ps(coefficients, 0x55), row1, result);
 		result = _mm256_fmadd_ps(_mm256_permute_ps(coefficients, 0xaa), row2, result);
@@ -155,7 +141,7 @@ namespace NoGraphicsAPI_math_detail {
 
 #	define NOGRAPHICSAPI_VECTOR_EQUAL(type, count) \
 		constexpr bool operator==(type lhs, type rhs) noexcept { \
-			for (std::size_t index = 0; index != count; ++index) \
+			for (size_t index = 0; index != count; ++index) \
 				if (lhs[index] != rhs[index]) return false; \
 			return true; \
 		} \
@@ -178,49 +164,49 @@ NOGRAPHICSAPI_VECTOR_EQUAL(uint4, 4)
 #	define NOGRAPHICSAPI_VECTOR_OPERATORS(type, scalar_type, count) \
 		constexpr type operator+(type lhs, type rhs) noexcept { \
 			type result {}; \
-			for (std::size_t i = 0; i != count; ++i) \
+			for (size_t i = 0; i != count; ++i) \
 				result[i] = lhs[i] + rhs[i]; \
 			return result; \
 		} \
 		constexpr type operator-(type lhs, type rhs) noexcept { \
 			type result {}; \
-			for (std::size_t i = 0; i != count; ++i) \
+			for (size_t i = 0; i != count; ++i) \
 				result[i] = lhs[i] - rhs[i]; \
 			return result; \
 		} \
 		constexpr type operator*(type lhs, type rhs) noexcept { \
 			type result {}; \
-			for (std::size_t i = 0; i != count; ++i) \
+			for (size_t i = 0; i != count; ++i) \
 				result[i] = lhs[i] * rhs[i]; \
 			return result; \
 		} \
 		constexpr type operator/(type lhs, type rhs) noexcept { \
 			type result {}; \
-			for (std::size_t i = 0; i != count; ++i) \
+			for (size_t i = 0; i != count; ++i) \
 				result[i] = lhs[i] / rhs[i]; \
 			return result; \
 		} \
 		constexpr type operator+(type value, scalar_type scalar) noexcept { \
 			type result {}; \
-			for (std::size_t i = 0; i != count; ++i) \
+			for (size_t i = 0; i != count; ++i) \
 				result[i] = value[i] + scalar; \
 			return result; \
 		} \
 		constexpr type operator-(type value, scalar_type scalar) noexcept { \
 			type result {}; \
-			for (std::size_t i = 0; i != count; ++i) \
+			for (size_t i = 0; i != count; ++i) \
 				result[i] = value[i] - scalar; \
 			return result; \
 		} \
 		constexpr type operator*(type value, scalar_type scalar) noexcept { \
 			type result {}; \
-			for (std::size_t i = 0; i != count; ++i) \
+			for (size_t i = 0; i != count; ++i) \
 				result[i] = value[i] * scalar; \
 			return result; \
 		} \
 		constexpr type operator/(type value, scalar_type scalar) noexcept { \
 			type result {}; \
-			for (std::size_t i = 0; i != count; ++i) \
+			for (size_t i = 0; i != count; ++i) \
 				result[i] = value[i] / scalar; \
 			return result; \
 		} \
@@ -306,7 +292,7 @@ constexpr float3& operator/=(float3& lhs, float rhs) noexcept {
 
 #	define NOGRAPHICSAPI_FLOAT4_BINARY_OPERATOR(symbol, intrinsic) \
 		constexpr float4 operator symbol(float4 lhs, float4 rhs) noexcept { \
-			if (!std::is_constant_evaluated()) \
+			if (!__builtin_is_constant_evaluated()) \
 				return NoGraphicsAPI_math_detail::store(intrinsic(NoGraphicsAPI_math_detail::load(lhs), NoGraphicsAPI_math_detail::load(rhs))); \
 			return { lhs.x symbol rhs.x, lhs.y symbol rhs.y, lhs.z symbol rhs.z, lhs.w symbol rhs.w }; \
 		}
@@ -320,7 +306,7 @@ NOGRAPHICSAPI_FLOAT4_BINARY_OPERATOR(/, _mm_div_ps)
 
 #	define NOGRAPHICSAPI_FLOAT4_SCALAR_OPERATOR(symbol, intrinsic) \
 		constexpr float4 operator symbol(float4 value, float scalar) noexcept { \
-			if (!std::is_constant_evaluated()) \
+			if (!__builtin_is_constant_evaluated()) \
 				return NoGraphicsAPI_math_detail::store(intrinsic(NoGraphicsAPI_math_detail::load(value), _mm_set1_ps(scalar))); \
 			return { value.x symbol scalar, value.y symbol scalar, value.z symbol scalar, value.w symbol scalar }; \
 		}
@@ -558,13 +544,13 @@ namespace math {
 #	define NOGRAPHICSAPI_COMPONENT_MATH(type, scalar_type, count) \
 		constexpr type min(type lhs, type rhs) noexcept { \
 			type result {}; \
-			for (std::size_t i = 0; i != count; ++i) \
+			for (size_t i = 0; i != count; ++i) \
 				result[i] = min(lhs[i], rhs[i]); \
 			return result; \
 		} \
 		constexpr type max(type lhs, type rhs) noexcept { \
 			type result {}; \
-			for (std::size_t i = 0; i != count; ++i) \
+			for (size_t i = 0; i != count; ++i) \
 				result[i] = max(lhs[i], rhs[i]); \
 			return result; \
 		} \
@@ -573,7 +559,7 @@ namespace math {
 		} \
 		constexpr type clamp(type value, scalar_type low, scalar_type high) noexcept { \
 			type result {}; \
-			for (std::size_t i = 0; i != count; ++i) \
+			for (size_t i = 0; i != count; ++i) \
 				result[i] = clamp(value[i], low, high); \
 			return result; \
 		}
@@ -590,7 +576,7 @@ namespace math {
 #	undef NOGRAPHICSAPI_COMPONENT_MATH
 
 	constexpr float abs(float value) noexcept {
-		return value < 0.0f ? -value : value;
+		return __builtin_bit_cast(float, __builtin_bit_cast(uint32, value) & 0x7fffffffu);
 	}
 	constexpr int32 abs(int32 value) noexcept {
 		return value < 0 ? -value : value;
@@ -615,31 +601,31 @@ namespace math {
 	}
 
 	inline float2 floor(float2 value) noexcept {
-		return { std::floor(value.x), std::floor(value.y) };
+		return { ::floorf(value.x), ::floorf(value.y) };
 	}
 	inline float3 floor(float3 value) noexcept {
-		return { std::floor(value.x), std::floor(value.y), std::floor(value.z) };
+		return { ::floorf(value.x), ::floorf(value.y), ::floorf(value.z) };
 	}
 	inline float4 floor(float4 value) noexcept {
-		return { std::floor(value.x), std::floor(value.y), std::floor(value.z), std::floor(value.w) };
+		return { ::floorf(value.x), ::floorf(value.y), ::floorf(value.z), ::floorf(value.w) };
 	}
 	inline float2 ceil(float2 value) noexcept {
-		return { std::ceil(value.x), std::ceil(value.y) };
+		return { ::ceilf(value.x), ::ceilf(value.y) };
 	}
 	inline float3 ceil(float3 value) noexcept {
-		return { std::ceil(value.x), std::ceil(value.y), std::ceil(value.z) };
+		return { ::ceilf(value.x), ::ceilf(value.y), ::ceilf(value.z) };
 	}
 	inline float4 ceil(float4 value) noexcept {
-		return { std::ceil(value.x), std::ceil(value.y), std::ceil(value.z), std::ceil(value.w) };
+		return { ::ceilf(value.x), ::ceilf(value.y), ::ceilf(value.z), ::ceilf(value.w) };
 	}
 	inline float2 round(float2 value) noexcept {
-		return { std::round(value.x), std::round(value.y) };
+		return { ::roundf(value.x), ::roundf(value.y) };
 	}
 	inline float3 round(float3 value) noexcept {
-		return { std::round(value.x), std::round(value.y), std::round(value.z) };
+		return { ::roundf(value.x), ::roundf(value.y), ::roundf(value.z) };
 	}
 	inline float4 round(float4 value) noexcept {
-		return { std::round(value.x), std::round(value.y), std::round(value.z), std::round(value.w) };
+		return { ::roundf(value.x), ::roundf(value.y), ::roundf(value.z), ::roundf(value.w) };
 	}
 
 	constexpr float dot(float2 lhs, float2 rhs) noexcept {
@@ -649,7 +635,7 @@ namespace math {
 		return lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z;
 	}
 	constexpr float dot(float4 lhs, float4 rhs) noexcept {
-		if (!std::is_constant_evaluated())
+		if (!__builtin_is_constant_evaluated())
 			return _mm_cvtss_f32(_mm_dp_ps(NoGraphicsAPI_math_detail::load(lhs), NoGraphicsAPI_math_detail::load(rhs), 0xf1));
 		return lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z + lhs.w * rhs.w;
 	}
@@ -660,19 +646,19 @@ namespace math {
 		return { lhs.y * rhs.z - lhs.z * rhs.y, lhs.z * rhs.x - lhs.x * rhs.z, lhs.x * rhs.y - lhs.y * rhs.x };
 	}
 	inline float rsqrt(float value) noexcept {
-		return 1.0f / std::sqrt(value);
+		return 1.0f / ::sqrtf(value);
 	}
 	inline float length(float2 value) noexcept {
-		return std::sqrt(dot(value, value));
+		return ::sqrtf(dot(value, value));
 	}
 	inline float length(float3 value) noexcept {
-		return std::sqrt(dot(value, value));
+		return ::sqrtf(dot(value, value));
 	}
 	inline float length(float4 value) noexcept {
-		return std::sqrt(dot(value, value));
+		return ::sqrtf(dot(value, value));
 	}
 	inline float length(quaternion value) noexcept {
-		return std::sqrt(dot(value, value));
+		return ::sqrtf(dot(value, value));
 	}
 	inline float2 normalize(float2 value) noexcept {
 		return value * rsqrt(dot(value, value));
@@ -740,13 +726,13 @@ namespace math {
 	}
 
 	constexpr float4 mul(const float4x4& matrix, float4 vector) noexcept {
-		if (!std::is_constant_evaluated())
+		if (!__builtin_is_constant_evaluated())
 			return NoGraphicsAPI_math_detail::mul(matrix, vector);
 		return { dot(matrix.rows[0], vector), dot(matrix.rows[1], vector), dot(matrix.rows[2], vector), dot(matrix.rows[3], vector) };
 	}
 
 	constexpr float3 mul(const float3x4& matrix, float4 vector) noexcept {
-		if (!std::is_constant_evaluated())
+		if (!__builtin_is_constant_evaluated())
 			return NoGraphicsAPI_math_detail::mul(matrix, vector);
 		return { dot(matrix.rows[0], vector), dot(matrix.rows[1], vector), dot(matrix.rows[2], vector) };
 	}
@@ -760,7 +746,7 @@ namespace math {
 	}
 
 	constexpr float4 mul(float4 vector, const float4x4& matrix) noexcept {
-		if (!std::is_constant_evaluated())
+		if (!__builtin_is_constant_evaluated())
 			return NoGraphicsAPI_math_detail::mul(vector, matrix);
 		return {
 			vector.x * matrix.rows[0].x + vector.y * matrix.rows[1].x + vector.z * matrix.rows[2].x + vector.w * matrix.rows[3].x,
@@ -772,34 +758,34 @@ namespace math {
 
 	constexpr float3x3 mul(const float3x3& lhs, const float3x3& rhs) noexcept {
 		float3x3 result {};
-		for (std::size_t row = 0; row != 3; ++row)
-			for (std::size_t column = 0; column != 3; ++column)
-				for (std::size_t inner = 0; inner != 3; ++inner)
+		for (size_t row = 0; row != 3; ++row)
+			for (size_t column = 0; column != 3; ++column)
+				for (size_t inner = 0; inner != 3; ++inner)
 					result[row][column] += lhs[row][inner] * rhs[inner][column];
 		return result;
 	}
 
 	constexpr float4x4 mul(const float4x4& lhs, const float4x4& rhs) noexcept {
-		if (!std::is_constant_evaluated())
+		if (!__builtin_is_constant_evaluated())
 			return NoGraphicsAPI_math_detail::mul(lhs, rhs);
 		float4x4 result {};
-		for (std::size_t row = 0; row != 4; ++row)
-			for (std::size_t column = 0; column != 4; ++column)
-				for (std::size_t inner = 0; inner != 4; ++inner)
+		for (size_t row = 0; row != 4; ++row)
+			for (size_t column = 0; column != 4; ++column)
+				for (size_t inner = 0; inner != 4; ++inner)
 					result[row][column] += lhs[row][inner] * rhs[inner][column];
 		return result;
 	}
 
 	constexpr float3x4 mul(const float3x4& lhs, const float3x4& rhs) noexcept {
-		if (!std::is_constant_evaluated())
+		if (!__builtin_is_constant_evaluated())
 			return NoGraphicsAPI_math_detail::mul(lhs, rhs);
 		float3x4 result {};
-		for (std::size_t row = 0; row != 3; ++row) {
-			for (std::size_t column = 0; column != 3; ++column)
-				for (std::size_t inner = 0; inner != 3; ++inner)
+		for (size_t row = 0; row != 3; ++row) {
+			for (size_t column = 0; column != 3; ++column)
+				for (size_t inner = 0; inner != 3; ++inner)
 					result[row][column] += lhs[row][inner] * rhs[inner][column];
 			result[row].w = lhs[row].w;
-			for (std::size_t inner = 0; inner != 3; ++inner)
+			for (size_t inner = 0; inner != 3; ++inner)
 				result[row].w += lhs[row][inner] * rhs[inner].w;
 		}
 		return result;
@@ -822,7 +808,7 @@ namespace math {
 	}
 
 	constexpr float4x4 transpose(const float4x4& matrix) noexcept {
-		if (!std::is_constant_evaluated())
+		if (!__builtin_is_constant_evaluated())
 			return NoGraphicsAPI_math_detail::transpose(matrix);
 		return { { { matrix.rows[0].x, matrix.rows[1].x, matrix.rows[2].x, matrix.rows[3].x },
 				   { matrix.rows[0].y, matrix.rows[1].y, matrix.rows[2].y, matrix.rows[3].y },
@@ -863,15 +849,15 @@ namespace math {
 
 	inline float4x4 inverse(const float4x4& matrix) noexcept {
 		float augmented[4][8] {};
-		for (std::size_t row = 0; row != 4; ++row) {
-			for (std::size_t column = 0; column != 4; ++column)
+		for (size_t row = 0; row != 4; ++row) {
+			for (size_t column = 0; column != 4; ++column)
 				augmented[row][column] = matrix[row][column];
 			augmented[row][row + 4] = 1.0f;
 		}
-		for (std::size_t pivot_column = 0; pivot_column != 4; ++pivot_column) {
-			std::size_t pivot_row = pivot_column;
+		for (size_t pivot_column = 0; pivot_column != 4; ++pivot_column) {
+			size_t pivot_row = pivot_column;
 			float pivot_magnitude = abs(augmented[pivot_row][pivot_column]);
-			for (std::size_t row = pivot_column + 1; row != 4; ++row) {
+			for (size_t row = pivot_column + 1; row != 4; ++row) {
 				const float magnitude = abs(augmented[row][pivot_column]);
 				if (magnitude > pivot_magnitude) {
 					pivot_row = row;
@@ -880,25 +866,25 @@ namespace math {
 			}
 			assert(pivot_magnitude != 0.0f);
 			if (pivot_row != pivot_column) {
-				for (std::size_t column = 0; column != 8; ++column) {
+				for (size_t column = 0; column != 8; ++column) {
 					const float temporary = augmented[pivot_column][column];
 					augmented[pivot_column][column] = augmented[pivot_row][column];
 					augmented[pivot_row][column] = temporary;
 				}
 			}
 			const float reciprocal_pivot = 1.0f / augmented[pivot_column][pivot_column];
-			for (std::size_t column = 0; column != 8; ++column)
+			for (size_t column = 0; column != 8; ++column)
 				augmented[pivot_column][column] *= reciprocal_pivot;
-			for (std::size_t row = 0; row != 4; ++row) {
+			for (size_t row = 0; row != 4; ++row) {
 				if (row == pivot_column) continue;
 				const float factor = augmented[row][pivot_column];
-				for (std::size_t column = 0; column != 8; ++column)
+				for (size_t column = 0; column != 8; ++column)
 					augmented[row][column] -= factor * augmented[pivot_column][column];
 			}
 		}
 		float4x4 result {};
-		for (std::size_t row = 0; row != 4; ++row)
-			for (std::size_t column = 0; column != 4; ++column)
+		for (size_t row = 0; row != 4; ++row)
+			for (size_t column = 0; column != 4; ++column)
 				result[row][column] = augmented[row][column + 4];
 		return result;
 	}
@@ -912,20 +898,20 @@ namespace math {
 	}
 
 	inline float4x4 rotation_x(float angle) noexcept {
-		const float sine = std::sin(angle);
-		const float cosine = std::cos(angle);
+		const float sine = ::sinf(angle);
+		const float cosine = ::cosf(angle);
 		return { { { 1.0f, 0.0f, 0.0f, 0.0f }, { 0.0f, cosine, -sine, 0.0f }, { 0.0f, sine, cosine, 0.0f }, { 0.0f, 0.0f, 0.0f, 1.0f } } };
 	}
 
 	inline float4x4 rotation_y(float angle) noexcept {
-		const float sine = std::sin(angle);
-		const float cosine = std::cos(angle);
+		const float sine = ::sinf(angle);
+		const float cosine = ::cosf(angle);
 		return { { { cosine, 0.0f, sine, 0.0f }, { 0.0f, 1.0f, 0.0f, 0.0f }, { -sine, 0.0f, cosine, 0.0f }, { 0.0f, 0.0f, 0.0f, 1.0f } } };
 	}
 
 	inline float4x4 rotation_z(float angle) noexcept {
-		const float sine = std::sin(angle);
-		const float cosine = std::cos(angle);
+		const float sine = ::sinf(angle);
+		const float cosine = ::cosf(angle);
 		return { { { cosine, -sine, 0.0f, 0.0f }, { sine, cosine, 0.0f, 0.0f }, { 0.0f, 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 0.0f, 1.0f } } };
 	}
 
@@ -955,7 +941,7 @@ namespace math {
 	inline float4x4 perspective_rh_zo(float vertical_field_of_view, float aspect, float near_plane, float far_plane) noexcept {
 		assert(aspect != 0.0f);
 		assert(near_plane > 0.0f && far_plane > 0.0f && far_plane != near_plane);
-		const float focal_length = 1.0f / std::tan(vertical_field_of_view * 0.5f);
+		const float focal_length = 1.0f / ::tanf(vertical_field_of_view * 0.5f);
 		return { { { focal_length / aspect, 0.0f, 0.0f, 0.0f },
 				   { 0.0f, focal_length, 0.0f, 0.0f },
 				   { 0.0f, 0.0f, far_plane / (near_plane - far_plane), near_plane * far_plane / (near_plane - far_plane) },
@@ -996,9 +982,9 @@ namespace math {
 
 	inline quaternion axis_angle(float angle, float3 axis) noexcept {
 		const float half_angle = angle * 0.5f;
-		const float sine = std::sin(half_angle);
+		const float sine = ::sinf(half_angle);
 		const float3 unit_axis = normalize(axis);
-		return { unit_axis.x * sine, unit_axis.y * sine, unit_axis.z * sine, std::cos(half_angle) };
+		return { unit_axis.x * sine, unit_axis.y * sine, unit_axis.z * sine, ::cosf(half_angle) };
 	}
 
 	constexpr float3 rotate(quaternion rotation_value, float3 vector) noexcept {
@@ -1016,13 +1002,13 @@ namespace math {
 		}
 		if (cosine > 0.9995f) return normalize(a + (b - a) * t);
 		cosine = clamp(cosine, -1.0f, 1.0f);
-		const float angle = std::acos(cosine);
-		const float reciprocal_sine = 1.0f / std::sin(angle);
-		return a * (std::sin((1.0f - t) * angle) * reciprocal_sine) + b * (std::sin(t * angle) * reciprocal_sine);
+		const float angle = ::acosf(cosine);
+		const float reciprocal_sine = 1.0f / ::sinf(angle);
+		return a * (::sinf((1.0f - t) * angle) * reciprocal_sine) + b * (::sinf(t * angle) * reciprocal_sine);
 	}
 
 	constexpr uint16 float_to_half_bits(float value) noexcept {
-		const uint32 bits = std::bit_cast<uint32>(value);
+		const uint32 bits = __builtin_bit_cast(uint32, value);
 		const uint32 sign = (bits >> 16u) & 0x8000u;
 		const uint32 exponent = (bits >> 23u) & 0xffu;
 		const uint32 mantissa = bits & 0x7fffffu;

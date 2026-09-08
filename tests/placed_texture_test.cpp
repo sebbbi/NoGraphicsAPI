@@ -1,19 +1,38 @@
 #include <NoGraphicsAPIUtility/delete_queue.hpp>
 #include <NoGraphicsAPIUtility/texture_allocator.hpp>
 
-#include <cstdint>
-#include <type_traits>
-
-static_assert(std::is_aggregate_v<gpu::PlacedTexture>);
-static_assert(std::is_standard_layout_v<gpu::PlacedTexture>);
-static_assert(std::is_trivial_v<gpu::PlacedTexture>);
-static_assert(std::is_trivially_copyable_v<gpu::PlacedTexture>);
-static_assert(!std::is_move_constructible_v<gpu::TextureAllocator>);
+static_assert(__is_aggregate(gpu::PlacedTexture));
+static_assert(__is_standard_layout(gpu::PlacedTexture));
+static_assert(__is_trivial(gpu::PlacedTexture));
+static_assert(__is_trivially_copyable(gpu::PlacedTexture));
+static_assert(!__is_constructible(gpu::TextureAllocator, gpu::TextureAllocator&&));
 
 namespace
 {
 
 constexpr int skipped = 77;
+
+struct DeferredTextureFree
+{
+    gpu::TextureAllocator* allocator = nullptr;
+    gpu::PlacedTexture* texture = nullptr;
+
+    void operator()() noexcept
+    {
+        allocator->free(*texture);
+    }
+};
+
+struct DeferredCount
+{
+    uint32* count = nullptr;
+    uint32 increment = 1;
+
+    void operator()() noexcept
+    {
+        *count += increment;
+    }
+};
 
 }
 
@@ -28,14 +47,14 @@ int main()
     gpu::Device* device = device_init.device;
     const gpu::TextureDesc desc{};
     const gpu::SizeAlign size_align = gpu::get_texture_size_align(device, desc);
-    const std::uint64_t element_size = gpu::get_device_caps(device).texture_heap_alignment;
+    const uint64 element_size = gpu::get_device_caps(device).texture_heap_alignment;
     if (element_size == 0 || size_align.size == 0 || size_align.align == 0 || element_size < size_align.align || element_size % size_align.align != 0)
     {
         gpu::destroy_device(device);
         return 1;
     }
 
-    const std::uint64_t heap_size = (size_align.size + element_size - 1) / element_size * element_size;
+    const uint64 heap_size = (size_align.size + element_size - 1) / element_size * element_size;
     gpu::TextureHeap texture_heap = gpu::create_texture_heap(device, heap_size);
     gpu::TextureAllocator allocator(device, texture_heap, 1);
 
@@ -61,12 +80,12 @@ int main()
 
     gpu::TimelineSemaphore* timeline = gpu::create_timeline_semaphore(device);
     bool valid = true;
-    uint32_t callback_count = 0;
+    uint32 callback_count = 0;
     {
         gpu::DeleteQueue delete_queue(timeline, 2);
         gpu::CommandBuffer* commands = gpu::begin_commands(device);
-        delete_queue.defer(1, [&allocator, &texture]() noexcept { allocator.free(texture); });
-        delete_queue.defer(UINT64_MAX, [&callback_count]() noexcept { ++callback_count; });
+        delete_queue.defer(1, DeferredTextureFree{.allocator = &allocator, .texture = &texture});
+        delete_queue.defer(~uint64{0}, DeferredCount{.count = &callback_count});
 
         delete_queue.tick();
         exhausted = allocator.allocate(desc);
@@ -93,8 +112,8 @@ int main()
         gpu::submit({commands}, {.semaphore = timeline, .value = 2});
         gpu::wait_idle(device);
         delete_queue.drain();
-        delete_queue.defer(2, [&callback_count]() noexcept { ++callback_count; });
-        delete_queue.defer(2, [&callback_count]() noexcept { ++callback_count; });
+        delete_queue.defer(2, DeferredCount{.count = &callback_count});
+        delete_queue.defer(2, DeferredCount{.count = &callback_count});
         delete_queue.tick();
         valid &= callback_count == 3;
         allocator.free(texture);

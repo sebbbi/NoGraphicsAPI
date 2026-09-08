@@ -1,41 +1,21 @@
 #pragma once
 
-#include <cstddef>
-#include <cstdint>
-#include <initializer_list>
-#include <memory>
-#include <type_traits>
-
-#if defined(__MINGW32__)
-#error "NoGraphicsAPI does not support MinGW"
-#endif
-#if defined(_M_ARM64EC) || (!defined(_M_X64) && !defined(__x86_64__))
-#error "NoGraphicsAPI requires an x86-64 target"
-#endif
-
-static_assert(sizeof(void*) == 8, "NoGraphicsAPI requires a 64-bit pointer ABI");
+#include <NoGraphicsAPI/span.hpp>
 
 namespace gpu
 {
 
-using std::byte;
-using std::int32_t;
-using std::size_t;
-using std::uint8_t;
-using std::uint32_t;
-using std::uint64_t;
-
 struct uint32x2
 {
-    uint32_t x = 0;
-    uint32_t y = 0;
+    uint32 x = 0;
+    uint32 y = 0;
 };
 
 struct uint32x3
 {
-    uint32_t x = 0;
-    uint32_t y = 0;
-    uint32_t z = 0;
+    uint32 x = 0;
+    uint32 y = 0;
+    uint32 z = 0;
 };
 
 struct Device;
@@ -47,53 +27,7 @@ struct TimelineSemaphore;
 struct GpuHeapOwner;
 struct TextureHeapOwner;
 
-template<typename T>
-struct Span
-{
-    T* data = nullptr;
-    size_t size = 0;
-
-    constexpr Span() noexcept = default;
-
-    constexpr Span(T* values, size_t count) noexcept : data(values), size(count) {}
-
-    template<size_t Count>
-    constexpr Span(T (&values)[Count]) noexcept : data(values), size(Count) {}
-
-    template<typename Container>
-    constexpr Span(Container&& values) noexcept
-        requires(
-            std::is_same_v<std::remove_cv_t<std::remove_pointer_t<decltype(values.data())>>, std::remove_cv_t<T>> &&
-            std::is_convertible_v<decltype(values.data()), T*> &&
-            std::is_convertible_v<decltype(values.size()), size_t>)
-        : Span(values.data(), values.size()) {}
-
-    // Temporary container and initializer-list storage is valid only through
-    // the containing full expression. Functions must not retain the span.
-    constexpr Span(std::initializer_list<std::remove_const_t<T>> values) noexcept
-        requires std::is_const_v<T>
-        : Span(values.begin(), values.size()) {}
-};
-
-struct ByteSpan
-{
-    const byte* data = nullptr;
-    size_t size = 0;
-
-    constexpr ByteSpan() noexcept = default;
-
-    ByteSpan(const void* bytes, size_t byte_size) noexcept
-        : data(static_cast<const byte*>(bytes)), size(byte_size) {}
-
-    // A span converted from a value remains valid only while that value is
-    // alive. Functions must not retain the span.
-    template<typename T>
-        requires(std::is_class_v<T> && !std::is_volatile_v<T> && std::is_trivially_copyable_v<T> && (sizeof(T) & 3u) == 0)
-    ByteSpan(const T& value) noexcept
-        : data(reinterpret_cast<const byte*>(std::addressof(value))), size(sizeof(T)) {}
-};
-
-enum class Error : uint8_t
+enum class Error : uint8
 {
     none,
     unsupported,
@@ -101,7 +35,7 @@ enum class Error : uint8_t
     driver_error,
 };
 
-enum class MemoryType : uint8_t
+enum class MemoryType : uint8
 {
     cpu_visible,
     gpu_only,
@@ -112,14 +46,14 @@ enum class MemoryType : uint8_t
 
 struct SizeAlign
 {
-    uint64_t size = 0;
-    uint64_t align = 0;
+    uint64 size = 0;
+    uint64 align = 0;
 };
 
 struct GpuRange
 {
     void* gpu = nullptr;
-    uint64_t size = 0;
+    uint64 size = 0;
 };
 
 template<typename T>
@@ -127,7 +61,7 @@ struct GpuCpuRange
 {
     T* cpu = nullptr;
     T* gpu = nullptr;
-    uint64_t size = 0; // Bytes, independent of T.
+    uint64 size = 0; // Bytes, independent of T.
 };
 
 struct GpuHeap
@@ -140,17 +74,17 @@ struct GpuHeap
 struct TextureHeap
 {
     // Copies alias the same allocation. Pass one unchanged copy to destroy_texture_heap exactly once.
-    uint64_t size = 0;
+    uint64 size = 0;
     const TextureHeapOwner* owner = nullptr;
 };
 
 struct TimelinePoint
 {
     TimelineSemaphore* semaphore = nullptr;
-    uint64_t value = 0;
+    uint64 value = 0;
 };
 
-enum class Format : uint8_t
+enum class Format : uint8
 {
     r8_srgb,
     rg8_srgb,
@@ -213,7 +147,7 @@ enum class Format : uint8_t
 struct TextureFormatInfo
 {
     uint32x2 block_extent = {};
-    uint32_t bytes_per_block = 0;
+    uint32 bytes_per_block = 0;
     bool depth = false;
     bool stencil = false;
 };
@@ -310,7 +244,7 @@ struct TextureFormatInfo
     return {};
 }
 
-enum class TextureType : uint8_t
+enum class TextureType : uint8
 {
     one_d,
     two_d,
@@ -320,7 +254,7 @@ enum class TextureType : uint8_t
     cube_array,
 };
 
-enum class TextureUsage : uint32_t
+enum class TextureUsage : uint32
 {
     none = 0,
     sampled = 1u << 0u,
@@ -331,13 +265,13 @@ enum class TextureUsage : uint32_t
     transfer_destination = 1u << 5u,
 };
 
-enum class TextureDescriptorType : uint8_t
+enum class TextureDescriptorType : uint8
 {
     sampled,
     storage,
 };
 
-enum class TextureAspect : uint8_t
+enum class TextureAspect : uint8
 {
     automatic,
     color,
@@ -347,23 +281,23 @@ enum class TextureAspect : uint8_t
 
 constexpr TextureUsage operator|(TextureUsage lhs, TextureUsage rhs) noexcept
 {
-    return static_cast<TextureUsage>(static_cast<uint32_t>(lhs) |  static_cast<uint32_t>(rhs));
+    return static_cast<TextureUsage>(static_cast<uint32>(lhs) |  static_cast<uint32>(rhs));
 }
 
-enum class Filter : uint8_t
+enum class Filter : uint8
 {
     nearest,
     linear,
 };
 
-enum class AddressMode : uint8_t
+enum class AddressMode : uint8
 {
     repeat,
     mirrored_repeat,
     clamp_to_edge,
 };
 
-enum class CompareOp : uint8_t
+enum class CompareOp : uint8
 {
     never,
     less,
@@ -375,14 +309,14 @@ enum class CompareOp : uint8_t
     always,
 };
 
-enum class CullMode : uint8_t
+enum class CullMode : uint8
 {
     none,
     clockwise,
     counter_clockwise,
 };
 
-enum class BlendFactor : uint8_t
+enum class BlendFactor : uint8
 {
     zero,
     one,
@@ -397,7 +331,7 @@ enum class BlendFactor : uint8_t
     source_alpha_saturate,
 };
 
-enum class BlendOp : uint8_t
+enum class BlendOp : uint8
 {
     add,
     subtract,
@@ -406,26 +340,26 @@ enum class BlendOp : uint8_t
     maximum,
 };
 
-enum class IndexType : uint8_t
+enum class IndexType : uint8
 {
     uint16,
     uint32,
 };
 
-enum class LoadOp : uint8_t
+enum class LoadOp : uint8
 {
     load,
     clear,
     discard,
 };
 
-enum class StoreOp : uint8_t
+enum class StoreOp : uint8
 {
     store,
     discard,
 };
 
-enum class StencilOp : uint8_t
+enum class StencilOp : uint8
 {
     keep,
     zero,
@@ -443,7 +377,7 @@ enum class StencilOp : uint8_t
 // stages. Vertex and mesh are alternative graphics branches, depth_stencil_tests
 // spans early and late tests around fragment, compute and transfer are separate
 // pipelines, host is a pseudo-stage, and none/all_commands are special masks.
-enum class Stage : uint64_t
+enum class Stage : uint64
 {
     none = 0,
     indirect = 1ull << 6u,
@@ -461,10 +395,10 @@ enum class Stage : uint64_t
 
 constexpr Stage operator|(Stage lhs, Stage rhs) noexcept
 {
-    return static_cast<Stage>(static_cast<uint64_t>(lhs) | static_cast<uint64_t>(rhs));
+    return static_cast<Stage>(static_cast<uint64>(lhs) | static_cast<uint64>(rhs));
 }
 
-enum class Access : uint64_t
+enum class Access : uint64
 {
     none = 0,
     transfer_read = 1ull << 0u,
@@ -483,17 +417,17 @@ enum class Access : uint64_t
 
 constexpr Access operator|(Access lhs, Access rhs) noexcept
 {
-    return static_cast<Access>(static_cast<uint64_t>(lhs) | static_cast<uint64_t>(rhs));
+    return static_cast<Access>(static_cast<uint64>(lhs) | static_cast<uint64>(rhs));
 }
 
 struct DeviceCaps
 {
     const char* device_name = nullptr;
-    uint64_t max_push_data_size = 0;
+    uint64 max_push_data_size = 0;
     // Common element size for suballocating TextureHeap storage; every SizeAlign::align divides this value.
-    uint64_t texture_heap_alignment = 0;
-    uint64_t texture_descriptor_size = 0; // Bytes per descriptor slot.
-    uint64_t sampler_descriptor_size = 0; // Bytes per descriptor slot.
+    uint64 texture_heap_alignment = 0;
+    uint64 texture_descriptor_size = 0; // Bytes per descriptor slot.
+    uint64 sampler_descriptor_size = 0; // Bytes per descriptor slot.
     bool texture_compression_bc = false;
     bool texture_compression_astc = false;
     bool storage_input_output16 = false;
@@ -505,7 +439,7 @@ struct DeviceDesc
 {
     void* window = nullptr;
     Format swapchain_format = Format::undefined;
-    uint32_t desired_swapchain_image_count = 2;
+    uint32 desired_swapchain_image_count = 2; // 1..8 presentation contexts.
 };
 
 struct DeviceInit
@@ -524,8 +458,8 @@ struct TextureDesc
 {
     TextureType type = TextureType::two_d;
     uint32x3 extent = {.x = 1, .y = 1, .z = 1};
-    uint32_t mip_levels = 1;
-    uint32_t layer_count = 1; // Vulkan array layers; cube faces are individual layers.
+    uint32 mip_levels = 1;
+    uint32 layer_count = 1; // Vulkan array layers; cube faces are individual layers.
     Format format = Format::rgba8_unorm;
     bool mutable_format = false; // Allow format-compatible descriptor views, but could lose DCC.
     TextureUsage usage = TextureUsage::sampled;
@@ -533,29 +467,29 @@ struct TextureDesc
 
 struct RenderViewDesc
 {
-    uint32_t mip_level = 0;
-    uint32_t slice = 0; // Physical array slice; cube faces are individual slices.
+    uint32 mip_level = 0;
+    uint32 slice = 0; // Physical array slice; cube faces are individual slices.
 };
 
 struct TextureDescriptorDesc
 {
     Format format = Format::undefined; // Undefined inherits the texture format.
     TextureAspect aspect = TextureAspect::automatic; // Automatic selects color, or depth before stencil.
-    uint32_t base_mip = 0;
-    uint32_t mip_count = 0; // Zero selects every remaining mip level.
-    uint32_t base_layer = 0; // Vulkan array layer; cube faces are individual layers.
-    uint32_t layer_count = 0; // Vulkan array layers; zero selects every remaining layer.
+    uint32 base_mip = 0;
+    uint32 mip_count = 0; // Zero selects every remaining mip level.
+    uint32 base_layer = 0; // Vulkan array layer; cube faces are individual layers.
+    uint32 layer_count = 0; // Vulkan array layers; zero selects every remaining layer.
 };
 
 struct TextureCopyDesc
 {
-    uint32_t mip_level = 0;
-    uint32_t base_slice = 0; // Physical array slice; cube faces are individual slices.
-    uint32_t slice_count = 0; // Zero selects every remaining physical slice.
+    uint32 mip_level = 0;
+    uint32 base_slice = 0; // Physical array slice; cube faces are individual slices.
+    uint32 slice_count = 0; // Zero selects every remaining physical slice.
     uint32x3 offset = {};
     uint32x3 extent = {}; // Zero components select the remaining mip extent.
-    uint64_t row_pitch_bytes = 0;   // Zero is tightly packed.
-    uint64_t slice_pitch_bytes = 0; // Zero is tightly packed.
+    uint64 row_pitch_bytes = 0;   // Zero is tightly packed.
+    uint64 slice_pitch_bytes = 0; // Zero is tightly packed.
 };
 
 struct SamplerDesc
@@ -589,7 +523,7 @@ struct ColorTargetDesc
 {
     Format format = Format::undefined;
     BlendState blend = {};
-    uint8_t write_mask = 0xf;
+    uint8 write_mask = 0xf;
 };
 
 struct RasterizationState
@@ -612,10 +546,10 @@ struct Viewport
 
 struct Scissor
 {
-    int32_t x = 0;
-    int32_t y = 0;
-    uint32_t width = 1;
-    uint32_t height = 1;
+    int32 x = 0;
+    int32 y = 0;
+    uint32 width = 1;
+    uint32 height = 1;
 };
 
 struct StencilFaceState
@@ -624,7 +558,7 @@ struct StencilFaceState
     StencilOp fail = StencilOp::keep;
     StencilOp pass = StencilOp::keep;
     StencilOp depth_fail = StencilOp::keep;
-    uint8_t reference = 0;
+    uint8 reference = 0;
 };
 
 struct DepthStencilState
@@ -633,16 +567,16 @@ struct DepthStencilState
     bool depth_write = false;
     CompareOp depth_compare = CompareOp::less_equal;
     bool stencil_test = false;
-    uint8_t stencil_read_mask = 0xff;
-    uint8_t stencil_write_mask = 0xff;
+    uint8 stencil_read_mask = 0xff;
+    uint8 stencil_write_mask = 0xff;
     StencilFaceState front = {};
     StencilFaceState back = {};
 };
 
 struct GraphicsPSODesc
 {
-    Span<const uint32_t> vertex_spirv = {};
-    Span<const uint32_t> fragment_spirv = {};
+    Span<const uint32> vertex_spirv = {};
+    Span<const uint32> fragment_spirv = {};
     Span<const ColorTargetDesc> color_targets = {};
     Format depth_format = Format::undefined;
     Format stencil_format = Format::undefined;
@@ -651,8 +585,8 @@ struct GraphicsPSODesc
 
 struct MeshPSODesc
 {
-    Span<const uint32_t> mesh_spirv = {};
-    Span<const uint32_t> fragment_spirv = {};
+    Span<const uint32> mesh_spirv = {};
+    Span<const uint32> fragment_spirv = {};
     Span<const ColorTargetDesc> color_targets = {};
     Format depth_format = Format::undefined;
     Format stencil_format = Format::undefined;
@@ -688,7 +622,7 @@ struct StencilAttachment
     RenderView* render_view = nullptr;
     LoadOp load = LoadOp::load;
     StoreOp store = StoreOp::store;
-    uint8_t clear = 0;
+    uint8 clear = 0;
 };
 
 struct RenderingDesc
@@ -698,6 +632,7 @@ struct RenderingDesc
     StencilAttachment stencil = {};
 };
 
+// Rendering and raster PSOs accept at most eight color attachments. A render pass needs at least one attachment to infer its area.
 // All resource destruction is immediate. Destroy resources only when no recorded or executing GPU frame uses them.
 // The optional NoGraphicsAPIUtility DeleteQueue can defer destruction until a submitted frame completes.
 // Wait for all submitted frames to drain before destroying the device.
@@ -707,9 +642,9 @@ void destroy_device(Device* device) noexcept;
 [[nodiscard]] bool supports_texture_format(const Device* device, Format format, TextureUsage usage) noexcept;
 [[nodiscard]] uint32x2 get_drawable_extent(Device* device) noexcept;
 
-[[nodiscard]] TimelineSemaphore* create_timeline_semaphore(Device* device, uint64_t initial_value = 0) noexcept;
+[[nodiscard]] TimelineSemaphore* create_timeline_semaphore(Device* device, uint64 initial_value = 0) noexcept;
 void destroy_timeline_semaphore(TimelineSemaphore* semaphore) noexcept;
-[[nodiscard]] uint64_t timeline_completed_value(const TimelineSemaphore* semaphore) noexcept;
+[[nodiscard]] uint64 timeline_completed_value(const TimelineSemaphore* semaphore) noexcept;
 void wait_timeline(TimelinePoint point) noexcept;
 void wait_idle(Device* device) noexcept;
 
@@ -718,7 +653,7 @@ void submit_and_present(Device* device, Span<CommandBuffer* const> commands, Tim
 
 // Every non-null returned pointer is 16-byte aligned. Descriptor heaps are exact allocations;
 // cpu_visible, gpu_only, and readback heaps are raw blocks for application-side suballocation.
-[[nodiscard]] GpuHeap create_gpu_heap(Device* device, uint64_t byte_count, MemoryType memory = MemoryType::cpu_visible) noexcept;
+[[nodiscard]] GpuHeap create_gpu_heap(Device* device, uint64 byte_count, MemoryType memory = MemoryType::cpu_visible) noexcept;
 void destroy_gpu_heap(const GpuHeap& heap) noexcept;
 
 template<typename T>
@@ -735,26 +670,24 @@ template<typename T>
 // Texture heaps use one device-selected GPU-only memory type and must outlive every placed texture.
 // Placements must satisfy get_texture_size_align(), remain non-overlapping, and not be reused before the timeline point covering their last use completes.
 // DeviceCaps::texture_heap_alignment can be used as a common allocator element size, avoiding per-placement leading alignment padding.
-[[nodiscard]] TextureHeap create_texture_heap(Device* device, uint64_t byte_count) noexcept;
+[[nodiscard]] TextureHeap create_texture_heap(Device* device, uint64 byte_count) noexcept;
 void destroy_texture_heap(const TextureHeap& heap) noexcept;
 [[nodiscard]] SizeAlign get_texture_size_align(Device* device, const TextureDesc& desc) noexcept;
-[[nodiscard]] Texture* create_texture(Device* device, const TextureDesc& desc, const TextureHeap& heap, uint64_t offset) noexcept;
+[[nodiscard]] Texture* create_texture(Device* device, const TextureDesc& desc, const TextureHeap& heap, uint64 offset) noexcept;
 void destroy_texture(Texture* texture) noexcept;
 [[nodiscard]] RenderView* create_render_view(Texture* texture, const RenderViewDesc& desc = {}) noexcept;
 void destroy_render_view(RenderView* render_view) noexcept;
-void write_texture_descriptor(Device* device,
-                              void* cpu_destination,
-                              const Texture* texture,
-                              TextureDescriptorType type,
+void write_texture_descriptor(Device* device, void* cpu_destination, const Texture* texture, TextureDescriptorType type,
                               const TextureDescriptorDesc& desc = {}) noexcept;
 void write_sampler_descriptor(Device* device, void* cpu_destination, const SamplerDesc& desc = {}) noexcept;
 
 [[nodiscard]] PSO* create_graphics_pso(Device* device, const GraphicsPSODesc& desc) noexcept;
 [[nodiscard]] PSO* create_mesh_pso(Device* device, const MeshPSODesc& desc) noexcept;
-[[nodiscard]] PSO* create_compute_pso(Device* device, Span<const uint32_t> compute_spirv) noexcept;
+[[nodiscard]] PSO* create_compute_pso(Device* device, Span<const uint32> compute_spirv) noexcept;
 void destroy_pso(PSO* pso) noexcept;
 
-// Every begun command buffer must be included exactly once in the next submit or submit_and_present call
+// Create textures before beginning commands. The first begun command buffer initializes them and must be submitted first.
+// Every begun command buffer must be included exactly once in the next submit or submit_and_present call.
 [[nodiscard]] CommandBuffer* begin_commands(Device* device) noexcept;
 void submit(Span<CommandBuffer* const> commands, TimelinePoint completion) noexcept;
 
@@ -777,16 +710,15 @@ void set_depth_stencil(CommandBuffer* commands, const DepthStencilState& state) 
 
 void bind_pso(CommandBuffer* commands, const PSO* pso) noexcept;
 
-void draw(CommandBuffer* commands, ByteSpan root, uint32_t vertex_count, uint32_t instance_count = 1,
-          uint32_t first_vertex = 0, uint32_t first_instance = 0) noexcept;
-void draw_indexed(CommandBuffer* commands, ByteSpan root, GpuRange indices, IndexType type, uint32_t index_count,
-                  uint32_t instance_count = 1, uint32_t first_index = 0, int32_t vertex_offset = 0, uint32_t first_instance = 0) noexcept;
-void draw_indirect(CommandBuffer* commands, ByteSpan root, GpuRange arguments, uint32_t draw_count = 1, uint32_t stride = 0) noexcept;
-void draw_indexed_indirect(CommandBuffer* commands, ByteSpan root, GpuRange indices, IndexType type,
-                           GpuRange arguments, uint32_t draw_count = 1, uint32_t stride = 0) noexcept;
+void draw(CommandBuffer* commands, ByteSpan root, uint32 vertex_count, uint32 instance_count = 1, uint32 first_vertex = 0, uint32 first_instance = 0) noexcept;
+void draw_indexed(CommandBuffer* commands, ByteSpan root, GpuRange indices, IndexType type, uint32 index_count, uint32 instance_count = 1,
+                  uint32 first_index = 0, int32 vertex_offset = 0, uint32 first_instance = 0) noexcept;
+void draw_indirect(CommandBuffer* commands, ByteSpan root, GpuRange arguments, uint32 draw_count = 1, uint32 stride = 0) noexcept;
+void draw_indexed_indirect(CommandBuffer* commands, ByteSpan root, GpuRange indices, IndexType type, GpuRange arguments, uint32 draw_count = 1,
+                           uint32 stride = 0) noexcept;
 void dispatch(CommandBuffer* commands, ByteSpan root, uint32x3 group_count) noexcept;
 void dispatch_indirect(CommandBuffer* commands, ByteSpan root, GpuRange arguments) noexcept;
 void draw_meshlets(CommandBuffer* commands, ByteSpan root, uint32x3 group_count) noexcept;
-void draw_meshlets_indirect(CommandBuffer* commands, ByteSpan root, GpuRange arguments, uint32_t draw_count = 1, uint32_t stride = 0) noexcept;
+void draw_meshlets_indirect(CommandBuffer* commands, ByteSpan root, GpuRange arguments, uint32 draw_count = 1, uint32 stride = 0) noexcept;
 
 } // namespace gpu

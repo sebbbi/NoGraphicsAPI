@@ -30,20 +30,8 @@ NoGraphicsAPI_require_tool_version(
     "SPIRV-Tools v([0-9]+\\.[0-9]+)")
 
 function(NoGraphicsAPI_compile_slang output source entry stage)
-    cmake_parse_arguments(SLANG "DESCRIPTOR_HEAP" "DEFINE" "DEPENDS" ${ARGN})
+    cmake_parse_arguments(SLANG "" "" "DEPENDS" ${ARGN})
     set(options)
-    if(SLANG_DESCRIPTOR_HEAP)
-        list(APPEND options
-            -fvk-use-c-layout
-            -matrix-layout-row-major
-            -capability spvDescriptorHeapEXT
-            -I ${CMAKE_CURRENT_SOURCE_DIR}
-            -I ${PROJECT_SOURCE_DIR}/include
-            -I ${PROJECT_SOURCE_DIR}/utility/include)
-    endif()
-    if(SLANG_DEFINE)
-        list(APPEND options -D${SLANG_DEFINE}=1)
-    endif()
     if(stage STREQUAL "mesh")
         list(APPEND options -capability spvMeshShadingEXT)
     endif()
@@ -58,6 +46,12 @@ function(NoGraphicsAPI_compile_slang output source entry stage)
             -profile spirv_1_5
             -emit-spirv-directly
             -fvk-use-entrypoint-name
+            -fvk-use-c-layout
+            -matrix-layout-row-major
+            -capability spvDescriptorHeapEXT
+            -I ${CMAKE_CURRENT_SOURCE_DIR}
+            -I ${PROJECT_SOURCE_DIR}/include
+            -I ${PROJECT_SOURCE_DIR}/utility/include
             ${options}
             -entry ${entry}
             -stage ${stage}
@@ -65,6 +59,8 @@ function(NoGraphicsAPI_compile_slang output source entry stage)
         COMMAND ${NOGRAPHICSAPI_SPIRV_VAL}
             --target-env vulkan1.4 --scalar-block-layout ${output}
         DEPENDS ${source} ${SLANG_DEPENDS}
+            ${PROJECT_SOURCE_DIR}/include/NoGraphicsAPI/types.h
+            ${PROJECT_SOURCE_DIR}/utility/include/NoGraphicsAPIUtility/shader_types.h
         VERBATIM
         COMMENT "Compiling Slang ${stage} shader ${entry}"
     )

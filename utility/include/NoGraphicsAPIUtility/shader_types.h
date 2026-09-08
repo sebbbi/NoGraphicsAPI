@@ -17,17 +17,7 @@ typedef int64_t int64;
 
 #else
 
-#	include <cstddef>
-#	include <cstdint>
-
-using uint8 = std::uint8_t;
-using int8 = std::int8_t;
-using uint16 = std::uint16_t;
-using int16 = std::int16_t;
-using uint32 = std::uint32_t;
-using int32 = std::int32_t;
-using uint64 = std::uint64_t;
-using int64 = std::int64_t;
+#	include <NoGraphicsAPI/types.h>
 
 // CPU-side binary16 values are deliberately opaque storage. Conversion to or
 // from float is kept out of the shared ABI types so every bit pattern,
@@ -43,8 +33,8 @@ struct float2 {
 	float x;
 	float y;
 
-	constexpr float& operator[](std::size_t index) noexcept { return index == 0 ? x : y; }
-	constexpr const float& operator[](std::size_t index) const noexcept { return index == 0 ? x : y; }
+	constexpr float& operator[](size_t index) noexcept { return index == 0 ? x : y; }
+	constexpr const float& operator[](size_t index) const noexcept { return index == 0 ? x : y; }
 };
 
 struct float3 {
@@ -52,8 +42,8 @@ struct float3 {
 	float y;
 	float z;
 
-	constexpr float& operator[](std::size_t index) noexcept { return index == 0 ? x : (index == 1 ? y : z); }
-	constexpr const float& operator[](std::size_t index) const noexcept { return index == 0 ? x : (index == 1 ? y : z); }
+	constexpr float& operator[](size_t index) noexcept { return index == 0 ? x : (index == 1 ? y : z); }
+	constexpr const float& operator[](size_t index) const noexcept { return index == 0 ? x : (index == 1 ? y : z); }
 };
 
 struct float4 {
@@ -62,16 +52,16 @@ struct float4 {
 	float z;
 	float w;
 
-	constexpr float& operator[](std::size_t index) noexcept { return index == 0 ? x : (index == 1 ? y : (index == 2 ? z : w)); }
-	constexpr const float& operator[](std::size_t index) const noexcept { return index == 0 ? x : (index == 1 ? y : (index == 2 ? z : w)); }
+	constexpr float& operator[](size_t index) noexcept { return index == 0 ? x : (index == 1 ? y : (index == 2 ? z : w)); }
+	constexpr const float& operator[](size_t index) const noexcept { return index == 0 ? x : (index == 1 ? y : (index == 2 ? z : w)); }
 };
 
 struct int2 {
 	int32 x;
 	int32 y;
 
-	constexpr int32& operator[](std::size_t index) noexcept { return index == 0 ? x : y; }
-	constexpr const int32& operator[](std::size_t index) const noexcept { return index == 0 ? x : y; }
+	constexpr int32& operator[](size_t index) noexcept { return index == 0 ? x : y; }
+	constexpr const int32& operator[](size_t index) const noexcept { return index == 0 ? x : y; }
 };
 
 struct int3 {
@@ -79,8 +69,8 @@ struct int3 {
 	int32 y;
 	int32 z;
 
-	constexpr int32& operator[](std::size_t index) noexcept { return index == 0 ? x : (index == 1 ? y : z); }
-	constexpr const int32& operator[](std::size_t index) const noexcept { return index == 0 ? x : (index == 1 ? y : z); }
+	constexpr int32& operator[](size_t index) noexcept { return index == 0 ? x : (index == 1 ? y : z); }
+	constexpr const int32& operator[](size_t index) const noexcept { return index == 0 ? x : (index == 1 ? y : z); }
 };
 
 struct int4 {
@@ -89,16 +79,16 @@ struct int4 {
 	int32 z;
 	int32 w;
 
-	constexpr int32& operator[](std::size_t index) noexcept { return index == 0 ? x : (index == 1 ? y : (index == 2 ? z : w)); }
-	constexpr const int32& operator[](std::size_t index) const noexcept { return index == 0 ? x : (index == 1 ? y : (index == 2 ? z : w)); }
+	constexpr int32& operator[](size_t index) noexcept { return index == 0 ? x : (index == 1 ? y : (index == 2 ? z : w)); }
+	constexpr const int32& operator[](size_t index) const noexcept { return index == 0 ? x : (index == 1 ? y : (index == 2 ? z : w)); }
 };
 
 struct uint2 {
 	uint32 x;
 	uint32 y;
 
-	constexpr uint32& operator[](std::size_t index) noexcept { return index == 0 ? x : y; }
-	constexpr const uint32& operator[](std::size_t index) const noexcept { return index == 0 ? x : y; }
+	constexpr uint32& operator[](size_t index) noexcept { return index == 0 ? x : y; }
+	constexpr const uint32& operator[](size_t index) const noexcept { return index == 0 ? x : y; }
 };
 
 struct uint3 {
@@ -106,8 +96,8 @@ struct uint3 {
 	uint32 y;
 	uint32 z;
 
-	constexpr uint32& operator[](std::size_t index) noexcept { return index == 0 ? x : (index == 1 ? y : z); }
-	constexpr const uint32& operator[](std::size_t index) const noexcept { return index == 0 ? x : (index == 1 ? y : z); }
+	constexpr uint32& operator[](size_t index) noexcept { return index == 0 ? x : (index == 1 ? y : z); }
+	constexpr const uint32& operator[](size_t index) const noexcept { return index == 0 ? x : (index == 1 ? y : z); }
 };
 
 struct uint4 {
@@ -116,8 +106,8 @@ struct uint4 {
 	uint32 z;
 	uint32 w;
 
-	constexpr uint32& operator[](std::size_t index) noexcept { return index == 0 ? x : (index == 1 ? y : (index == 2 ? z : w)); }
-	constexpr const uint32& operator[](std::size_t index) const noexcept { return index == 0 ? x : (index == 1 ? y : (index == 2 ? z : w)); }
+	constexpr uint32& operator[](size_t index) noexcept { return index == 0 ? x : (index == 1 ? y : (index == 2 ? z : w)); }
+	constexpr const uint32& operator[](size_t index) const noexcept { return index == 0 ? x : (index == 1 ? y : (index == 2 ? z : w)); }
 };
 
 // Slang names matrix dimensions as row-count x column-count. Matrices use
@@ -125,22 +115,22 @@ struct uint4 {
 struct float3x3 {
 	float3 rows[3];
 
-	constexpr float3& operator[](std::size_t index) noexcept { return rows[index]; }
-	constexpr const float3& operator[](std::size_t index) const noexcept { return rows[index]; }
+	constexpr float3& operator[](size_t index) noexcept { return rows[index]; }
+	constexpr const float3& operator[](size_t index) const noexcept { return rows[index]; }
 };
 
 struct float3x4 {
 	float4 rows[3];
 
-	constexpr float4& operator[](std::size_t index) noexcept { return rows[index]; }
-	constexpr const float4& operator[](std::size_t index) const noexcept { return rows[index]; }
+	constexpr float4& operator[](size_t index) noexcept { return rows[index]; }
+	constexpr const float4& operator[](size_t index) const noexcept { return rows[index]; }
 };
 
 struct float4x4 {
 	float4 rows[4];
 
-	constexpr float4& operator[](std::size_t index) noexcept { return rows[index]; }
-	constexpr const float4& operator[](std::size_t index) const noexcept { return rows[index]; }
+	constexpr float4& operator[](size_t index) noexcept { return rows[index]; }
+	constexpr const float4& operator[](size_t index) const noexcept { return rows[index]; }
 };
 
 struct quaternion {
@@ -149,8 +139,8 @@ struct quaternion {
 	float z;
 	float w;
 
-	constexpr float& operator[](std::size_t index) noexcept { return index == 0 ? x : (index == 1 ? y : (index == 2 ? z : w)); }
-	constexpr const float& operator[](std::size_t index) const noexcept { return index == 0 ? x : (index == 1 ? y : (index == 2 ? z : w)); }
+	constexpr float& operator[](size_t index) noexcept { return index == 0 ? x : (index == 1 ? y : (index == 2 ? z : w)); }
+	constexpr const float& operator[](size_t index) const noexcept { return index == 0 ? x : (index == 1 ? y : (index == 2 ? z : w)); }
 };
 
 struct float16_t2 {

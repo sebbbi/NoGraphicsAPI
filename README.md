@@ -44,9 +44,8 @@ or `VkPipelineLayout`. Its central extensions are:
   `VK_IMAGE_LAYOUT_GENERAL`;
 - `VK_EXT_mesh_shader` for mesh pipelines and dispatch.
 
-NoGraphicsAPI is a low-level, thin Vulkan wrapper rather than a validation layer. API preconditions
-are generally enforced by debug assertions; debug builds enable `VK_EXT_debug_utils` and the Khronos
-validation layer when available.
+NoGraphicsAPI is a low-level, thin Vulkan wrapper. Debug builds enable `VK_EXT_debug_utils` and the
+Khronos validation layer when available.
 
 Vulkan 1.4 supplies buffer device addresses, timeline semaphores, dynamic rendering,
 synchronization2, scalar block layout, and the remaining core features. See
@@ -248,6 +247,8 @@ but this repository currently lacks Linux swap chain support (to be implemented)
 [turing-rebar]: https://www.nvidia.com/en-us/geforce/graphics-cards/compare/?section=compare-specs
 
 ## Current scope
+
+The library has been reviewed with GPT-6 Astra Ultra, but remains a prototype and may contain bugs. Please report issues.
 
 Implemented today: graphics, mesh, and compute PSOs; direct and indirect work; GPU-address copies;
 application-owned descriptor heaps; common texture types and views; dynamic rendering and

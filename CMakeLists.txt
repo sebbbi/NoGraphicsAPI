@@ -35,6 +35,10 @@ message(STATUS "Using Vulkan ${Vulkan_VERSION}: ${Vulkan_LIBRARY}")
 message(STATUS "Using Vulkan headers: ${Vulkan_INCLUDE_DIR}")
 
 add_library(NoGraphicsAPI STATIC
+    include/NoGraphicsAPI/types.h
+    include/NoGraphicsAPI/span.hpp
+    include/NoGraphicsAPI/traits.hpp
+    include/NoGraphicsAPI/bit.hpp
     include/NoGraphicsAPI/NoGraphicsAPI.hpp
     src/NoGraphicsAPI.cpp
 )
@@ -63,6 +67,10 @@ else()
         -Wshadow
         -Wno-missing-field-initializers
     )
+endif()
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(NoGraphicsAPI PRIVATE -Wno-missing-field-initializers)
 endif()
 
 add_subdirectory(utility)

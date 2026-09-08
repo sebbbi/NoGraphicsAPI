@@ -1,11 +1,11 @@
 #include <NoGraphicsAPIUtility/delete_queue.hpp>
 
-#include <cassert>
+#include <assert.h>
 
 namespace gpu
 {
 
-DeleteQueue::DeleteQueue(TimelineSemaphore* timeline, uint32_t capacity) noexcept
+DeleteQueue::DeleteQueue(TimelineSemaphore* timeline, uint32 capacity) noexcept
     : timeline_(timeline), entries_(new Entry[capacity]), capacity_(capacity)
 {
     assert(timeline);
@@ -29,10 +29,10 @@ void DeleteQueue::tick() noexcept
 
 void DeleteQueue::drain() noexcept
 {
-    collect(UINT64_MAX);
+    collect(~uint64{0});
 }
 
-void DeleteQueue::collect(uint64_t completed_value) noexcept
+void DeleteQueue::collect(uint64 completed_value) noexcept
 {
     assert(!ticking_ && "delete queue callbacks cannot recursively collect the same queue");
     ticking_ = true;

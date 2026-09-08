@@ -1,23 +1,20 @@
 #include <NoGraphicsAPIUtility/shader_types.h>
 
-#include <cstdint>
-#include <type_traits>
-
 template<typename T>
 constexpr bool shared_pod =
-    std::is_aggregate_v<T> &&
-    std::is_trivial_v<T> &&
-    std::is_standard_layout_v<T> &&
-    std::is_trivially_copyable_v<T>;
+    __is_aggregate(T) &&
+    __is_trivial(T) &&
+    __is_standard_layout(T) &&
+    __is_trivially_copyable(T);
 
-static_assert(std::is_same_v<uint8, std::uint8_t>);
-static_assert(std::is_same_v<int8, std::int8_t>);
-static_assert(std::is_same_v<uint16, std::uint16_t>);
-static_assert(std::is_same_v<int16, std::int16_t>);
-static_assert(std::is_same_v<uint32, std::uint32_t>);
-static_assert(std::is_same_v<int32, std::int32_t>);
-static_assert(std::is_same_v<uint64, std::uint64_t>);
-static_assert(std::is_same_v<int64, std::int64_t>);
+static_assert(sizeof(uint8) == 1 && static_cast<uint8>(-1) > 0);
+static_assert(sizeof(int8) == 1 && static_cast<int8>(-1) < 0);
+static_assert(sizeof(uint16) == 2 && static_cast<uint16>(-1) > 0);
+static_assert(sizeof(int16) == 2 && static_cast<int16>(-1) < 0);
+static_assert(sizeof(uint32) == 4 && static_cast<uint32>(-1) > 0);
+static_assert(sizeof(int32) == 4 && static_cast<int32>(-1) < 0);
+static_assert(sizeof(uint64) == 8 && static_cast<uint64>(-1) > 0);
+static_assert(sizeof(int64) == 8 && static_cast<int64>(-1) < 0);
 
 static_assert(shared_pod<float2>);
 static_assert(shared_pod<float3>);

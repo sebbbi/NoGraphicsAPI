@@ -9,6 +9,7 @@ target_link_libraries(NoGraphicsAPI_example_support PUBLIC NoGraphicsAPI::NoGrap
 target_include_directories(NoGraphicsAPI_example_support PUBLIC common)
 if(WIN32)
     target_link_libraries(NoGraphicsAPI_example_support PUBLIC user32)
+    target_compile_definitions(NoGraphicsAPI_example_support PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
 add_subdirectory(triangle)

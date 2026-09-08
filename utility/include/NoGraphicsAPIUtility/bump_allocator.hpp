@@ -2,16 +2,13 @@
 
 #include <NoGraphicsAPI/NoGraphicsAPI.hpp>
 
-#include <atomic>
-
 namespace gpu
 {
 
 class BumpAllocator
 {
 public:
-    static constexpr uint64_t alignment = 16;
-    static_assert(std::atomic_ref<uint64_t>::is_always_lock_free, "atomic bump allocation requires lock-free 64-bit atomics");
+    static constexpr uint64 alignment = 16;
 
     // Storage must be nonempty, expose at least one address, and align every exposed address to 16 bytes.
     explicit BumpAllocator(GpuCpuRange<byte> storage) noexcept;
@@ -22,16 +19,16 @@ public:
     BumpAllocator& operator=(BumpAllocator&& other) noexcept;
 
     // The request must be nonzero. Reservations are rounded up to 16 bytes; an empty allocation reports exhausted storage.
-    [[nodiscard]] GpuCpuRange<byte> allocate(uint64_t byte_size) noexcept;
+    [[nodiscard]] GpuCpuRange<byte> allocate(uint64 byte_size) noexcept;
 
     // Intended for concurrent bump allocation from worker threads. Successful concurrent calls to allocate_atomic() return disjoint ranges.
     // The request must be nonzero. Reservations are rounded up to 16 bytes; an empty allocation reports exhausted storage.
     // Every other operation, including allocate(), reset(), move construction/assignment, and destruction, requires exclusive access.
     // None may execute concurrently with allocate() or allocate_atomic().
-    [[nodiscard]] GpuCpuRange<byte> allocate_atomic(uint64_t byte_size) noexcept;
+    [[nodiscard]] GpuCpuRange<byte> allocate_atomic(uint64 byte_size) noexcept;
 
     template<typename T>
-    [[nodiscard]] GpuCpuRange<T> allocate(uint64_t element_count) noexcept
+    [[nodiscard]] GpuCpuRange<T> allocate(uint64 element_count) noexcept
     {
         static_assert(alignof(T) <= alignment);
         const GpuCpuRange<byte> allocation = allocate(element_count * sizeof(T));
@@ -39,7 +36,7 @@ public:
     }
 
     template<typename T>
-    [[nodiscard]] GpuCpuRange<T> allocate_atomic(uint64_t element_count) noexcept
+    [[nodiscard]] GpuCpuRange<T> allocate_atomic(uint64 element_count) noexcept
     {
         static_assert(alignof(T) <= alignment);
         const GpuCpuRange<byte> allocation = allocate_atomic(element_count * sizeof(T));
@@ -51,7 +48,7 @@ public:
 
 private:
     GpuCpuRange<byte> storage_{};
-    alignas(std::atomic_ref<uint64_t>::required_alignment) uint64_t offset_ = 0;
+    alignas(8) uint64 offset_ = 0;
 };
 
 } // namespace gpu

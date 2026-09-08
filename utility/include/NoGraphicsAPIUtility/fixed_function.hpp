@@ -1,15 +1,25 @@
 #pragma once
 
-#include <cassert>
-#include <cstddef>
-#include <new>
-#include <type_traits>
+#include <NoGraphicsAPI/types.h>
+#include <NoGraphicsAPI/traits.hpp>
+
+#include <assert.h>
+
+namespace gpu::detail
+{
+enum class CallbackPlacement {};
+}
+
+inline void* operator new(size_t, void* storage, gpu::detail::CallbackPlacement) noexcept
+{
+    return storage;
+}
 
 namespace gpu
 {
 
 // Stores one trivial noexcept void callback in StorageSize inline bytes. Clear before setting a new callback.
-template<std::size_t StorageSize>
+template<size_t StorageSize>
 class FixedFunction
 {
 public:
@@ -25,15 +35,15 @@ public:
     template<typename Callback>
     void set(Callback callback) noexcept
     {
-        static_assert(std::is_trivially_copyable_v<Callback>);
-        static_assert(std::is_trivially_destructible_v<Callback>);
-        static_assert(std::is_nothrow_move_constructible_v<Callback>);
-        static_assert(std::is_nothrow_invocable_v<Callback&>);
+        static_assert(__is_trivially_copyable(Callback));
+        static_assert(detail::is_trivially_destructible_v<Callback>);
+        static_assert(noexcept(Callback(static_cast<Callback&&>(callback))));
+        static_assert(noexcept(callback()));
         static_assert(sizeof(Callback) <= StorageSize);
-        static_assert(alignof(Callback) <= alignof(std::max_align_t));
+        static_assert(alignof(Callback) <= maximum_alignment);
 
         assert(!invoke_);
-        ::new (static_cast<void*>(storage_)) Callback(static_cast<Callback&&>(callback));
+        ::new (static_cast<void*>(storage_), detail::CallbackPlacement{}) Callback(static_cast<Callback&&>(callback));
         invoke_ = invoke<Callback>;
     }
 
@@ -54,10 +64,10 @@ private:
     template<typename Callback>
     static void invoke(void* storage) noexcept
     {
-        (*std::launder(reinterpret_cast<Callback*>(storage)))();
+        (*__builtin_launder(reinterpret_cast<Callback*>(storage)))();
     }
 
-    alignas(std::max_align_t) std::byte storage_[StorageSize];
+    alignas(maximum_alignment) byte storage_[StorageSize];
     Invoke invoke_ = nullptr;
 };
 
