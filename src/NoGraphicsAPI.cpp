@@ -410,7 +410,7 @@ VkAccessFlags2 to_vk(Access accesses)
 }
 
 constexpr VkBufferUsageFlags universal_buffer_usage =
-    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
     VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
     VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
@@ -434,8 +434,7 @@ bool is_usable_memory_type(const VkPhysicalDeviceMemoryProperties& properties, u
 }
 
 constexpr VkAddressCommandFlagsKHR address_flags =
-    VK_ADDRESS_COMMAND_FULLY_BOUND_BIT_KHR |
-    VK_ADDRESS_COMMAND_STORAGE_BUFFER_USAGE_BIT_KHR;
+    VK_ADDRESS_COMMAND_FULLY_BOUND_BIT_KHR;
 } // namespace
 
 namespace detail
