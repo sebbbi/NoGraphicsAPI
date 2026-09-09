@@ -47,6 +47,7 @@
   behind preprocessor conditionals.
 - Keep each shader source file's CPU-shared declarations in its own matching shared header. Keep shader-specific root data and constants in that header;
   put types used by multiple shader files in a neutral common header.
+- Use shared (CPU/GPU) data headers for structs, enums, and constants. Do not put arbitrary C/C++ code in them behind `#if !defined(__SLANG__)` blocks.
 - Always review code for performance issues before considering work complete.
 - Line length is 160 characters. Please don't chop expressions to multiple lines if not needed.
 
