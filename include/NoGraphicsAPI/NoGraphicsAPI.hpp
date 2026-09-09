@@ -147,6 +147,8 @@ enum class Format : uint8
     bc3_srgb,
     bc3_unorm,
     bc5_rg,
+    bc6h_ufloat,
+    bc6h_sfloat,
     bc7_srgb,
     bc7_unorm,
 
@@ -242,6 +244,8 @@ struct TextureFormatInfo
     case Format::bc3_srgb:
     case Format::bc3_unorm:
     case Format::bc5_rg:
+    case Format::bc6h_ufloat:
+    case Format::bc6h_sfloat:
     case Format::bc7_srgb:
     case Format::bc7_unorm:
         return {
@@ -438,6 +442,8 @@ struct DeviceCaps
     uint64 texture_heap_alignment = 0;
     uint64 texture_descriptor_size = 0; // Bytes per descriptor slot.
     uint64 sampler_descriptor_size = 0; // Bytes per descriptor slot.
+    float timestamp_period_ns = 0.0f; // Nanoseconds per timestamp tick.
+    uint32 sub_texel_precision_bits = 0; // Fractional filtering precision, for conservative sampled-field bounds.
     bool texture_compression_bc = false;
     bool texture_compression_astc = false;
     bool storage_input_output16 = false;
@@ -451,6 +457,7 @@ struct DeviceDesc
     Format swapchain_format = Format::undefined;
     uint32 desired_swapchain_image_count = 2; // 1..8 presentation contexts.
     uint32 desired_queue_count = 1; // Must be nonzero; capped to the selected queue family's available count.
+    uint32 timestamp_query_count = 256; // Per command buffer; zero disables timestamps.
 };
 
 struct DeviceInit
@@ -587,7 +594,7 @@ struct DepthStencilState
 struct GraphicsPSODesc
 {
     Span<const uint32> vertex_spirv = {};
-    Span<const uint32> fragment_spirv = {};
+    Span<const uint32> fragment_spirv = {}; // Empty omits the fragment stage, for depth-only rasterization.
     Span<const ColorTargetDesc> color_targets = {};
     Format depth_format = Format::undefined;
     Format stencil_format = Format::undefined;
@@ -597,7 +604,7 @@ struct GraphicsPSODesc
 struct MeshPSODesc
 {
     Span<const uint32> mesh_spirv = {};
-    Span<const uint32> fragment_spirv = {};
+    Span<const uint32> fragment_spirv = {}; // Empty omits the fragment stage, for depth-only rasterization.
     Span<const ColorTargetDesc> color_targets = {};
     Format depth_format = Format::undefined;
     Format stencil_format = Format::undefined;
@@ -723,6 +730,11 @@ void copy_memory_to_texture(CommandBuffer* commands, GpuRange source, Texture* d
 void copy_texture_to_memory(CommandBuffer* commands, Texture* source, GpuRange destination, const TextureCopyDesc& copy = {}) noexcept;
 
 void barrier(CommandBuffer* commands, Stage before, Access before_access, Stage after, Access after_access) noexcept;
+
+// Up to DeviceDesc::timestamp_query_count markers per command buffer. stage must map to a single GPU pipeline stage.
+// Destinations must be 8-byte aligned and distinct until submission completes.
+// Results are copied at command-buffer end; read mapped readback memory only after submission completes.
+void write_timestamp(CommandBuffer* commands, uint64* gpu_destination, Stage stage = Stage::all_commands) noexcept;
 
 void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc) noexcept;
 void end_render_pass(CommandBuffer* commands) noexcept;

@@ -164,7 +164,7 @@ void record_textures(void* argument) noexcept
     context->upload_commands = gpu::begin_commands(context->pool);
     context->timeline = gpu::create_timeline_semaphore(context->device);
     context->upload = gpu::create_gpu_heap(context->device, textures_per_thread * texture_bytes);
-    context->readback = gpu::create_gpu_heap(context->device, textures_per_thread * texture_bytes, gpu::MemoryType::readback);
+    context->readback = gpu::create_gpu_heap(context->device, textures_per_thread * texture_bytes + sizeof(uint64) * 2, gpu::MemoryType::readback);
     context->texture_descriptors = gpu::create_gpu_heap(context->device, textures_per_thread * caps.texture_descriptor_size,
                                                      gpu::MemoryType::texture_descriptor_heap);
     context->sampler_descriptors = gpu::create_gpu_heap(context->device, textures_per_thread * caps.sampler_descriptor_size,
@@ -172,6 +172,7 @@ void record_textures(void* argument) noexcept
     for (uint32 index = 0; index != textures_per_thread * texture_bytes / sizeof(uint32); ++index)
         reinterpret_cast<uint32*>(context->upload.range.cpu)[index] = 0x12340000u + context->index * 0x1000u + index;
     memset(context->readback.range.cpu, 0xcd, textures_per_thread * texture_bytes);
+    memset(context->readback.range.cpu + textures_per_thread * texture_bytes, 0xff, sizeof(uint64) * 2);
 
     for (uint32 index = 0; index != textures_per_thread; ++index)
     {
@@ -184,6 +185,7 @@ void record_textures(void* argument) noexcept
         gpu::copy_memory_to_texture(context->upload_commands, {.gpu = context->upload.range.gpu + index * texture_bytes, .size = texture_bytes},
                                     context->textures[index]);
     }
+    gpu::write_timestamp(context->upload_commands, reinterpret_cast<uint64*>(context->readback.range.gpu + textures_per_thread * texture_bytes));
     gpu::end_commands(context->upload_commands);
     context->readback_commands = gpu::begin_commands(context->pool);
     for (uint32 index = 0; index != textures_per_thread; ++index)
@@ -192,6 +194,7 @@ void record_textures(void* argument) noexcept
                                     {.gpu = context->readback.range.gpu + index * texture_bytes, .size = texture_bytes});
     }
     gpu::barrier(context->readback_commands, gpu::Stage::transfer, gpu::Access::transfer_write, gpu::Stage::host, gpu::Access::host_read);
+    gpu::write_timestamp(context->readback_commands, reinterpret_cast<uint64*>(context->readback.range.gpu + textures_per_thread * texture_bytes) + 1);
     gpu::end_commands(context->readback_commands);
 }
 
@@ -255,6 +258,12 @@ bool test_parallel_recording(gpu::Device* device) noexcept
         for (uint32 index = 0; index != thread_count; ++index)
         {
             gpu::wait_timeline({.semaphore = contexts[index].timeline, .value = 2});
+            const uint64* timestamps = reinterpret_cast<const uint64*>(contexts[index].readback.range.cpu + textures_per_thread * texture_bytes);
+            if (timestamps[0] == ~uint64{0} || timestamps[1] == ~uint64{0} || timestamps[0] > timestamps[1])
+            {
+                fprintf(stderr, "Worker %u timestamp readback failed.\n", index);
+                valid = false;
+            }
             for (uint32 word = 0; word != textures_per_thread * texture_bytes / sizeof(uint32); ++word)
             {
                 if (reinterpret_cast<uint32*>(contexts[index].upload.range.cpu)[word] == reinterpret_cast<uint32*>(contexts[index].readback.range.cpu)[word])
@@ -291,20 +300,23 @@ void submit_copies(void* argument) noexcept
     gpu::TimelineSemaphore* timeline = gpu::create_timeline_semaphore(context->device);
     const gpu::GpuHeap upload = gpu::create_gpu_heap(context->device, texture_bytes);
     const gpu::GpuHeap scratch = gpu::create_gpu_heap(context->device, texture_bytes, gpu::MemoryType::gpu_only);
-    const gpu::GpuHeap readback = gpu::create_gpu_heap(context->device, texture_bytes, gpu::MemoryType::readback);
+    const gpu::GpuHeap readback = gpu::create_gpu_heap(context->device, texture_bytes + sizeof(uint64), gpu::MemoryType::readback);
     for (uint32 iteration = 1; iteration <= 32; ++iteration)
     {
         for (uint32 index = 0; index != texture_bytes / sizeof(uint32); ++index)
             reinterpret_cast<uint32*>(upload.range.cpu)[index] = context->index * 0x10000u + iteration * 0x100u + index;
+        *reinterpret_cast<uint64*>(readback.range.cpu + texture_bytes) = ~uint64{0};
         gpu::CommandBuffer* commands = gpu::begin_commands(pool);
         gpu::copy_memory(commands, gpu::gpu_range(upload), gpu::gpu_range(scratch));
         gpu::barrier(commands, gpu::Stage::transfer, gpu::Access::transfer_write, gpu::Stage::transfer, gpu::Access::transfer_read);
-        gpu::copy_memory(commands, gpu::gpu_range(scratch), gpu::gpu_range(readback));
+        gpu::copy_memory(commands, gpu::gpu_range(scratch), {.gpu = readback.range.gpu, .size = texture_bytes});
         gpu::barrier(commands, gpu::Stage::transfer, gpu::Access::transfer_write, gpu::Stage::host, gpu::Access::host_read);
+        gpu::write_timestamp(commands, reinterpret_cast<uint64*>(readback.range.gpu + texture_bytes));
         gpu::end_commands(commands);
         gpu::submit(context->queue, {.commands = {commands}, .completion = {.semaphore = timeline, .value = iteration}});
         gpu::wait_timeline({.semaphore = timeline, .value = iteration});
         context->valid = memcmp(upload.range.cpu, readback.range.cpu, texture_bytes) == 0 && context->valid;
+        context->valid = *reinterpret_cast<const uint64*>(readback.range.cpu + texture_bytes) != ~uint64{0} && context->valid;
         gpu::reset_command_pool(pool);
     }
     gpu::destroy_command_pool(pool);

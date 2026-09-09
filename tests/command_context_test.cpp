@@ -1,6 +1,7 @@
 #include <NoGraphicsAPI/NoGraphicsAPI.hpp>
 
 #include <stddef.h>
+#include <stdio.h>
 
 namespace
 {
@@ -151,6 +152,179 @@ bool test_batch_growth_and_reuse(gpu::Device* device, gpu::TimelineSemaphore* ti
         gpu::reset_command_pool(pool);
     }
     gpu::destroy_command_pool(pool);
+    return valid;
+}
+
+bool test_timestamp_readback(gpu::Device* device, gpu::TimelineSemaphore* timeline, uint64& next_timeline_value) noexcept
+{
+    constexpr uint32 context_count = 3;
+    constexpr uint32 slot_words = 514;
+    constexpr uint32 word_count = context_count * slot_words;
+    constexpr uint32 counts[4][context_count]{{256, 4, 17}, {1, 0, 3}, {9, 256, 2}, {0, 2, 1}};
+    constexpr uint64 sentinel = ~uint64{0};
+    const gpu::GpuHeap readback = gpu::create_gpu_heap(device, sizeof(uint64) * word_count, gpu::MemoryType::readback);
+    const gpu::GpuHeap second_readback = gpu::create_gpu_heap(device, sizeof(uint64) * 4, gpu::MemoryType::readback);
+    gpu::CommandPool* pool = gpu::create_command_pool(device);
+    uint64* cpu = reinterpret_cast<uint64*>(readback.range.cpu);
+    uint64* destination = reinterpret_cast<uint64*>(readback.range.gpu);
+    uint64 previous_batch_end = 0;
+    bool valid = true;
+    for (uint32 batch = 0; batch < 4; ++batch)
+    {
+        for (uint32 word = 0; word < word_count; ++word) cpu[word] = sentinel;
+        gpu::CommandBuffer* submitted[context_count]{};
+        const uint32 first = 1 + (batch & 1u);
+        for (uint32 context = 0; context < context_count; ++context)
+        {
+            gpu::CommandBuffer* commands = gpu::begin_commands(pool);
+            submitted[context_count - context - 1] = commands;
+            const uint32 stride = 1 + ((batch + context) & 1u);
+            for (uint32 index = 0; index < counts[batch][context]; ++index)
+                gpu::write_timestamp(commands, destination + context * slot_words + first + index * stride);
+            gpu::end_commands(commands);
+        }
+        // All contexts remain recorded together, and execute in the opposite order. No caller query object or host barrier is needed.
+        const gpu::TimelinePoint completion{.semaphore = timeline, .value = ++next_timeline_value};
+        gpu::submit(gpu::get_queue(device), {.commands = submitted, .completion = completion});
+        gpu::wait_timeline(completion);
+        gpu::reset_command_pool(pool);
+
+        bool batch_valid = true;
+        for (uint32 word = 0; word < word_count; ++word)
+        {
+            const uint32 context = word / slot_words;
+            const uint32 offset = word % slot_words;
+            const uint32 stride = 1 + ((batch + context) & 1u);
+            const bool written = offset >= first && (offset - first) % stride == 0 && (offset - first) / stride < counts[batch][context];
+            batch_valid = batch_valid && (written ? cpu[word] != sentinel : cpu[word] == sentinel);
+        }
+        uint64 first_tick = 0;
+        uint64 previous_tick = 0;
+        bool have_tick = false;
+        for (uint32 order = 0; order < context_count; ++order)
+        {
+            const uint32 context = context_count - order - 1;
+            const uint32 stride = 1 + ((batch + context) & 1u);
+            for (uint32 index = 0; index < counts[batch][context]; ++index)
+            {
+                const uint64 tick = cpu[context * slot_words + first + index * stride];
+                if (have_tick) batch_valid = batch_valid && tick >= previous_tick;
+                else first_tick = tick;
+                previous_tick = tick;
+                have_tick = true;
+            }
+        }
+        batch_valid = batch_valid && previous_tick > first_tick && (batch == 0 || first_tick != previous_batch_end);
+        previous_batch_end = previous_tick;
+        if (!batch_valid) fprintf(stderr, "Timestamp readback failed in batch %u.\n", batch);
+        valid = valid && batch_valid;
+    }
+    for (uint32 word = 0; word < word_count; ++word) cpu[word] = sentinel;
+    uint64* second_cpu = reinterpret_cast<uint64*>(second_readback.range.cpu);
+    for (uint32 word = 0; word < 4; ++word) second_cpu[word] = sentinel;
+    gpu::CommandBuffer* commands = gpu::begin_commands(pool);
+    gpu::write_timestamp(commands, destination);
+    gpu::write_timestamp(commands, reinterpret_cast<uint64*>(second_readback.range.gpu));
+    gpu::write_timestamp(commands, destination + 1);
+    const gpu::TimelinePoint completion{.semaphore = timeline, .value = ++next_timeline_value};
+    gpu::end_commands(commands);
+    gpu::submit(gpu::get_queue(device), {.commands = {commands}, .completion = completion});
+    gpu::wait_timeline(completion);
+    bool cross_heap_valid = cpu[0] != sentinel && second_cpu[0] != sentinel && cpu[1] != sentinel && cpu[0] <= second_cpu[0] && second_cpu[0] <= cpu[1];
+    for (uint32 word = 2; word < word_count; ++word) cross_heap_valid = cross_heap_valid && cpu[word] == sentinel;
+    for (uint32 word = 1; word < 4; ++word) cross_heap_valid = cross_heap_valid && second_cpu[word] == sentinel;
+    if (!cross_heap_valid) fprintf(stderr, "Timestamp readback failed across separate heaps.\n");
+    valid = valid && cross_heap_valid;
+    gpu::destroy_command_pool(pool);
+    gpu::destroy_gpu_heap(second_readback);
+    gpu::destroy_gpu_heap(readback);
+    return valid;
+}
+
+bool test_timestamp_capacity(uint32 count) noexcept
+{
+    const gpu::DeviceInit initialized = gpu::create_device({.timestamp_query_count = count});
+    if (initialized.error != gpu::Error::none) return false;
+    gpu::Device* device = initialized.device;
+    gpu::TimelineSemaphore* timeline = gpu::create_timeline_semaphore(device);
+    gpu::CommandPool* pool = gpu::create_command_pool(device);
+    const gpu::GpuHeap readback = gpu::create_gpu_heap(device, sizeof(uint64) * (count + 2), gpu::MemoryType::readback);
+    uint64* cpu = reinterpret_cast<uint64*>(readback.range.cpu);
+    uint64* destination = reinterpret_cast<uint64*>(readback.range.gpu);
+    constexpr uint64 sentinel = ~uint64{0};
+    uint64 previous_result = 0;
+    bool valid = true;
+    for (uint32 batch = 0; batch < 4; ++batch)
+    {
+        for (uint32 index = 0; index < count + 2; ++index) cpu[index] = sentinel;
+        gpu::CommandBuffer* commands = gpu::begin_commands(pool);
+        for (uint32 index = 0; index < count; ++index) gpu::write_timestamp(commands, destination + index + 1);
+        const gpu::TimelinePoint completion{.semaphore = timeline, .value = batch + 1};
+        gpu::end_commands(commands);
+        gpu::submit(gpu::get_queue(device), {.commands = {commands}, .completion = completion});
+        gpu::wait_timeline(completion);
+        gpu::reset_command_pool(pool);
+        bool batch_valid = cpu[0] == sentinel && cpu[count + 1] == sentinel && (batch == 0 || cpu[1] != previous_result);
+        for (uint32 index = 1; index <= count; ++index)
+            batch_valid = batch_valid && cpu[index] != sentinel && (index == 1 || cpu[index] >= cpu[index - 1]);
+        previous_result = cpu[1];
+        if (!batch_valid) fprintf(stderr, "Timestamp capacity %u failed in batch %u.\n", count, batch);
+        valid = valid && batch_valid;
+        gpu::wait_idle(device);
+    }
+    gpu::destroy_command_pool(pool);
+    gpu::destroy_gpu_heap(readback);
+    gpu::destroy_timeline_semaphore(timeline);
+    gpu::destroy_device(device);
+    return valid;
+}
+
+bool test_without_timestamps() noexcept
+{
+    const gpu::DeviceInit initialized = gpu::create_device({.timestamp_query_count = 0});
+    if (initialized.error != gpu::Error::none) return false;
+    gpu::Device* device = initialized.device;
+    gpu::TimelineSemaphore* timeline = gpu::create_timeline_semaphore(device);
+    gpu::CommandPool* pool = gpu::create_command_pool(device);
+    const gpu::GpuHeap source = gpu::create_gpu_heap(device, sizeof(uint64) * batch_command_count);
+    const gpu::GpuHeap readback = gpu::create_gpu_heap(device, sizeof(uint64) * (batch_command_count * 2 + 1), gpu::MemoryType::readback);
+    uint64* source_cpu = reinterpret_cast<uint64*>(source.range.cpu);
+    uint64* readback_cpu = reinterpret_cast<uint64*>(readback.range.cpu);
+    gpu::CommandBuffer* first_commands[batch_command_count]{};
+    constexpr uint64 sentinel = ~uint64{0};
+    bool valid = true;
+    for (uint32 batch = 0; batch < batch_submission_count; ++batch)
+    {
+        for (size_t index = 0; index < batch_command_count; ++index) source_cpu[index] = uint64(batch + 1) * 1000 + index;
+        for (size_t index = 0; index < batch_command_count * 2 + 1; ++index) readback_cpu[index] = sentinel;
+        gpu::CommandBuffer* commands[batch_command_count]{};
+        bool batch_valid = true;
+        for (size_t index = 0; index < batch_command_count; ++index)
+        {
+            commands[index] = gpu::begin_commands(pool);
+            if (batch == 0) first_commands[index] = commands[index];
+            else batch_valid = batch_valid && commands[index] == first_commands[index];
+            gpu::copy_memory(commands[index], {.gpu = source.range.gpu + index * sizeof(uint64), .size = sizeof(uint64)},
+                             {.gpu = readback.range.gpu + (index * 2 + 1) * sizeof(uint64), .size = sizeof(uint64)});
+            gpu::barrier(commands[index], gpu::Stage::transfer, gpu::Access::transfer_write, gpu::Stage::host, gpu::Access::host_read);
+            gpu::end_commands(commands[index]);
+        }
+        const gpu::TimelinePoint completion{.semaphore = timeline, .value = batch + 1};
+        gpu::submit(gpu::get_queue(device), {.commands = commands, .completion = completion});
+        gpu::wait_timeline(completion);
+        gpu::reset_command_pool(pool);
+        for (size_t index = 0; index < batch_command_count; ++index)
+            batch_valid = batch_valid && readback_cpu[index * 2] == sentinel && readback_cpu[index * 2 + 1] == source_cpu[index];
+        batch_valid = batch_valid && readback_cpu[batch_command_count * 2] == sentinel;
+        if (!batch_valid) fprintf(stderr, "Command readback with timestamps disabled failed in batch %u.\n", batch);
+        valid = valid && batch_valid;
+        gpu::wait_idle(device);
+    }
+    gpu::destroy_command_pool(pool);
+    gpu::destroy_gpu_heap(readback);
+    gpu::destroy_gpu_heap(source);
+    gpu::destroy_timeline_semaphore(timeline);
+    gpu::destroy_device(device);
     return valid;
 }
 
@@ -393,9 +567,10 @@ int main()
                        test_gpu_heaps(device) &&
                        test_descriptor_heaps(device, caps, timeline, next_timeline_value) &&
                        test_placed_textures(device, caps, timeline, next_timeline_value) &&
+                       test_timestamp_readback(device, timeline, next_timeline_value) &&
                        test_batch_growth_and_reuse(device, timeline, next_timeline_value);
     gpu::wait_idle(device);
     gpu::destroy_timeline_semaphore(timeline);
     gpu::destroy_device(device);
-    return valid ? 0 : 1;
+    return valid && test_timestamp_capacity(1) && test_timestamp_capacity(513) && test_without_timestamps() ? 0 : 1;
 }

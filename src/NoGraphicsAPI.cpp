@@ -202,6 +202,8 @@ VkFormat to_vk(Format format)
     case Format::bc3_srgb: return VK_FORMAT_BC3_SRGB_BLOCK;
     case Format::bc3_unorm: return VK_FORMAT_BC3_UNORM_BLOCK;
     case Format::bc5_rg: return VK_FORMAT_BC5_UNORM_BLOCK;
+    case Format::bc6h_ufloat: return VK_FORMAT_BC6H_UFLOAT_BLOCK;
+    case Format::bc6h_sfloat: return VK_FORMAT_BC6H_SFLOAT_BLOCK;
     case Format::bc7_srgb: return VK_FORMAT_BC7_SRGB_BLOCK;
     case Format::bc7_unorm: return VK_FORMAT_BC7_UNORM_BLOCK;
     case Format::undefined: return VK_FORMAT_UNDEFINED;
@@ -227,6 +229,8 @@ constexpr bool compatible_view_formats(Format image_format, Format view_format) 
            (image_format == Format::astc_4x4_srgb && view_format == Format::astc_4x4_unorm) ||
            (image_format == Format::bc3_unorm && view_format == Format::bc3_srgb) ||
            (image_format == Format::bc3_srgb && view_format == Format::bc3_unorm) ||
+           (image_format == Format::bc6h_ufloat && view_format == Format::bc6h_sfloat) ||
+           (image_format == Format::bc6h_sfloat && view_format == Format::bc6h_ufloat) ||
            (image_format == Format::bc7_unorm && view_format == Format::bc7_srgb) ||
            (image_format == Format::bc7_srgb && view_format == Format::bc7_unorm);
 }
@@ -327,6 +331,8 @@ TextureCompression texture_compression(Format format) noexcept
     case Format::bc3_srgb:
     case Format::bc3_unorm:
     case Format::bc5_rg:
+    case Format::bc6h_ufloat:
+    case Format::bc6h_sfloat:
     case Format::bc7_srgb:
     case Format::bc7_unorm: return TextureCompression::bc;
     case Format::astc_4x4_srgb:
@@ -455,6 +461,7 @@ struct DeviceFunctions
     PFN_vkCmdCopyMemoryKHR cmd_copy_memory = nullptr;
     PFN_vkCmdCopyMemoryToImageKHR cmd_copy_memory_to_image = nullptr;
     PFN_vkCmdCopyImageToMemoryKHR cmd_copy_image_to_memory = nullptr;
+    PFN_vkCmdCopyQueryPoolResultsToMemoryKHR cmd_copy_query_pool_results_to_memory = nullptr;
 };
 
 struct BackingBuffer
@@ -560,6 +567,9 @@ struct CommandBuffer
     Device* state = nullptr;
     CommandBuffer* next = nullptr;
     VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+    VkQueryPool timestamp_pool = VK_NULL_HANDLE;
+    VkDeviceAddress* timestamp_destinations = nullptr;
+    uint32 timestamp_count = 0;
     Swapchain* swapchain = nullptr;
 };
 
@@ -607,6 +617,7 @@ struct Device
     uint32 queue_count = 0;
     VkSurfaceKHR surface = VK_NULL_HANDLE;
     uint32 queue_family = 0;
+    uint32 timestamp_query_count = 0;
     VkPhysicalDeviceMemoryProperties memory_properties{};
     VkPhysicalDeviceProperties physical_properties{};
     VkPhysicalDeviceDescriptorHeapPropertiesEXT heap_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_PROPERTIES_EXT};
@@ -1471,7 +1482,8 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
     constexpr VkQueueFlags required_queue_flags = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT;
     for (uint32 index = 0; index < queue_count; ++index)
     {
-        if (queues[index].queueCount == 0 || (queues[index].queueFlags & required_queue_flags) != required_queue_flags)
+        if (queues[index].queueCount == 0 || queues[index].timestampValidBits != 64 ||
+            (queues[index].queueFlags & required_queue_flags) != required_queue_flags)
             continue;
         VkBool32 presentation_supported = VK_TRUE;
         if (surface)
@@ -1533,6 +1545,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         return { .error = Error::unsupported };
 
     Device* state = new Device;
+    state->timestamp_query_count = desc.timestamp_query_count;
     state->present_context_count = presentation ? desc.desired_swapchain_image_count : 0;
     VkExtensionProperties instance_extensions[max_instance_extensions]{};
     uint32 instance_extension_count = 0;
@@ -1787,13 +1800,15 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     state->fn.cmd_copy_memory = load_device_proc<PFN_vkCmdCopyMemoryKHR>(state->device, "vkCmdCopyMemoryKHR");
     state->fn.cmd_copy_memory_to_image = load_device_proc<PFN_vkCmdCopyMemoryToImageKHR>(state->device, "vkCmdCopyMemoryToImageKHR");
     state->fn.cmd_copy_image_to_memory = load_device_proc<PFN_vkCmdCopyImageToMemoryKHR>(state->device, "vkCmdCopyImageToMemoryKHR");
+    state->fn.cmd_copy_query_pool_results_to_memory =
+        load_device_proc<PFN_vkCmdCopyQueryPoolResultsToMemoryKHR>(state->device, "vkCmdCopyQueryPoolResultsToMemoryKHR");
     if (!state->fn.write_sampler_descriptors || !state->fn.write_resource_descriptors ||
         !state->fn.cmd_bind_sampler_heap || !state->fn.cmd_bind_texture_heap ||
         !state->fn.cmd_push_data || !state->fn.cmd_bind_index_buffer ||
         !state->fn.cmd_draw_indirect || !state->fn.cmd_draw_indexed_indirect ||
         !state->fn.cmd_dispatch_indirect || !state->fn.cmd_draw_mesh_tasks ||
         !state->fn.cmd_draw_mesh_tasks_indirect || !state->fn.cmd_copy_memory ||
-        !state->fn.cmd_copy_memory_to_image || !state->fn.cmd_copy_image_to_memory)
+        !state->fn.cmd_copy_memory_to_image || !state->fn.cmd_copy_image_to_memory || !state->fn.cmd_copy_query_pool_results_to_memory)
     {
         return fail_device_creation(state, Error::driver_error);
     }
@@ -1826,6 +1841,8 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         .texture_heap_alignment = state->texture_heap_alignment,
         .texture_descriptor_size = state->heap_properties.imageDescriptorSize,
         .sampler_descriptor_size = state->heap_properties.samplerDescriptorSize,
+        .timestamp_period_ns = selected.properties.limits.timestampPeriod,
+        .sub_texel_precision_bits = selected.properties.limits.subTexelPrecisionBits,
         .texture_compression_bc = selected.texture_compression_bc,
         .texture_compression_astc = selected.texture_compression_astc,
         .storage_input_output16 = selected.storage_input_output16,
@@ -1898,6 +1915,14 @@ void wait_timeline(TimelinePoint point) noexcept
         semaphore->state->device,
         &wait_info,
         ~uint64{0}));
+}
+
+void write_timestamp(CommandBuffer* commands, uint64* gpu_destination, Stage stage) noexcept
+{
+    assert(commands && commands->state);
+    assert(commands->timestamp_count < commands->state->timestamp_query_count);
+    commands->timestamp_destinations[commands->timestamp_count] = static_cast<VkDeviceAddress>(reinterpret_cast<uintptr>(gpu_destination));
+    vkCmdWriteTimestamp2(commands->command_buffer, to_vk(stage), commands->timestamp_pool, commands->timestamp_count++);
 }
 
 GpuHeap create_gpu_heap(Device* device, uint64 byte_count, MemoryType memory) noexcept
@@ -2693,7 +2718,7 @@ PSO* create_raster_pso(Device* device, Span<const uint32> first_stage_spirv, Spa
     const VkGraphicsPipelineCreateInfo pso_info{
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .pNext = &flags_info,
-        .stageCount = static_cast<uint32>(sizeof(stages) / sizeof(stages[0])),
+        .stageCount = fragment_spirv.size ? 2u : 1u,
         .pStages = stages,
         .pVertexInputState = mesh ? nullptr : &vertex_input,
         .pInputAssemblyState = mesh ? nullptr : &input_assembly,
@@ -2792,6 +2817,8 @@ void destroy_command_pool(CommandPool* pool) noexcept
         CommandBuffer* commands = pool->first;
         assert(!commands->swapchain && "an acquired swapchain image must be presented before destroying its command pool");
         pool->first = commands->next;
+        if (commands->timestamp_pool) vkDestroyQueryPool(pool->state->device, commands->timestamp_pool, nullptr);
+        free(commands->timestamp_destinations);
         delete commands;
     }
     vkDestroyCommandPool(pool->state->device, pool->command_pool, nullptr);
@@ -2827,6 +2854,16 @@ CommandBuffer* begin_commands(CommandPool* pool) noexcept
             .commandBufferCount = 1,
         };
         require_vk(vkAllocateCommandBuffers(pool->state->device, &allocate_info, &commands->command_buffer));
+        if (pool->state->timestamp_query_count != 0)
+        {
+            const VkQueryPoolCreateInfo query_info{
+                .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                .queryType = VK_QUERY_TYPE_TIMESTAMP,
+                .queryCount = pool->state->timestamp_query_count,
+            };
+            require_vk(vkCreateQueryPool(pool->state->device, &query_info, nullptr, &commands->timestamp_pool));
+            commands->timestamp_destinations = static_cast<VkDeviceAddress*>(malloc(sizeof(VkDeviceAddress) * pool->state->timestamp_query_count));
+        }
         if (pool->last)
             pool->last->next = commands;
         else
@@ -2839,6 +2876,9 @@ CommandBuffer* begin_commands(CommandPool* pool) noexcept
         .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
     };
     assert_vk(vkBeginCommandBuffer(commands->command_buffer, &begin_info));
+    commands->timestamp_count = 0;
+    if (commands->timestamp_pool)
+        vkCmdResetQueryPool(commands->command_buffer, commands->timestamp_pool, 0, pool->state->timestamp_query_count);
     return commands;
 }
 
@@ -2867,6 +2907,18 @@ void end_commands(CommandBuffer* commands) noexcept
         };
         record_image_barriers(commands->command_buffer, {&barrier, 1});
     }
+    for (uint32 timestamp = 0; timestamp < commands->timestamp_count; ++timestamp)
+    {
+        const VkStridedDeviceAddressRangeKHR destination{
+            .address = commands->timestamp_destinations[timestamp],
+            .size = sizeof(uint64),
+            .stride = sizeof(uint64),
+        };
+        commands->state->fn.cmd_copy_query_pool_results_to_memory(commands->command_buffer, commands->timestamp_pool, timestamp, 1,
+                                                                 &destination, address_flags, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+    }
+    if (commands->timestamp_count != 0)
+        barrier(commands, Stage::transfer, Access::transfer_write, Stage::host, Access::host_read);
     assert_vk(vkEndCommandBuffer(commands->command_buffer));
 }
 

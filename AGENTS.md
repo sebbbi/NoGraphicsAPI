@@ -19,6 +19,7 @@
   uses them. Wait for the submission timeline value covering the final use, or use the optional NoGraphicsAPIUtility `DeleteQueue` to defer destruction.
 - At shutdown, call `wait_idle`, drain every NoGraphicsAPIUtility `DeleteQueue`, and then destroy resources and the device.
 - Wait for every submitted frame to drain before calling `destroy_device`.
+- Group APIs logically in public headers; for example, keep all command buffer APIs together.
 - Keep each public resource creation function next to its matching destruction function. Keep the shared lifetime policy in one place rather than repeating it
   for individual resource types.
 - Do not abort for programming errors. Enforce their documented preconditions with asserts and leave release builds free of those checks.
