@@ -258,6 +258,7 @@ constexpr gpu::Format texture_formats[]{
     gpu::Format::d32_float,     gpu::Format::s8_uint,       gpu::Format::d32_float_s8_uint,
     gpu::Format::eac_rg,        gpu::Format::astc_4x4_srgb, gpu::Format::astc_4x4_unorm,
     gpu::Format::bc3_srgb,      gpu::Format::bc3_unorm,     gpu::Format::bc5_rg,
+    gpu::Format::bc6h_ufloat,   gpu::Format::bc6h_sfloat,
     gpu::Format::bc7_srgb,      gpu::Format::bc7_unorm,
 };
 constexpr size_t texture_format_count = sizeof(texture_formats) / sizeof(texture_formats[0]);
@@ -280,6 +281,10 @@ static_assert(texture_format_count == static_cast<uint8>(gpu::Format::undefined)
 static_assert(valid_texture_formats());
 static_assert(gpu::get_texture_format_info(gpu::Format::rgba8_unorm).bytes_per_block == 4);
 static_assert(gpu::get_texture_format_info(gpu::Format::astc_4x4_unorm).block_extent.x == 4);
+static_assert(gpu::get_texture_format_info(gpu::Format::bc6h_ufloat).block_extent.x == 4 &&
+              gpu::get_texture_format_info(gpu::Format::bc6h_ufloat).block_extent.y == 4 &&
+              gpu::get_texture_format_info(gpu::Format::bc6h_ufloat).bytes_per_block == 16);
+static_assert(gpu::get_texture_format_info(gpu::Format::bc6h_sfloat).bytes_per_block == 16);
 static_assert(gpu::get_texture_format_info(gpu::Format::d24_unorm_s8_uint).depth);
 static_assert(gpu::get_texture_format_info(gpu::Format::d24_unorm_s8_uint).stencil);
 static_assert(gpu::get_texture_format_info(gpu::Format::undefined).bytes_per_block == 0);

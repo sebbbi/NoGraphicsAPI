@@ -204,6 +204,8 @@ VkFormat to_vk(Format format)
     case Format::bc3_srgb: return VK_FORMAT_BC3_SRGB_BLOCK;
     case Format::bc3_unorm: return VK_FORMAT_BC3_UNORM_BLOCK;
     case Format::bc5_rg: return VK_FORMAT_BC5_UNORM_BLOCK;
+    case Format::bc6h_ufloat: return VK_FORMAT_BC6H_UFLOAT_BLOCK;
+    case Format::bc6h_sfloat: return VK_FORMAT_BC6H_SFLOAT_BLOCK;
     case Format::bc7_srgb: return VK_FORMAT_BC7_SRGB_BLOCK;
     case Format::bc7_unorm: return VK_FORMAT_BC7_UNORM_BLOCK;
     case Format::undefined: return VK_FORMAT_UNDEFINED;
@@ -229,6 +231,8 @@ constexpr bool compatible_view_formats(Format image_format, Format view_format) 
            (image_format == Format::astc_4x4_srgb && view_format == Format::astc_4x4_unorm) ||
            (image_format == Format::bc3_unorm && view_format == Format::bc3_srgb) ||
            (image_format == Format::bc3_srgb && view_format == Format::bc3_unorm) ||
+           (image_format == Format::bc6h_ufloat && view_format == Format::bc6h_sfloat) ||
+           (image_format == Format::bc6h_sfloat && view_format == Format::bc6h_ufloat) ||
            (image_format == Format::bc7_unorm && view_format == Format::bc7_srgb) ||
            (image_format == Format::bc7_srgb && view_format == Format::bc7_unorm);
 }
@@ -329,6 +333,8 @@ TextureCompression texture_compression(Format format) noexcept
     case Format::bc3_srgb:
     case Format::bc3_unorm:
     case Format::bc5_rg:
+    case Format::bc6h_ufloat:
+    case Format::bc6h_sfloat:
     case Format::bc7_srgb:
     case Format::bc7_unorm: return TextureCompression::bc;
     case Format::astc_4x4_srgb:

@@ -138,6 +138,8 @@ enum class Format : uint8
     bc3_srgb,
     bc3_unorm,
     bc5_rg,
+    bc6h_ufloat,
+    bc6h_sfloat,
     bc7_srgb,
     bc7_unorm,
 
@@ -233,6 +235,8 @@ struct TextureFormatInfo
     case Format::bc3_srgb:
     case Format::bc3_unorm:
     case Format::bc5_rg:
+    case Format::bc6h_ufloat:
+    case Format::bc6h_sfloat:
     case Format::bc7_srgb:
     case Format::bc7_unorm:
         return {
