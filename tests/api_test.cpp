@@ -338,7 +338,7 @@ static_assert(sizeof(gpu::TimelinePoint) == 16 && offsetof(gpu::TimelinePoint, s
               offsetof(gpu::TimelinePoint, value) == 8);
 
 constexpr gpu::DeviceCaps default_caps{};
-static_assert(default_caps.device_name == nullptr && default_caps.max_push_data_size == 0 &&
+    static_assert(default_caps.max_push_data_size == 0 &&
               default_caps.texture_heap_alignment == 0 &&
               default_caps.texture_descriptor_size == 0 &&
               default_caps.sampler_descriptor_size == 0 && !default_caps.texture_compression_bc &&

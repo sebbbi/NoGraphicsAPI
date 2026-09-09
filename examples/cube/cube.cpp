@@ -85,7 +85,7 @@ int main() {
     }
 
 	const DeviceCaps& caps = get_device_caps(device);
-    printf("Using %s\n", caps.device_name);
+	printf("Using %s\n", get_device_info(device).device_name);
 
 	// Shaders
     const Span<uint32> vertex_spirv = read_spirv(NOGRAPHICSAPI_CUBE_VERTEX_SPV_PATH);

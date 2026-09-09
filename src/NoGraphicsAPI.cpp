@@ -650,11 +650,14 @@ struct Device
     uint32 timestamp_query_count = 0;
     VkPhysicalDeviceMemoryProperties memory_properties{};
     VkPhysicalDeviceProperties physical_properties{};
+    VkPhysicalDeviceDriverProperties driver_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
     VkPhysicalDeviceDescriptorHeapPropertiesEXT heap_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_PROPERTIES_EXT};
     uint64 max_timeline_value_difference = 0;
     uint64 texture_heap_alignment = 16;
     uint32 texture_memory_type = VK_MAX_MEMORY_TYPES;
     detail::DeviceFunctions fn;
+    DeviceInfo info;
+    DeviceMemoryInfo memory_info;
     DeviceCaps caps;
     VkFormatFeatureFlags2 format_features[format_count]{};
     bool texture_compression_etc2 = false;
@@ -1580,6 +1583,7 @@ struct Candidate
     bool khr_swapchain_maintenance1 = false;
     VkPhysicalDeviceDescriptorHeapPropertiesEXT heap_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_PROPERTIES_EXT};
     VkPhysicalDeviceVulkan12Properties vulkan12_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES};
+    VkPhysicalDeviceDriverProperties driver_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
 };
 
 Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, bool khr_surface_maintenance1, bool ext_surface_maintenance1,
@@ -1619,6 +1623,7 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
         .physical_device = physical_device,
     };
     result.heap_properties.pNext = &result.vulkan12_properties;
+    result.vulkan12_properties.pNext = &result.driver_properties;
     VkPhysicalDeviceProperties2 properties2{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
         .pNext = &result.heap_properties,
@@ -1627,6 +1632,7 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
     result.properties = properties2.properties;
     result.heap_properties.pNext = nullptr;
     result.vulkan12_properties.pNext = nullptr;
+    result.driver_properties.pNext = nullptr;
     if (result.properties.apiVersion < VK_API_VERSION_1_4)
         return Error::unsupported;
 
@@ -1902,6 +1908,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     state->physical_device = selected.physical_device;
     state->queue_family = selected.queue_family;
     state->physical_properties = selected.properties;
+    state->driver_properties = selected.driver_properties;
     state->heap_properties = selected.heap_properties;
     state->max_timeline_value_difference = selected.vulkan12_properties.maxTimelineSemaphoreValueDifference;
     state->heap_properties.pNext = nullptr;
@@ -2025,17 +2032,64 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
             return fail_device_creation(state, error);
     }
 
-    state->caps = {
+    uint64 device_local_memory_size = 0;
+    uint64 host_visible_memory_size = 0;
+    uint64 host_visible_device_local_memory_size = 0;
+    for (uint32 heap_index = 0; heap_index < state->memory_properties.memoryHeapCount; ++heap_index)
+    {
+        bool host_visible = false;
+        for (uint32 type_index = 0; type_index < state->memory_properties.memoryTypeCount; ++type_index)
+        {
+            const VkMemoryType& memory_type = state->memory_properties.memoryTypes[type_index];
+            if (memory_type.heapIndex == heap_index && (memory_type.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0)
+            {
+                host_visible = true;
+                break;
+            }
+        }
+        const uint64 heap_size = state->memory_properties.memoryHeaps[heap_index].size;
+        const bool device_local = (state->memory_properties.memoryHeaps[heap_index].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0;
+        if (device_local)
+            device_local_memory_size += heap_size;
+        if (host_visible)
+            host_visible_memory_size += heap_size;
+        if (device_local && host_visible)
+            host_visible_device_local_memory_size += heap_size;
+    }
+    state->info = {
         .device_name = state->physical_properties.deviceName,
+        .driver_name = state->driver_properties.driverName,
+        .driver_info = state->driver_properties.driverInfo,
+        .vendor_id = state->physical_properties.vendorID,
+        .device_id = state->physical_properties.deviceID,
+        .device_type = static_cast<uint32>(state->physical_properties.deviceType),
+        .api_version = state->physical_properties.apiVersion,
+        .driver_version = state->physical_properties.driverVersion,
+    };
+    state->memory_info = {
+        .device_local_memory_size = device_local_memory_size,
+        .host_visible_memory_size = host_visible_memory_size,
+        .host_visible_device_local_memory_size = host_visible_device_local_memory_size,
+    };
+    state->caps = {
         .max_push_data_size = state->heap_properties.maxPushDataSize,
         .texture_heap_alignment = state->texture_heap_alignment,
         .texture_descriptor_size = state->heap_properties.imageDescriptorSize,
         .sampler_descriptor_size = state->heap_properties.samplerDescriptorSize,
+        .image_descriptor_alignment = state->heap_properties.imageDescriptorAlignment,
+        .sampler_descriptor_alignment = state->heap_properties.samplerDescriptorAlignment,
+        .resource_heap_alignment = state->heap_properties.resourceHeapAlignment,
+        .sampler_heap_alignment = state->heap_properties.samplerHeapAlignment,
+        .min_resource_heap_reserved_range = state->heap_properties.minResourceHeapReservedRange,
+        .min_sampler_heap_reserved_range = state->heap_properties.minSamplerHeapReservedRange,
         .timestamp_period_ns = selected.properties.limits.timestampPeriod,
         .sub_texel_precision_bits = selected.properties.limits.subTexelPrecisionBits,
         .texture_compression_bc = selected.texture_compression_bc,
         .texture_compression_astc = selected.texture_compression_astc,
+        .texture_compression_etc2 = selected.texture_compression_etc2,
         .storage_input_output16 = selected.storage_input_output16,
+        .unified_image_layouts = selected.unified_image_layouts,
+        .swapchain_maintenance1 = selected.khr_swapchain_maintenance1,
     };
     if (presentation)
     {
@@ -3227,6 +3281,18 @@ void wait_idle(Device* device) noexcept
     assert(!device->acquired_swapchain && "wait_idle is not allowed while a swapchain image is acquired");
     device->drain_contexts();
     device->next_present_context = 0;
+}
+
+const DeviceInfo& get_device_info(const Device* device) noexcept
+{
+    assert(device && "get_device_info called with a null device");
+    return device->info;
+}
+
+const DeviceMemoryInfo& get_device_memory_info(const Device* device) noexcept
+{
+    assert(device && "get_device_memory_info called with a null device");
+    return device->memory_info;
 }
 
 const DeviceCaps& get_device_caps(const Device* device) noexcept
