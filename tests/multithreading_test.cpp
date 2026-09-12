@@ -243,14 +243,14 @@ bool test_parallel_recording(gpu::Device* device) noexcept
         for (uint32 index = 0; index != thread_count; ++index)
         {
             // Submit independent ended buffers while held_commands is still recording.
-            gpu::submit(gpu::get_queue(device), {.commands = {contexts[index].upload_commands},
-                                               .completion = {.semaphore = contexts[index].timeline, .value = 1}});
-            gpu::submit(gpu::get_queue(device), {.commands = {contexts[index].readback_commands},
-                                               .waits = {{.semaphore = contexts[index].timeline, .value = 1}},
-                                               .completion = {.semaphore = contexts[index].timeline, .value = 2}});
+            gpu::submit(device, {.commands = {contexts[index].upload_commands},
+                                 .completion = {.semaphore = contexts[index].timeline, .value = 1}});
+            gpu::submit(device, {.commands = {contexts[index].readback_commands},
+                                 .waits = {{.semaphore = contexts[index].timeline, .value = 1}},
+                                 .completion = {.semaphore = contexts[index].timeline, .value = 2}});
         }
         gpu::end_commands(held_commands);
-        gpu::submit(gpu::get_queue(device), {.commands = {held_commands}, .completion = completion});
+        gpu::submit(device, {.commands = {held_commands}, .completion = completion});
         if (waiter_started)
             valid = join_thread(waiter) && valid;
         gpu::wait_timeline(completion);
@@ -288,7 +288,6 @@ bool test_parallel_recording(gpu::Device* device) noexcept
 struct QueueContext
 {
     gpu::Device* device = nullptr;
-    gpu::Queue* queue = nullptr;
     uint32 index = 0;
     bool valid = true;
 };
@@ -313,7 +312,7 @@ void submit_copies(void* argument) noexcept
         gpu::barrier(commands, gpu::Stage::transfer, gpu::Access::transfer_write, gpu::Stage::host, gpu::Access::host_read);
         gpu::write_timestamp(commands, reinterpret_cast<uint64*>(readback.range.gpu + texture_bytes));
         gpu::end_commands(commands);
-        gpu::submit(context->queue, {.commands = {commands}, .completion = {.semaphore = timeline, .value = iteration}});
+        gpu::submit(context->device, {.commands = {commands}, .completion = {.semaphore = timeline, .value = iteration}}, context->index);
         gpu::wait_timeline({.semaphore = timeline, .value = iteration});
         context->valid = memcmp(upload.range.cpu, readback.range.cpu, texture_bytes) == 0 && context->valid;
         context->valid = *reinterpret_cast<const uint64*>(readback.range.cpu + texture_bytes) != ~uint64{0} && context->valid;
@@ -329,14 +328,9 @@ void submit_copies(void* argument) noexcept
 bool test_multiple_queues(gpu::Device* device) noexcept
 {
     QueueContext contexts[2]{
-        {.device = device, .queue = gpu::get_queue(device, 0), .index = 0},
-        {.device = device, .queue = gpu::get_queue(device, 1), .index = 1},
+        {.device = device},
+        {.device = device, .index = 1},
     };
-    if (contexts[0].queue == contexts[1].queue)
-    {
-        fprintf(stderr, "Different queue indices returned the same queue handle.\n");
-        return false;
-    }
     Thread threads[2]{{.run = submit_copies, .argument = contexts}, {.run = submit_copies, .argument = contexts + 1}};
     bool valid = run_threads(threads);
     valid = valid && contexts[0].valid && contexts[1].valid;
@@ -359,9 +353,9 @@ bool test_multiple_queues(gpu::Device* device) noexcept
     gpu::barrier(consumer, gpu::Stage::transfer, gpu::Access::transfer_write, gpu::Stage::host, gpu::Access::host_read);
     gpu::end_commands(consumer);
     // Submit the consumer first: its cross-queue wait supplies the memory dependency.
-    gpu::submit(contexts[1].queue, {.commands = {consumer}, .waits = {{.semaphore = produced, .value = 1}},
-                                  .completion = {.semaphore = consumed, .value = 1}});
-    gpu::submit(contexts[0].queue, {.commands = {producer}, .completion = {.semaphore = produced, .value = 1}});
+    gpu::submit(device, {.commands = {consumer}, .waits = {{.semaphore = produced, .value = 1}},
+                         .completion = {.semaphore = consumed, .value = 1}}, 1);
+    gpu::submit(device, {.commands = {producer}, .completion = {.semaphore = produced, .value = 1}});
     gpu::wait_timeline({.semaphore = consumed, .value = 1});
     gpu::wait_timeline({.semaphore = produced, .value = 1});
     valid = memcmp(upload.range.cpu, readback.range.cpu, texture_bytes) == 0 && valid;

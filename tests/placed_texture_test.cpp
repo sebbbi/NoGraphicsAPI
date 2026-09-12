@@ -100,7 +100,7 @@ int main()
             valid = false;
 
         gpu::end_commands(commands);
-        gpu::submit(gpu::get_queue(device), {.commands = {commands}, .completion = {.semaphore = timeline, .value = 1}});
+        gpu::submit(device, {.commands = {commands}, .completion = {.semaphore = timeline, .value = 1}});
         gpu::wait_timeline({.semaphore = timeline, .value = 1});
         gpu::reset_command_pool(pool);
         allocator.free(exhausted);
@@ -118,7 +118,7 @@ int main()
         valid &= texture.texture != nullptr && callback_count == 0;
 
         gpu::end_commands(commands);
-        gpu::submit(gpu::get_queue(device), {.commands = {commands}, .completion = {.semaphore = timeline, .value = 2}});
+        gpu::submit(device, {.commands = {commands}, .completion = {.semaphore = timeline, .value = 2}}, 0);
         gpu::wait_idle(device);
         gpu::reset_command_pool(pool);
         delete_queue.drain();

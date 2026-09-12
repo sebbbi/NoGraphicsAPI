@@ -64,7 +64,6 @@ int main()
     }
 
     gpu::Device* device = device_init.device;
-    gpu::Queue* queue = gpu::get_queue(device);
     gpu::CommandPool* present_pool = gpu::create_command_pool(device);
     gpu::CommandPool* independent_pool = gpu::create_command_pool(device);
     gpu::TimelinePoint completion{.semaphore = gpu::create_timeline_semaphore(device)};
@@ -97,7 +96,7 @@ int main()
             {
                 gpu::end_commands(empty_commands);
                 ++completion.value;
-                gpu::submit_and_present(queue, {.commands = {empty_commands}, .completion = completion});
+                gpu::submit_and_present(device, {.commands = {empty_commands}, .completion = completion});
                 gpu::wait_timeline(completion);
             }
             gpu::reset_command_pool(present_pool);
@@ -125,7 +124,7 @@ int main()
 
         // Submit unrelated work while the presentation buffer and another independent buffer are still recording.
         ++completion.value;
-        gpu::submit(queue, {.commands = {first}, .completion = completion});
+        gpu::submit(device, {.commands = {first}, .completion = completion});
         gpu::begin_render_pass(commands, {
             .colors = {{
                 .render_view = frame.render_view,
@@ -137,7 +136,7 @@ int main()
         gpu::end_commands(commands);
         gpu::end_commands(second);
         ++completion.value;
-        gpu::submit_and_present(queue, {.commands = {second, commands}, .completion = completion});
+        gpu::submit_and_present(device, {.commands = {second, commands}, .completion = completion});
     }
 
     gpu::wait_idle(device);

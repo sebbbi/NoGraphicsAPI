@@ -117,7 +117,7 @@ bool test_descriptor_heaps(gpu::Device* device, const gpu::DeviceCaps& caps, gpu
         .value = ++next_timeline_value,
     };
     gpu::end_commands(commands);
-    gpu::submit(gpu::get_queue(device), {.commands = {commands}, .completion = completion});
+    gpu::submit(device, {.commands = {commands}, .completion = completion});
     gpu::wait_timeline(completion);
     gpu::destroy_command_pool(pool);
     gpu::destroy_gpu_heap(texture_heap);
@@ -147,7 +147,7 @@ bool test_batch_growth_and_reuse(gpu::Device* device, gpu::TimelineSemaphore* ti
             .semaphore = timeline,
             .value = ++next_timeline_value,
         };
-        gpu::submit(gpu::get_queue(device), {.commands = commands, .completion = completion});
+        gpu::submit(device, {.commands = commands, .completion = completion});
         gpu::wait_timeline(completion);
         gpu::reset_command_pool(pool);
     }
@@ -185,7 +185,7 @@ bool test_timestamp_readback(gpu::Device* device, gpu::TimelineSemaphore* timeli
         }
         // All contexts remain recorded together, and execute in the opposite order. No caller query object or host barrier is needed.
         const gpu::TimelinePoint completion{.semaphore = timeline, .value = ++next_timeline_value};
-        gpu::submit(gpu::get_queue(device), {.commands = submitted, .completion = completion});
+        gpu::submit(device, {.commands = submitted, .completion = completion});
         gpu::wait_timeline(completion);
         gpu::reset_command_pool(pool);
 
@@ -228,7 +228,7 @@ bool test_timestamp_readback(gpu::Device* device, gpu::TimelineSemaphore* timeli
     gpu::write_timestamp(commands, destination + 1);
     const gpu::TimelinePoint completion{.semaphore = timeline, .value = ++next_timeline_value};
     gpu::end_commands(commands);
-    gpu::submit(gpu::get_queue(device), {.commands = {commands}, .completion = completion});
+    gpu::submit(device, {.commands = {commands}, .completion = completion});
     gpu::wait_timeline(completion);
     bool cross_heap_valid = cpu[0] != sentinel && second_cpu[0] != sentinel && cpu[1] != sentinel && cpu[0] <= second_cpu[0] && second_cpu[0] <= cpu[1];
     for (uint32 word = 2; word < word_count; ++word) cross_heap_valid = cross_heap_valid && cpu[word] == sentinel;
@@ -261,7 +261,7 @@ bool test_timestamp_capacity(uint32 count) noexcept
         for (uint32 index = 0; index < count; ++index) gpu::write_timestamp(commands, destination + index + 1);
         const gpu::TimelinePoint completion{.semaphore = timeline, .value = batch + 1};
         gpu::end_commands(commands);
-        gpu::submit(gpu::get_queue(device), {.commands = {commands}, .completion = completion});
+        gpu::submit(device, {.commands = {commands}, .completion = completion});
         gpu::wait_timeline(completion);
         gpu::reset_command_pool(pool);
         bool batch_valid = cpu[0] == sentinel && cpu[count + 1] == sentinel && (batch == 0 || cpu[1] != previous_result);
@@ -310,7 +310,7 @@ bool test_without_timestamps() noexcept
             gpu::end_commands(commands[index]);
         }
         const gpu::TimelinePoint completion{.semaphore = timeline, .value = batch + 1};
-        gpu::submit(gpu::get_queue(device), {.commands = commands, .completion = completion});
+        gpu::submit(device, {.commands = commands, .completion = completion});
         gpu::wait_timeline(completion);
         gpu::reset_command_pool(pool);
         for (size_t index = 0; index < batch_command_count; ++index)
@@ -530,7 +530,7 @@ bool test_placed_textures(gpu::Device* device, const gpu::DeviceCaps& caps, gpu:
         .value = ++next_timeline_value,
     };
     gpu::end_commands(commands);
-    gpu::submit(gpu::get_queue(device), {.commands = {commands}, .completion = completion});
+    gpu::submit(device, {.commands = {commands}, .completion = completion});
     gpu::wait_timeline(completion);
     gpu::destroy_command_pool(pool);
     gpu::destroy_render_view(depth_stencil_render_view);

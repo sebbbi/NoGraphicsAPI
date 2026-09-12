@@ -236,10 +236,11 @@ application-owned descriptor heaps; common texture types and views; dynamic rend
 viewport/scissor/depth-stencil state; global barriers; timeline submission; deferred destruction; and Win32 presentation.
 
 Multiple queues share one graphics + compute queue family. Request the desired count at device creation;
-`DeviceCaps::queue_count` reports the available result. Queues and command pools are externally synchronized,
-with one pool per worker and in-flight frame. Resource creation and timeline waits may run concurrently.
+`DeviceCaps::queue_count` reports the available result. `submit(device, desc, queue_index)` defaults to queue zero.
+Each `(device, queue_index)` and command pool is externally synchronized, with one pool per worker and in-flight frame.
+Resource creation and timeline waits may run concurrently; there are no device-wide locks.
 Texture creation records initialization into an explicit command buffer. End buffers before submission,
-and reset their pool after every submitted use completes. Queue zero owns Win32 presentation.
+and reset their pool after every submitted use completes. `submit_and_present(device, desc)` always uses queue zero.
 
 Dedicated compute/transfer queue families, ray tracing, task shaders, sparse memory,
 device-generated command graphs beyond the existing indirect operations, pipeline caching, MSAA, non-Win32

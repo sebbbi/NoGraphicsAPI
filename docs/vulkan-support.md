@@ -227,15 +227,16 @@ its command-buffer handles. Pools retain storage for reuse until destruction.
 
 Device creation requests a queue count, capped to the selected graphics + compute family's capacity.
 All exposed queues share that family, so resources need no queue-family ownership transfers.
+`submit(device, desc, queue_index)` selects a queue by index and defaults to zero.
 Submission accepts timeline waits covering all command stages and signals the caller's completion point.
 Use waits for cross-queue hazards; an ordinary barrier only synchronizes work on its own queue.
 Prefer one signaling timeline per queue, or explicitly order signals to a shared timeline.
 
-Each queue and command pool is externally synchronized, including command recording within the pool.
+Each `(device, queue_index)` and command pool is externally synchronized, including command recording within the pool.
 Distinct resource creation, immutable queries, timeline waits, and descriptor writes to disjoint slots
 can run concurrently on one device. Texture creation records its `UNDEFINED` to `GENERAL` transition
 in the supplied command buffer; every use must follow that initialization. Resource lifetime and
-mutable utility allocators remain caller-synchronized. No internal queue or pool locks are used.
+mutable utility allocators remain caller-synchronized. No internal queue, pool, or device-wide locks are used.
 
 Public timeline semaphores are the application's reuse mechanism. Poll or wait for the point that
 last used mutable upload data, readback storage, a texture placement, indirect argument memory, or a
@@ -250,7 +251,7 @@ an intentional whole-device drain.
 
 For presentation, `acquire(commands)` returns a swapchain-owned `RenderView` and extent, or an empty frame
 while the drawable extent is zero. Only that command buffer may access the image; `end_commands()`
-records its transition back to presentation. Submit it through `submit_and_present()` on queue zero.
+records its transition back to presentation. Submit it through `submit_and_present(device, desc)`, which always uses queue zero.
 Windowed device creation/destruction, drawable queries, acquire, and presentation stay on the native
 message-pump thread; other work follows the threading rules above. Binary WSI semaphores remain private, while
 `VK_KHR_swapchain_maintenance1` present fences support safe reuse and swapchain replacement without

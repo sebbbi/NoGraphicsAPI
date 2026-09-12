@@ -122,7 +122,7 @@ struct NonTrivialRoot
     }
 };
 
-static_assert(!CompleteType<gpu::Device> && !CompleteType<gpu::Queue> && !CompleteType<gpu::CommandPool> &&
+static_assert(!CompleteType<gpu::Device> && !CompleteType<gpu::CommandPool> &&
               !CompleteType<gpu::Texture> && !CompleteType<gpu::RenderView> &&
               !CompleteType<gpu::PSO> && !CompleteType<gpu::CommandBuffer> &&
               !CompleteType<gpu::TimelineSemaphore> && !CompleteType<gpu::GpuHeapOwner> &&
@@ -498,14 +498,14 @@ using CreateTextureFunction = gpu::Texture* (*)(gpu::CommandBuffer*, const gpu::
 using CreateDeviceFunction = gpu::DeviceInit (*)(const gpu::DeviceDesc&) noexcept;
 using GetDrawableExtentFunction = gpu::uint32x2 (*)(gpu::Device*) noexcept;
 using AcquireFunction = gpu::SwapchainFrame (*)(gpu::CommandBuffer*) noexcept;
-using GetQueueFunction = gpu::Queue* (*)(gpu::Device*, uint32) noexcept;
 using CreateCommandPoolFunction = gpu::CommandPool* (*)(gpu::Device*) noexcept;
 using CommandPoolFunction = void (*)(gpu::CommandPool*) noexcept;
 using BeginCommandsFunction = gpu::CommandBuffer* (*)(gpu::CommandPool*) noexcept;
 using EndCommandsFunction = void (*)(gpu::CommandBuffer*) noexcept;
 using CommandBatch = gpu::Span<gpu::CommandBuffer* const>;
 using CreateComputePSOFunction = gpu::PSO* (*)(gpu::Device*, gpu::Span<const uint32>) noexcept;
-using SubmitFunction = void (*)(gpu::Queue*, const gpu::SubmitDesc&) noexcept;
+using SubmitFunction = void (*)(gpu::Device*, const gpu::SubmitDesc&, uint32) noexcept;
+using SubmitAndPresentFunction = void (*)(gpu::Device*, const gpu::SubmitDesc&) noexcept;
 using WriteTimestampFunction = void (*)(gpu::CommandBuffer*, uint64*, gpu::Stage) noexcept;
 using SetHeapFunction = void (*)(gpu::CommandBuffer*, gpu::GpuRange) noexcept;
 using SetViewportFunction = void (*)(gpu::CommandBuffer*, const gpu::Viewport&) noexcept;
@@ -532,7 +532,6 @@ static_assert(gpu::detail::is_same_v<decltype(&gpu::create_texture), CreateTextu
 static_assert(gpu::detail::is_same_v<decltype(&gpu::create_device), CreateDeviceFunction>);
 static_assert(gpu::detail::is_same_v<decltype(&gpu::get_drawable_extent), GetDrawableExtentFunction>);
 static_assert(gpu::detail::is_same_v<decltype(&gpu::acquire), AcquireFunction>);
-static_assert(gpu::detail::is_same_v<decltype(&gpu::get_queue), GetQueueFunction>);
 static_assert(gpu::detail::is_same_v<decltype(&gpu::create_command_pool), CreateCommandPoolFunction>);
 static_assert(gpu::detail::is_same_v<decltype(&gpu::destroy_command_pool), CommandPoolFunction>);
 static_assert(gpu::detail::is_same_v<decltype(&gpu::reset_command_pool), CommandPoolFunction>);
@@ -540,7 +539,7 @@ static_assert(gpu::detail::is_same_v<decltype(&gpu::begin_commands), BeginComman
 static_assert(gpu::detail::is_same_v<decltype(&gpu::end_commands), EndCommandsFunction>);
 static_assert(gpu::detail::is_same_v<decltype(&gpu::create_compute_pso), CreateComputePSOFunction>);
 static_assert(gpu::detail::is_same_v<decltype(&gpu::submit), SubmitFunction>);
-static_assert(gpu::detail::is_same_v<decltype(&gpu::submit_and_present), SubmitFunction>);
+static_assert(gpu::detail::is_same_v<decltype(&gpu::submit_and_present), SubmitAndPresentFunction>);
 static_assert(gpu::detail::is_same_v<decltype(&gpu::write_timestamp), WriteTimestampFunction>);
 static_assert(gpu::detail::is_same_v<decltype(&gpu::set_texture_descriptor_heap), SetHeapFunction>);
 static_assert(gpu::detail::is_same_v<decltype(&gpu::set_sampler_descriptor_heap), SetHeapFunction>);
@@ -582,10 +581,9 @@ static_assert(__is_constructible(CommandBatch, std::initializer_list<gpu::Comman
     gpu::destroy_timeline_semaphore(timeline);
 
     gpu::uint32x2 drawable_extent = gpu::get_drawable_extent(device);
-    gpu::Queue* queue = gpu::get_queue(device);
     gpu::SwapchainFrame frame = gpu::acquire(commands);
     gpu::end_commands(commands);
-    gpu::submit_and_present(queue, {.commands = {commands}, .completion = {.semaphore = semaphore, .value = 2}});
+    gpu::submit_and_present(device, {.commands = {commands}, .completion = {.semaphore = semaphore, .value = 2}});
 
     gpu::GpuHeap bytes = gpu::create_gpu_heap(device, 64);
     gpu::GpuHeap gpu_only = gpu::create_gpu_heap(device, 64, gpu::MemoryType::gpu_only);
@@ -644,7 +642,9 @@ static_assert(__is_constructible(CommandBatch, std::initializer_list<gpu::Comman
     gpu::barrier(a, gpu::Stage::transfer, gpu::Access::transfer_write, gpu::Stage::fragment, gpu::Access::shader_read);
     gpu::end_commands(a);
     gpu::end_commands(b);
-    gpu::submit(queue, {.commands = {a, b}, .waits = {{.semaphore = semaphore, .value = 2}}, .completion = {.semaphore = semaphore, .value = 3}});
+    gpu::submit(device, {.commands = {a, b}, .waits = {{.semaphore = semaphore, .value = 2}}, .completion = {.semaphore = semaphore, .value = 3}});
+    gpu::submit(device, {.completion = {.semaphore = semaphore, .value = 4}}, 0);
+    gpu::submit(device, {.waits = {{.semaphore = semaphore, .value = 4}}, .completion = {.semaphore = semaphore, .value = 5}}, 1);
     gpu::wait_idle(device);
     gpu::reset_command_pool(pool);
     gpu::destroy_command_pool(pool);

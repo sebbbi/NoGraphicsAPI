@@ -582,18 +582,17 @@ struct CommandPool
     CommandBuffer* next_buffer = nullptr;
 };
 
+namespace detail
+{
+
 struct Queue
 {
-    Device* state = nullptr;
     VkQueue queue = VK_NULL_HANDLE;
     VkCommandBufferSubmitInfo* command_submit_infos = nullptr;
     size_t command_submit_capacity = 0;
     VkSemaphoreSubmitInfo* wait_submit_infos = nullptr;
     size_t wait_submit_capacity = 0;
 };
-
-namespace detail
-{
 
 struct PresentContext
 {
@@ -613,7 +612,7 @@ struct Device
     PFN_vkDestroyDebugUtilsMessengerEXT destroy_debug_messenger = nullptr;
     VkPhysicalDevice physical_device = VK_NULL_HANDLE;
     VkDevice device = VK_NULL_HANDLE;
-    Queue* queues = nullptr;
+    detail::Queue* queues = nullptr;
     uint32 queue_count = 0;
     VkSurfaceKHR surface = VK_NULL_HANDLE;
     uint32 queue_family = 0;
@@ -1737,7 +1736,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     enabled_features.swapchain_maintenance1.swapchainMaintenance1 = VK_TRUE;
 
     state->queue_count = desc.desired_queue_count < selected.queue_count ? desc.desired_queue_count : selected.queue_count;
-    state->queues = new Queue[state->queue_count];
+    state->queues = new detail::Queue[state->queue_count];
     float* queue_priorities = new float[state->queue_count];
     for (uint32 index = 0; index < state->queue_count; ++index)
         queue_priorities[index] = 1.0f;
@@ -1779,10 +1778,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     if (error != Error::none)
         return fail_device_creation(state, error);
     for (uint32 index = 0; index < state->queue_count; ++index)
-    {
-        state->queues[index].state = state;
         vkGetDeviceQueue(state->device, state->queue_family, index, &state->queues[index].queue);
-    }
     if (!supports_gpu_heap_memory(*state) || !select_texture_memory_type(*state))
         return fail_device_creation(state, Error::unsupported);
 
@@ -2790,12 +2786,6 @@ void destroy_pso(PSO* pso) noexcept
     delete pso;
 }
 
-Queue* get_queue(Device* device, uint32 index) noexcept
-{
-    assert(device && index < device->queue_count && "get_queue requires an available queue index");
-    return &device->queues[index];
-}
-
 CommandPool* create_command_pool(Device* device) noexcept
 {
     assert(device && "create_command_pool called with a null device");
@@ -2925,9 +2915,9 @@ void end_commands(CommandBuffer* commands) noexcept
 namespace
 {
 
-void submit_commands(Queue* queue, const SubmitDesc& desc, VkSemaphore wait_semaphore, VkSemaphore signal_semaphore) noexcept
+void submit_commands(Device* device, const SubmitDesc& desc, uint32 queue_index, VkSemaphore wait_semaphore, VkSemaphore signal_semaphore) noexcept
 {
-    Device* device = queue->state;
+    detail::Queue* queue = &device->queues[queue_index];
     TimelineSemaphore* completion = desc.completion.semaphore;
     assert(completion);
     assert(desc.waits.data || desc.waits.size == 0);
@@ -3012,22 +3002,21 @@ void submit_commands(Queue* queue, const SubmitDesc& desc, VkSemaphore wait_sema
 
 } // namespace
 
-void submit(Queue* queue, const SubmitDesc& desc) noexcept
+void submit(Device* device, const SubmitDesc& desc, uint32 queue_index) noexcept
 {
-    assert(queue && queue->state && queue->queue);
+    assert(device && queue_index < device->queue_count && "submit requires an available queue index");
     assert(desc.commands.data || desc.commands.size == 0);
 #if !defined(NDEBUG)
     for (size_t index = 0; index < desc.commands.size; ++index)
         assert(desc.commands.data[index] && !desc.commands.data[index]->swapchain && "swapchain commands require submit_and_present");
 #endif
-    submit_commands(queue, desc, VK_NULL_HANDLE, VK_NULL_HANDLE);
+    submit_commands(device, desc, queue_index, VK_NULL_HANDLE, VK_NULL_HANDLE);
 }
 
-void submit_and_present(Queue* queue, const SubmitDesc& desc) noexcept
+void submit_and_present(Device* device, const SubmitDesc& desc) noexcept
 {
-    assert(queue && queue->state && queue == queue->state->queues && "presentation requires queue zero");
+    assert(device);
     assert(desc.commands.data || desc.commands.size == 0);
-    Device* device = queue->state;
     Swapchain* swapchain = device->swapchain;
     assert(swapchain && swapchain->acquired && swapchain->transition_commands && swapchain->present_context);
 #if !defined(NDEBUG)
@@ -3042,7 +3031,7 @@ void submit_and_present(Queue* queue, const SubmitDesc& desc) noexcept
     detail::PresentContext& present_context = *swapchain->present_context;
     assert(!present_context.present_pending && !present_context.swapchain);
     assert_vk(vkResetFences(device->device, 1, &present_context.presented));
-    submit_commands(queue, desc, present_context.acquired, present_context.rendered);
+    submit_commands(device, desc, 0, present_context.acquired, present_context.rendered);
     swapchain->transition_commands->swapchain = nullptr;
     swapchain->transition_commands = nullptr;
     swapchain->initialized[swapchain->image_index] = true;
@@ -3061,7 +3050,7 @@ void submit_and_present(Queue* queue, const SubmitDesc& desc) noexcept
         .pSwapchains = &swapchain->handle,
         .pImageIndices = &swapchain->image_index,
     };
-    const VkResult result = vkQueuePresentKHR(queue->queue, &present_info);
+    const VkResult result = vkQueuePresentKHR(device->queues[0].queue, &present_info);
     present_context.present_pending = true;
     present_context.swapchain = swapchain->handle;
     swapchain->present_context = nullptr;

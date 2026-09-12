@@ -229,7 +229,6 @@ int main()
     TimelinePoint latest_completion{.semaphore = create_timeline_semaphore(device)};
     DeleteQueue delete_queue(latest_completion.semaphore, frames_in_flight);
     CommandPool* command_pools[frames_in_flight] = {create_command_pool(device), create_command_pool(device)};
-    Queue* queue = get_queue(device);
 
     while (pump_example_window(window))
     {
@@ -360,7 +359,7 @@ int main()
         // Submit
         end_commands(commands);
         latest_completion.value++;
-        submit_and_present(queue, {.commands = {commands}, .completion = latest_completion});
+        submit_and_present(device, {.commands = {commands}, .completion = latest_completion});
     }
 
     wait_idle(device);

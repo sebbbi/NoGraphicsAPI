@@ -19,7 +19,6 @@ struct uint32x3
 };
 
 struct Device;
-struct Queue;
 struct CommandPool;
 struct Texture;
 struct RenderView;
@@ -656,14 +655,13 @@ struct RenderingDesc
 // Wait for all submitted frames to drain before destroying the device.
 // Distinct resource creation/destruction, immutable queries, and timeline waits may run concurrently on one device.
 // Resource lifetime changes must be synchronized with every CPU/GPU use of that resource. Descriptor writes require disjoint destinations.
-// Each queue and command pool (including recording its buffers) is externally synchronized; different queues/pools may run concurrently.
+// Each (device, queue_index) and command pool (including recording its buffers) is externally synchronized; different queues/pools may run concurrently.
 // Device idle/destruction requires exclusive access. Destroy command pools before their device. There are no internal queue or pool locks.
 [[nodiscard]] DeviceInit create_device(const DeviceDesc& desc = {}) noexcept;
 void destroy_device(Device* device) noexcept;
 [[nodiscard]] const DeviceCaps& get_device_caps(const Device* device) noexcept;
 [[nodiscard]] bool supports_texture_format(const Device* device, Format format, TextureUsage usage) noexcept;
 [[nodiscard]] uint32x2 get_drawable_extent(Device* device) noexcept;
-[[nodiscard]] Queue* get_queue(Device* device, uint32 index = 0) noexcept; // Borrowed until device destruction; index < queue_count.
 
 [[nodiscard]] TimelineSemaphore* create_timeline_semaphore(Device* device, uint64 initial_value = 0) noexcept;
 void destroy_timeline_semaphore(TimelineSemaphore* semaphore) noexcept;
@@ -674,7 +672,7 @@ void wait_idle(Device* device) noexcept;
 // Acquire outside a render pass. Only this command buffer may access the returned image; end_commands prepares it for presentation.
 // Empty while the drawable extent is zero. A nonempty acquire must be submitted with submit_and_present on queue zero.
 [[nodiscard]] SwapchainFrame acquire(CommandBuffer* commands) noexcept;
-void submit_and_present(Queue* queue, const SubmitDesc& desc) noexcept;
+void submit_and_present(Device* device, const SubmitDesc& desc) noexcept;
 
 // Every non-null returned pointer is 16-byte aligned. Descriptor heaps are exact allocations;
 // cpu_visible, gpu_only, and readback heaps are raw blocks for application-side suballocation.
@@ -720,7 +718,8 @@ void reset_command_pool(CommandPool* pool) noexcept;
 [[nodiscard]] CommandBuffer* begin_commands(CommandPool* pool) noexcept;
 void end_commands(CommandBuffer* commands) noexcept;
 // Submit any ended subset exactly once before pool reset. Order completion semaphore signal values across queues.
-void submit(Queue* queue, const SubmitDesc& desc) noexcept;
+// queue_index must be less than DeviceCaps::queue_count; omitted selects queue zero.
+void submit(Device* device, const SubmitDesc& desc, uint32 queue_index = 0) noexcept;
 
 void set_texture_descriptor_heap(CommandBuffer* commands, GpuRange heap) noexcept; // Heap range must be full GpuHeap range
 void set_sampler_descriptor_heap(CommandBuffer* commands, GpuRange heap) noexcept; // Heap range must be full GpuHeap range
