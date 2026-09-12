@@ -155,7 +155,7 @@ timeline completes. `BumpAllocator::allocate_atomic()` supports relaxed-atomic c
 
 `NoGraphicsAPIUtility::uploads` provides `UploadQueue`, a fixed-capacity staging ring for GPU-pointer
 and texture uploads. It records copies, submits batches, and reuses staging after their timelines complete.
-`init(device, staging_bytes, queue_index)` selects the GPU queue, with the index defaulting to zero.
+`UploadQueue(device, staging_bytes, queue_index)` selects the GPU queue, with the index defaulting to zero.
 `upload_with_compute()` invokes a synchronous callback with CPU/GPU staging pointers and a command buffer;
 the callback fills staging, builds its root, and records dispatches directly. `flush()` returns a timeline
 point for consumers on other queues. Submit destination initialization and dependencies to the upload queue's

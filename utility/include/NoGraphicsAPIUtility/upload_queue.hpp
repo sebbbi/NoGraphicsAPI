@@ -25,17 +25,16 @@ public:
     static constexpr uint32 operation_limit = 4096;
     static constexpr uint64 alignment = 16;
 
-    UploadQueue() noexcept = default;
+    // Capacity must be a positive multiple of 16. queue_index must be less than DeviceCaps::queue_count.
+    explicit UploadQueue(Device* device, uint64 capacity = 64ull * 1024 * 1024, uint32 queue_index = 0) noexcept;
     ~UploadQueue() noexcept;
+    // Flushes and waits for uploads. Finish external submissions using returned timeline points before destruction or move assignment.
+    void destroy() noexcept;
+
     UploadQueue(const UploadQueue&) = delete;
     UploadQueue& operator=(const UploadQueue&) = delete;
     UploadQueue(UploadQueue&& other) noexcept;
     UploadQueue& operator=(UploadQueue&& other) noexcept;
-
-    // Capacity must be a positive multiple of 16. queue_index must be less than DeviceCaps::queue_count.
-    [[nodiscard]] bool init(Device* device, uint64 capacity = 64ull * 1024 * 1024, uint32 queue_index = 0) noexcept;
-    // Flushes and waits for uploads. Finish external submissions using returned timeline points before destruction or move assignment.
-    void destroy() noexcept;
 
     // Sources are copied immediately. Storage never grows: capacity or operation pressure may submit work and wait for reusable space.
     // Flush between overlapping transfer writes. Buffer copies follow copy_memory's requirements; large sources are split to fit.

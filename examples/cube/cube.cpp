@@ -109,11 +109,8 @@ int main() {
     const GpuCpuRange<byte> upload_allocation = data_allocator.allocate(texture_byte_count);
     memcpy(vertex_allocation.cpu, cube_vertices, sizeof(cube_vertices));
 	memcpy(index_allocation.cpu, cube_indices, sizeof(cube_indices));
-    UploadQueue uploads;
-    if (!read_binary_file(NOGRAPHICSAPI_CUBE_TEXTURE_PATH, Span<byte>(upload_allocation.cpu, texture_byte_count)) ||
-        !uploads.init(device, texture_byte_count))
+    if (!read_binary_file(NOGRAPHICSAPI_CUBE_TEXTURE_PATH, Span<byte>(upload_allocation.cpu, texture_byte_count)))
     {
-        uploads.destroy();
         destroy_gpu_heap(data_heap);
         destroy_pso(cube_pso);
         destroy_device(device);
@@ -121,6 +118,7 @@ int main() {
         return 1;
     }
 
+	UploadQueue uploads(device, texture_byte_count);
 	GpuHeap texture_descriptor_heap = create_gpu_heap(device, caps.texture_descriptor_size, MemoryType::texture_descriptor_heap);
 	GpuHeap sampler_descriptor_heap = create_gpu_heap(device, caps.sampler_descriptor_size, MemoryType::sampler_descriptor_heap);
 	TextureHeap texture_heap = create_texture_heap(device, texture_heap_size);

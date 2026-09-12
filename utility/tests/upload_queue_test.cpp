@@ -11,6 +11,11 @@ using namespace gpu;
 
 static_assert(!__is_constructible(UploadQueue, const UploadQueue&));
 static_assert(!__is_assignable(UploadQueue&, const UploadQueue&));
+static_assert(!__is_constructible(UploadQueue));
+static_assert(__is_nothrow_constructible(UploadQueue, Device*));
+static_assert(__is_nothrow_constructible(UploadQueue, Device*, uint64, uint32));
+static_assert(__is_nothrow_constructible(UploadQueue, UploadQueue&&));
+static_assert(!detail::is_convertible_v<Device*, UploadQueue>);
 
 static const uint32 buffer_bytes = 20 * 1024;
 static const uint32 readback_bytes = 128 * 1024;
@@ -32,7 +37,7 @@ struct Fixture
 {
     Device* device = nullptr;
     CommandPool* pool = nullptr;
-    UploadQueue ring{};
+    UploadQueue ring;
     TimelinePoint completion{};
     GpuHeap buffer{};
     GpuHeap readback{};
@@ -90,13 +95,8 @@ static void shutdown(Fixture& fixture)
 
 static bool initialize(Fixture& fixture)
 {
-    const DeviceInit initialized = create_device({.desired_queue_count = 2, .timestamp_query_count = 2});
-    fixture.device = initialized.device;
-    fixture.unsupported = initialized.error == Error::unsupported;
-    if (!fixture.device) { fprintf(stderr, "No compatible Vulkan device: %u\n", uint32(initialized.error)); return false; }
     fixture.pool = create_command_pool(fixture.device);
     if (!fixture.pool) return false;
-    if (!fixture.ring.init(fixture.device, 256)) return false;
     fixture.completion.semaphore = create_timeline_semaphore(fixture.device);
     if (!fixture.completion.semaphore) return false;
     fixture.buffer = create_gpu_heap(fixture.device, buffer_bytes, MemoryType::gpu_only);
@@ -258,8 +258,7 @@ static void run_small_ring(Fixture& fixture)
 
 static void run_operation_limit(Fixture& fixture)
 {
-    fixture.ring.destroy();
-    if (!fixture.ring.init(fixture.device, 128 * 1024)) { check(false, "operation-limit ring initializes"); return; }
+    fixture.ring = UploadQueue(fixture.device, 128 * 1024);
     const uint64 submissions = fixture.ring.stats().submissions;
     for (uint32 index = 0; index < UploadQueue::operation_limit + 1; ++index)
     {
@@ -275,8 +274,7 @@ static void run_operation_limit(Fixture& fixture)
 
 static void run_reclaim_before_flush(Fixture& fixture)
 {
-    fixture.ring.destroy();
-    if (!fixture.ring.init(fixture.device, 256)) { check(false, "reclaim ring initializes"); return; }
+    fixture.ring = UploadQueue(fixture.device, 256);
     uint8 bytes[320]{};
     for (uint32 index = 0; index < sizeof(bytes); ++index) bytes[index] = uint8(index * 53 + 17);
     memcpy(fixture.expected + guard_bytes, bytes, sizeof(bytes));
@@ -295,8 +293,7 @@ static void run_reclaim_before_flush(Fixture& fixture)
 
 static void run_non_power_of_two(Fixture& fixture)
 {
-    fixture.ring.destroy();
-    if (!fixture.ring.init(fixture.device, 272)) { check(false, "non-power-of-two ring initializes"); return; }
+    fixture.ring = UploadQueue(fixture.device, 272);
     uint8 bytes[272]{};
     uint32 offset = 1024;
     const uint32 sizes[]{272, 4, 20};
@@ -316,8 +313,7 @@ static void run_non_power_of_two(Fixture& fixture)
 
 static void run_empty_batches_and_destroy(Fixture& fixture)
 {
-    fixture.ring.destroy();
-    if (!fixture.ring.init(fixture.device, 256)) { check(false, "timestamp ring initializes"); return; }
+    fixture.ring = UploadQueue(fixture.device, 256);
     memset(fixture.timestamps.range.cpu, 0xa5, size_t(fixture.timestamps.range.size));
     for (uint32 index = 0; index < timestamp_batches; ++index)
     {
@@ -355,13 +351,11 @@ static void run_move_ownership(Fixture& fixture)
     for (uint32 index = 0; index < sizeof(bytes); ++index) bytes[index] = uint8(index * 41 + 93);
     memcpy(fixture.expected + guard_bytes + 512, bytes, sizeof(bytes));
     {
-        UploadQueue original{};
-        if (!original.init(fixture.device, 256)) { check(false, "move source initializes"); return; }
+        UploadQueue original(fixture.device, 256);
         original.upload_buffer({.gpu = fixture.buffer.range.gpu + 512, .size = sizeof(bytes)}, {bytes, sizeof(bytes)});
         UploadQueue moved(static_cast<UploadQueue&&>(original));
         check(!original.stats().capacity && moved.stats().pending_operations == 1, "move construction transfers unsubmitted copies");
-        UploadQueue replacement{};
-        if (!replacement.init(fixture.device, 128)) { check(false, "move destination initializes"); return; }
+        UploadQueue replacement(fixture.device, 128);
         replacement = static_cast<UploadQueue&&>(moved);
         check(!moved.stats().capacity && replacement.stats().capacity == 256 && replacement.stats().pending_operations == 1,
             "move assignment replaces an initialized destination and preserves pending copies");
@@ -420,8 +414,7 @@ static void run_attachment_consumers(Fixture& fixture)
 #if defined(NOGRAPHICSAPI_UPLOAD_QUEUE_SPV_PATH)
 static void run_compute_callbacks(Fixture& fixture)
 {
-    fixture.ring.destroy();
-    if (!fixture.ring.init(fixture.device, 272)) { check(false, "compute ring initializes"); return; }
+    fixture.ring = UploadQueue(fixture.device, 272);
     uint32 initial[16]{};
     for (uint32 index = 0; index < 16; ++index) initial[index] = index * 23 + 7;
     memcpy(fixture.expected + guard_bytes, initial, sizeof(initial));
@@ -484,8 +477,7 @@ static void run_multiple_queues(Fixture& fixture)
         return;
     }
     fixture.ring.destroy();
-    UploadQueue original{};
-    if (!original.init(fixture.device, 256, 1)) { check(false, "second-queue uploader initializes"); return; }
+    UploadQueue original(fixture.device, 256, 1);
     TimelinePoint pending = original.flush();
     ++pending.value;
     uint32 values[64]{};
@@ -523,8 +515,7 @@ static void run_multiple_queues(Fixture& fixture)
 static void run_retirement_capacity(Fixture& fixture)
 {
     if (get_device_caps(fixture.device).queue_count < 2) return;
-    fixture.ring.destroy();
-    if (!fixture.ring.init(fixture.device, 1024)) { check(false, "retirement-capacity ring initializes"); return; }
+    fixture.ring = UploadQueue(fixture.device, 1024);
     TimelineSemaphore* gate = create_timeline_semaphore(fixture.device);
     if (!gate) { check(false, "retirement gate initializes"); return; }
     CommandPool* release_pool = create_command_pool(fixture.device);
@@ -559,7 +550,13 @@ static void run_retirement_capacity(Fixture& fixture)
 
 int main()
 {
-    Fixture fixture{};
+    const DeviceInit initialized = create_device({.desired_queue_count = 2, .timestamp_query_count = 2});
+    if (initialized.error != Error::none)
+    {
+        fprintf(stderr, "No compatible Vulkan device: %u\n", uint32(initialized.error));
+        return initialized.error == Error::unsupported ? 77 : 1;
+    }
+    Fixture fixture{.device = initialized.device, .ring = UploadQueue(initialized.device, 256)};
     if (!initialize(fixture)) { shutdown(fixture); return fixture.unsupported ? 77 : 1; }
     run_small_ring(fixture);
     run_pitched_texture(fixture);

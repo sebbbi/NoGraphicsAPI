@@ -15,6 +15,22 @@ constexpr Access gpu_access = Access::shader_read | Access::shader_write | Acces
 
 } // namespace
 
+UploadQueue::UploadQueue(Device* device, uint64 capacity, uint32 queue_index) noexcept
+{
+    assert(device && capacity >= alignment && capacity % alignment == 0);
+    assert(queue_index < get_device_caps(device).queue_count);
+    state_.device = device;
+    state_.queue_index = queue_index;
+    state_.heap = create_gpu_heap(device, capacity, MemoryType::cpu_visible);
+    state_.completion.semaphore = create_timeline_semaphore(device);
+    for (Batch& batch : state_.batches)
+    {
+        batch.pool = create_command_pool(device);
+        end_commands(begin_commands(batch.pool));
+        reset_command_pool(batch.pool);
+    }
+}
+
 UploadQueue::~UploadQueue() noexcept
 {
     destroy();
@@ -34,38 +50,6 @@ UploadQueue& UploadQueue::operator=(UploadQueue&& other) noexcept
     state_ = other.state_;
     other.state_ = {};
     return *this;
-}
-
-bool UploadQueue::init(Device* device, uint64 capacity, uint32 queue_index) noexcept
-{
-    assert(!state_.device && device && capacity >= alignment && capacity % alignment == 0);
-    assert(queue_index < get_device_caps(device).queue_count);
-    state_.device = device;
-    state_.queue_index = queue_index;
-    state_.heap = create_gpu_heap(device, capacity, MemoryType::cpu_visible);
-    if (!state_.heap.owner)
-    {
-        destroy();
-        return false;
-    }
-    state_.completion.semaphore = create_timeline_semaphore(device);
-    if (!state_.completion.semaphore)
-    {
-        destroy();
-        return false;
-    }
-    for (Batch& batch : state_.batches)
-    {
-        batch.pool = create_command_pool(device);
-        if (!batch.pool)
-        {
-            destroy();
-            return false;
-        }
-        end_commands(begin_commands(batch.pool));
-        reset_command_pool(batch.pool);
-    }
-    return true;
 }
 
 void UploadQueue::destroy() noexcept
