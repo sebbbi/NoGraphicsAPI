@@ -32,7 +32,7 @@ NoGraphicsAPI_require_tool_version(
 function(NoGraphicsAPI_compile_slang output source entry stage)
     cmake_parse_arguments(SLANG "" "" "DEPENDS" ${ARGN})
     set(options)
-    if(stage STREQUAL "mesh")
+    if(stage STREQUAL "mesh" OR stage STREQUAL "amplification")
         list(APPEND options -capability spvMeshShadingEXT)
     endif()
 

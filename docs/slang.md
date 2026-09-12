@@ -40,7 +40,7 @@ heaps are part of the expected shader model, not opt-in cases. The significant c
 - `spirv_1_5` is the project baseline;
 - the direct SPIR-V backend avoids an intermediate source-language translation;
 - entry-point names are preserved because PSO creation expects `vertexMain`, `fragmentMain`,
-  `meshMain`, or `computeMain`;
+  `taskMain`, `meshMain`, or `computeMain`;
 - `-fvk-use-c-layout` is required to give shared POD structures the C-compatible layout expected by
   C++;
 - row-major matrix layout establishes the expected representation for matrix-bearing shared
@@ -48,8 +48,10 @@ heaps are part of the expected shader model, not opt-in cases. The significant c
 - `spvDescriptorHeapEXT` enables native `ResourceDescriptorHeap` and `SamplerDescriptorHeap` syntax
   and brings in the required untyped-pointer capability.
 
-Mesh shaders additionally request `spvMeshShadingEXT`. The current mesh path has no task stage and
-expects triangle output.
+Task and mesh shaders additionally request `spvMeshShadingEXT`. Compile `taskMain` with
+`-stage amplification`; its payload selects and launches mesh workgroups with `DispatchMesh`.
+Mesh shaders use `-stage mesh` and triangle output. Set `MeshPSODesc::task_spirv` to attach the task stage;
+an empty span launches mesh workgroups directly. Both stages receive the draw's shared root.
 
 ## Root ABI
 
@@ -146,7 +148,6 @@ members are not currently supported by the enabled Vulkan feature set.
 - BDA pointers are unbounded and cannot point to opaque textures.
 - `NoGraphicsAPI` does not support specialization constants because Slang and Vulkan do not expose
   them as a single C-compatible POD structure.
-- Mesh shaders are supported; task shaders are not.
 
 ## References
 

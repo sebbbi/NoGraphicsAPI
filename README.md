@@ -42,7 +42,7 @@ or `VkPipelineLayout`. Its central extensions are:
 - `VK_KHR_shader_untyped_pointers` as the descriptor-heap SPIR-V prerequisite;
 - `VK_KHR_unified_image_layouts`, when available, to optimize ordinary texture access in
   `VK_IMAGE_LAYOUT_GENERAL`;
-- `VK_EXT_mesh_shader` for mesh pipelines and dispatch.
+- `VK_EXT_mesh_shader` for task/mesh pipelines and dispatch.
 
 NoGraphicsAPI is a low-level, thin Vulkan wrapper. Debug builds enable `VK_EXT_debug_utils` and the
 Khronos validation layer when available.
@@ -231,11 +231,11 @@ but this repository currently lacks Linux swap chain support (to be implemented)
 
 The library has been reviewed with GPT-6 Astra Ultra, but remains a prototype and may contain bugs. Please report issues.
 
-Implemented today: graphics, mesh, and compute PSOs; direct and indirect work; GPU-address copies;
+Implemented today: graphics, task/mesh, and compute PSOs; direct and indirect work; GPU-address copies;
 application-owned descriptor heaps; common texture types and views; dynamic rendering and
 viewport/scissor/depth-stencil state; global barriers; timeline submission; deferred destruction; and Win32 presentation.
 
-This is a deliberately single-threaded, single-queue graphics API. Ray tracing, task shaders, sparse memory,
+This is a deliberately single-threaded, single-queue graphics API. Ray tracing, sparse memory,
 device-generated command graphs beyond the existing indirect operations, pipeline caching, MSAA, non-Win32
 presentation, and a Metal backend are outside the current implementation. The public header remains the source
 of truth for the exact API surface.

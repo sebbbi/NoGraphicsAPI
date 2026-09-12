@@ -34,7 +34,7 @@ The backend requires Vulkan 1.4 and four device extensions:
   and push data;
 - `VK_KHR_device_address_commands` for address-based index binding, indirect commands, and copies;
 - `VK_KHR_shader_untyped_pointers` for the descriptor-heap shader model; and
-- `VK_EXT_mesh_shader` for mesh pipelines and draws.
+- `VK_EXT_mesh_shader` for task/mesh pipelines and draws.
 
 `VK_KHR_unified_image_layouts` is enabled when available to optimize the backend's single-layout
 texture model. The public API does not expose layouts either way.
@@ -211,7 +211,7 @@ The implementation deliberately uses CPU push-data roots, one shared graphics ro
 sampler descriptor heap, one GPU-only texture memory type, and Vulkan stage/access masks. These
 preserve the post's main model while adapting it to `VK_EXT_descriptor_heap` and synchronization2.
 
-**Prototype scope.** Vulkan already supports task shaders, public queue selection and multiple queues,
+**Prototype scope.** Vulkan already supports public queue selection and multiple queues,
 GPU-addressed indirect draw counts through `vkCmdDraw*IndirectCount2KHR`, and optional BDA
 capture/replay address preservation. This backend does not expose them. Remaining rasterization,
 blend, and attachment state in PSOs is also largely a current implementation choice.

@@ -29,7 +29,7 @@ conventional feature checked by device creation.
 | [`VK_KHR_shader_untyped_pointers`][untyped-pointers] | Supplies the shader-untyped-pointer capability required by the descriptor-heap SPIR-V path. |
 | [`VK_KHR_device_address_commands`][address-commands] | Index, indirect, and copy commands consume GPU addresses rather than buffer handles. |
 | [`VK_KHR_unified_image_layouts`][unified-layouts] (optional) | Optimizes ordinary `GENERAL` image use; the public model is unchanged without it. |
-| [`VK_EXT_mesh_shader`][mesh-shader] | Direct and indirect mesh-workgroup draws. Task shaders are unsupported. |
+| [`VK_EXT_mesh_shader`][mesh-shader] | Required task and mesh shader support for direct and indirect workgroup draws. |
 | Buffer device address | Gives GPU heaps 64-bit shader addresses for their lifetime and enables typed pointer fields in shared structures. |
 | Vulkan 1.3 `synchronization2` and `dynamicRendering` | Resource-free barriers and rendering without render-pass or framebuffer objects. |
 | Core Vulkan dynamic state | Command-set viewport, scissor, and exposed depth/stencil state. |
@@ -207,8 +207,11 @@ scissor and disables depth/stencil, preventing state from leaking between passes
 `set_viewport()`, `set_scissor()`, or `set_depth_stencil()` after beginning a pass to override those defaults.
 
 The raster path has empty fixed vertex input because shaders fetch through GPU pointers. Mesh PSOs
-use `VK_EXT_mesh_shader` and support direct and indirect meshlet draws. Both paths share the same
-root ABI and descriptor heaps.
+use `VK_EXT_mesh_shader`, with task and mesh support enabled as part of the fixed device baseline.
+`MeshPSODesc::task_spirv` adds `taskMain` before `meshMain`; direct and indirect draw counts then launch
+task workgroups, which cull or expand work through their payload and mesh dispatch. Empty task SPIR-V
+launches mesh workgroups directly. `Stage::task` names task-stage hazards in barriers. All graphics
+stages share the same root ABI and descriptor heaps.
 
 ## Submission, presentation, and lifetime
 
