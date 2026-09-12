@@ -26,7 +26,7 @@ NoGraphicsAPI_add_example(example_cube
     ${vertex_spv}
     ${fragment_spv}
 )
-target_link_libraries(example_cube PRIVATE NoGraphicsAPIUtility::math NoGraphicsAPIUtility::textures)
+target_link_libraries(example_cube PRIVATE NoGraphicsAPIUtility::math NoGraphicsAPIUtility::textures NoGraphicsAPIUtility::uploads)
 target_compile_definitions(example_cube PRIVATE
     NOGRAPHICSAPI_CUBE_VERTEX_SPV_PATH="${vertex_spv}"
     NOGRAPHICSAPI_CUBE_FRAGMENT_SPV_PATH="${fragment_spv}"

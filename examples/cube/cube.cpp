@@ -8,6 +8,7 @@
 #include <NoGraphicsAPIUtility/bump_allocator.hpp>
 #include <NoGraphicsAPIUtility/math.hpp>
 #include <NoGraphicsAPIUtility/texture_allocator.hpp>
+#include <NoGraphicsAPIUtility/upload_queue.hpp>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -108,7 +109,17 @@ int main() {
     const GpuCpuRange<byte> upload_allocation = data_allocator.allocate(texture_byte_count);
     memcpy(vertex_allocation.cpu, cube_vertices, sizeof(cube_vertices));
 	memcpy(index_allocation.cpu, cube_indices, sizeof(cube_indices));
-    read_binary_file(NOGRAPHICSAPI_CUBE_TEXTURE_PATH, Span<byte>(upload_allocation.cpu, texture_byte_count));
+    UploadQueue uploads;
+    if (!read_binary_file(NOGRAPHICSAPI_CUBE_TEXTURE_PATH, Span<byte>(upload_allocation.cpu, texture_byte_count)) ||
+        !uploads.init(device, texture_byte_count))
+    {
+        uploads.destroy();
+        destroy_gpu_heap(data_heap);
+        destroy_pso(cube_pso);
+        destroy_device(device);
+        close_example_window(window);
+        return 1;
+    }
 
 	GpuHeap texture_descriptor_heap = create_gpu_heap(device, caps.texture_descriptor_size, MemoryType::texture_descriptor_heap);
 	GpuHeap sampler_descriptor_heap = create_gpu_heap(device, caps.sampler_descriptor_size, MemoryType::sampler_descriptor_heap);
@@ -117,10 +128,10 @@ int main() {
 
 	TimelinePoint latest_completion{.semaphore = create_timeline_semaphore(device)};
 	CommandPool* command_pools[] = {create_command_pool(device), create_command_pool(device)};
-	CommandBuffer* upload_commands = begin_commands(command_pools[0]);
+	CommandBuffer* texture_commands = begin_commands(command_pools[0]);
 
 	// Textures
-	PlacedTexture texture = texture_allocator.allocate(upload_commands, {
+	PlacedTexture texture = texture_allocator.allocate(texture_commands, {
 		.extent = {.x = texture_width, .y = texture_height, .z = 1},
 		.format = Format::rgba8_srgb,
 		.usage = TextureUsage::sampled | TextureUsage::transfer_destination,
@@ -133,16 +144,12 @@ int main() {
 		.address_u = AddressMode::clamp_to_edge,
 		.address_v = AddressMode::clamp_to_edge,
 	});
-	copy_memory_to_texture(upload_commands, gpu_range(upload_allocation), texture.texture);
-
-	barrier(upload_commands,
-		Stage::transfer, Access::transfer_write,
-		Stage::fragment, Access::shader_read);
-
-	end_commands(upload_commands);
+	end_commands(texture_commands);
 	latest_completion.value++;
-	submit(device, {.commands = {upload_commands}, .completion = latest_completion});
-	wait_timeline(latest_completion);
+	submit(device, {.commands = {texture_commands}, .completion = latest_completion});
+    uploads.upload_texture(texture.texture, {upload_allocation.cpu, texture_byte_count});
+    uploads.wait();
+    uploads.destroy();
 
 	PlacedTexture depth{};
 	RenderView* depth_render_view = nullptr;
