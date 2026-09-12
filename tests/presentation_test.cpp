@@ -99,7 +99,6 @@ int main()
                 gpu::submit_and_present(device, {.commands = {empty_commands}, .completion = completion});
                 gpu::wait_timeline(completion);
             }
-            gpu::reset_command_pool(present_pool);
             width = 320;
             height = 240;
             CHECK(SetWindowPos(window, nullptr, 0, 0, int(width), int(height), SWP_NOZORDER | SWP_NOACTIVATE));
@@ -110,11 +109,7 @@ int main()
         gpu::CommandBuffer* commands = gpu::begin_commands(present_pool);
         const gpu::SwapchainFrame frame = gpu::acquire(commands);
         CHECK(frame.render_view && frame.extent.x == width && frame.extent.y == height);
-        if (!frame.render_view)
-        {
-            gpu::reset_command_pool(present_pool);
-            break;
-        }
+        if (!frame.render_view) break;
 
         gpu::CommandBuffer* first = gpu::begin_commands(independent_pool);
         gpu::barrier(first, gpu::Stage::transfer, gpu::Access::transfer_write, gpu::Stage::transfer, gpu::Access::transfer_read);

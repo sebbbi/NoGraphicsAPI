@@ -696,7 +696,7 @@ template<typename T>
 [[nodiscard]] TextureHeap create_texture_heap(Device* device, uint64 byte_count) noexcept;
 void destroy_texture_heap(const TextureHeap& heap) noexcept;
 [[nodiscard]] SizeAlign get_texture_size_align(Device* device, const TextureDesc& desc) noexcept;
-// Records initialization into commands, outside a render pass. Order every use after this command buffer's initialization, including across queues.
+// Records texture initialization into commands. Use outside of a render pass. Commands must be submitted before other use of the texture.
 [[nodiscard]] Texture* create_texture(CommandBuffer* commands, const TextureDesc& desc, const TextureHeap& heap, uint64 offset) noexcept;
 void destroy_texture(Texture* texture) noexcept;
 [[nodiscard]] RenderView* create_render_view(Texture* texture, const RenderViewDesc& desc = {}) noexcept;

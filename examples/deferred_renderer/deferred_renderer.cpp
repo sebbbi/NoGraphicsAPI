@@ -244,10 +244,7 @@ int main()
         CommandBuffer* commands = begin_commands(command_pool);
         const SwapchainFrame frame = acquire(commands);
         if (!frame.render_view)
-        {
-            reset_command_pool(command_pool);
             continue;
-        }
         const uint32x2 extent = frame.extent;
 
         // Window resize?

@@ -44,10 +44,7 @@ int main()
         CommandBuffer* commands = begin_commands(command_pool);
         const SwapchainFrame frame = acquire(commands);
         if (!frame.render_view)
-        {
-            reset_command_pool(command_pool);
             continue;
-        }
         begin_render_pass(commands, {
             .colors = { { .render_view = frame.render_view, .load = LoadOp::clear } },
         });
