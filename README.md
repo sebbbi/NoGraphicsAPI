@@ -191,11 +191,11 @@ and [NVIDIA 616.64 WHQL](https://us.download.nvidia.com/Windows/616.64/616.64-wi
 | AMD RDNA 3 (dGPU) | Windows / Adrenalin 26.9.1 | [RX 7000](https://vulkan.gpuinfo.org/displayreport.php?id=51443) | PCIe ReBAR | Supported |
 | AMD RDNA 3 (iGPU) | Windows / Adrenalin 26.9.1 | [700M](https://vulkan.gpuinfo.org/displayreport.php?id=49646) | UMA | Supported |
 | AMD RDNA 4 (dGPU) | Windows / Adrenalin 26.9.1 | [RX 9000](https://vulkan.gpuinfo.org/displayreport.php?id=51293) | PCIe ReBAR | Supported |
-| NVIDIA Turing | Windows / NVIDIA 616.64 | [GTX 1600][gtx16] | 🔴 [256 MiB fixed BAR][turing-rebar] (214 MiB exposed) | Supported |
-| NVIDIA Turing | Windows / NVIDIA 616.64 | [RTX 2000][turing] | 🔴 [256 MiB fixed BAR][turing-rebar] (214 MiB exposed) | Supported |
-| NVIDIA Ampere | Windows / NVIDIA 616.64 | [RTX 3000](https://vulkan.gpuinfo.org/displayreport.php?id=51549) | PCIe ReBAR | Supported |
-| NVIDIA Ada Lovelace | Windows / NVIDIA 616.64 | [RTX 4000](https://vulkan.gpuinfo.org/displayreport.php?id=51469) | PCIe ReBAR | Supported |
-| NVIDIA Blackwell | Windows / NVIDIA 616.64 | [RTX 5000](https://vulkan.gpuinfo.org/displayreport.php?id=51573) | PCIe ReBAR | Supported |
+| NVIDIA Turing | Windows / NVIDIA 616.64 | [GTX 16 series][gtx16] | 🔴 [256 MiB fixed BAR][turing-rebar] (214 MiB exposed) | Supported |
+| NVIDIA Turing | Windows / NVIDIA 616.64 | [RTX 20 series][turing] | 🔴 [256 MiB fixed BAR][turing-rebar] (214 MiB exposed) | Supported |
+| NVIDIA Ampere | Windows / NVIDIA 616.64 | [RTX 30 series](https://vulkan.gpuinfo.org/displayreport.php?id=51549) | PCIe ReBAR | Supported |
+| NVIDIA Ada Lovelace | Windows / NVIDIA 616.64 | [RTX 40 series](https://vulkan.gpuinfo.org/displayreport.php?id=51469) | PCIe ReBAR | Supported |
+| NVIDIA Blackwell | Windows / NVIDIA 616.64 | [RTX 50 series](https://vulkan.gpuinfo.org/displayreport.php?id=51573) | PCIe ReBAR | Supported |
 
 🔴 marks missing required extensions or a capacity-limited fixed BAR. All checked ReBAR GPUs expose
 their main VRAM heap as CPU-visible; availability depends on platform firmware. A fixed BAR can still
