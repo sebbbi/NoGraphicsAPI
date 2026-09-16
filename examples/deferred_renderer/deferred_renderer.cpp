@@ -151,7 +151,7 @@ int main()
 {
     // Init
     void* window = open_example_window("NoGraphicsAPI deferred renderer", initial_width, initial_height);
-    Device* device = create_device({.window = window, .swapchain_format = Format::bgra8_srgb}).device;
+    Device* device = create_device({.window = window, .display = example_window_display(), .swapchain_format = Format::bgra8_srgb}).device;
 
     if (!window || !device)
     {

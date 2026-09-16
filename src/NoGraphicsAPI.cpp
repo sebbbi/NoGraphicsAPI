@@ -9,6 +9,9 @@
 #endif
 #define VK_USE_PLATFORM_WIN32_KHR
 #include <windows.h>
+#elif defined(__linux__)
+#define VK_USE_PLATFORM_XCB_KHR
+#include <xcb/xcb.h>
 #endif
 
 #include <vulkan/vulkan.h>
@@ -1745,7 +1748,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     const bool presentation = desc.window != nullptr;
     assert(desc.desired_swapchain_image_count != 0 && desc.desired_swapchain_image_count <= max_swapchain_images &&
            "swapchain image count must fit the wrapper's presentation context array");
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(__linux__)
     if (presentation)
         return {.error = Error::unsupported};
 #endif
@@ -1766,6 +1769,11 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     if (error != Error::none)
         return fail_device_creation(state, error);
 #if defined(_WIN32)
+    constexpr const char* platform_surface_extension_name = VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
+#elif defined(__linux__)
+    constexpr const char* platform_surface_extension_name = VK_KHR_XCB_SURFACE_EXTENSION_NAME;
+#endif
+#if defined(_WIN32) || defined(__linux__)
     const bool khr_surface_maintenance1 = presentation && has_name(
         {instance_extensions, instance_extension_count},
         VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
@@ -1776,7 +1784,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         (!has_name({instance_extensions, instance_extension_count},
                    VK_KHR_SURFACE_EXTENSION_NAME) ||
          !has_name({instance_extensions, instance_extension_count},
-                   VK_KHR_WIN32_SURFACE_EXTENSION_NAME) ||
+                   platform_surface_extension_name) ||
          !has_name({instance_extensions, instance_extension_count},
                    VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME) ||
          (!khr_surface_maintenance1 && !ext_surface_maintenance1)))
@@ -1805,11 +1813,11 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     if (debug_utils_available) enabled_instance_extensions[enabled_instance_extension_count++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
     if (validation_available) enabled_layers[enabled_layer_count++] = "VK_LAYER_KHRONOS_validation";
 #endif
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(__linux__)
     if (presentation)
     {
         enabled_instance_extensions[enabled_instance_extension_count++] = VK_KHR_SURFACE_EXTENSION_NAME;
-        enabled_instance_extensions[enabled_instance_extension_count++] = VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
+        enabled_instance_extensions[enabled_instance_extension_count++] = platform_surface_extension_name;
         enabled_instance_extensions[enabled_instance_extension_count++] = VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME;
         if (khr_surface_maintenance1)
             enabled_instance_extensions[enabled_instance_extension_count++] = VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME;
@@ -1868,6 +1876,18 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
             .hwnd = static_cast<HWND>(desc.window),
         };
         error = error_from_vk(vkCreateWin32SurfaceKHR(state->instance, &surface_info, nullptr, &state->surface));
+        if (error != Error::none)
+            return fail_device_creation(state, error);
+    }
+#elif defined(__linux__)
+    if (presentation)
+    {
+        const VkXcbSurfaceCreateInfoKHR surface_info{
+            .sType = VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR,
+            .connection = static_cast<xcb_connection_t*>(desc.display),
+            .window = static_cast<xcb_window_t>(reinterpret_cast<uintptr_t>(desc.window)),
+        };
+        error = error_from_vk(vkCreateXcbSurfaceKHR(state->instance, &surface_info, nullptr, &state->surface));
         if (error != Error::none)
             return fail_device_creation(state, error);
     }
@@ -1967,7 +1987,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         enabled_device_extensions[enabled_device_extension_count++] = VK_KHR_UNIFIED_IMAGE_LAYOUTS_EXTENSION_NAME;
     }
     enabled_device_extensions[enabled_device_extension_count++] = VK_EXT_MESH_SHADER_EXTENSION_NAME;
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(__linux__)
     if (presentation)
     {
         enabled_device_extensions[enabled_device_extension_count++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;

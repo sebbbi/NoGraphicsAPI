@@ -11,7 +11,7 @@ int main()
     constexpr uint32 height = 512;
 
     void* window = open_example_window("NoGraphicsAPI triangle", width, height);
-    Device* device = create_device({.window = window, .swapchain_format = Format::bgra8_srgb}).device;
+    Device* device = create_device({.window = window, .display = example_window_display(), .swapchain_format = Format::bgra8_srgb}).device;
 
     if (!window || !device)
     {
