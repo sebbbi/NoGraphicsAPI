@@ -425,19 +425,46 @@ constexpr Access operator|(Access lhs, Access rhs) noexcept
     return static_cast<Access>(static_cast<uint64>(lhs) | static_cast<uint64>(rhs));
 }
 
-struct DeviceCaps
+struct DeviceInfo
 {
     const char* device_name = nullptr;
+    const char* driver_name = nullptr;
+    const char* driver_info = nullptr;
+    uint32 vendor_id = 0;
+    uint32 device_id = 0;
+    uint32 device_type = 0;
+    uint32 api_version = 0;
+    uint32 driver_version = 0;
+};
+
+struct DeviceMemoryInfo
+{
+    uint64 device_local_memory_size = 0;
+    uint64 host_visible_memory_size = 0;
+    uint64 host_visible_device_local_memory_size = 0;
+};
+
+struct DeviceCaps
+{
     uint64 max_push_data_size = 0;
     // Common element size for suballocating TextureHeap storage; every SizeAlign::align divides this value.
     uint64 texture_heap_alignment = 0;
     uint64 texture_descriptor_size = 0; // Bytes per descriptor slot.
     uint64 sampler_descriptor_size = 0; // Bytes per descriptor slot.
+    uint64 image_descriptor_alignment = 0;
+    uint64 sampler_descriptor_alignment = 0;
+    uint64 resource_heap_alignment = 0;
+    uint64 sampler_heap_alignment = 0;
+    uint64 min_resource_heap_reserved_range = 0;
+    uint64 min_sampler_heap_reserved_range = 0;
     float timestamp_period_ns = 0.0f; // Nanoseconds per timestamp tick.
     uint32 sub_texel_precision_bits = 0; // Fractional filtering precision, for conservative sampled-field bounds.
     bool texture_compression_bc = false;
     bool texture_compression_astc = false;
+    bool texture_compression_etc2 = false;
     bool storage_input_output16 = false;
+    bool unified_image_layouts = false;
+    bool swapchain_maintenance1 = false;
 };
 
 // A windowed device and every call using it must remain on the native
@@ -647,6 +674,8 @@ struct RenderingDesc
 // Wait for all submitted frames to drain before destroying the device.
 [[nodiscard]] DeviceInit create_device(const DeviceDesc& desc = {}) noexcept;
 void destroy_device(Device* device) noexcept;
+[[nodiscard]] const DeviceInfo& get_device_info(const Device* device) noexcept;
+[[nodiscard]] const DeviceMemoryInfo& get_device_memory_info(const Device* device) noexcept;
 [[nodiscard]] const DeviceCaps& get_device_caps(const Device* device) noexcept;
 [[nodiscard]] bool supports_texture_format(const Device* device, Format format, TextureUsage usage) noexcept;
 [[nodiscard]] uint32x2 get_drawable_extent(Device* device) noexcept;

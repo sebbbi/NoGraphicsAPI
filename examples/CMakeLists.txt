@@ -15,6 +15,7 @@ endif()
 add_subdirectory(triangle)
 add_subdirectory(cube)
 add_subdirectory(deferred_renderer)
+add_subdirectory(device_info)
 
 function(NoGraphicsAPI_make_release_gui target)
     if(WIN32)
