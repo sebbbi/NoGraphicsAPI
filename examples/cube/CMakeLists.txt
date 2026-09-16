@@ -28,7 +28,12 @@ NoGraphicsAPI_add_example(example_cube
 )
 target_link_libraries(example_cube PRIVATE NoGraphicsAPIUtility::math NoGraphicsAPIUtility::textures)
 target_compile_definitions(example_cube PRIVATE
-    NOGRAPHICSAPI_CUBE_VERTEX_SPV_PATH="${vertex_spv}"
-    NOGRAPHICSAPI_CUBE_FRAGMENT_SPV_PATH="${fragment_spv}"
-    NOGRAPHICSAPI_CUBE_TEXTURE_PATH="${texture}"
+    NOGRAPHICSAPI_CUBE_VERTEX_SPV_PATH="shaders/cube.vert.spv"
+    NOGRAPHICSAPI_CUBE_FRAGMENT_SPV_PATH="shaders/cube.frag.spv"
+    NOGRAPHICSAPI_CUBE_TEXTURE_PATH="${texture_name}"
 )
+if(CMAKE_CONFIGURATION_TYPES)
+    add_custom_command(TARGET example_cube POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${shader_dir} $<TARGET_FILE_DIR:example_cube>/shaders
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${texture} $<TARGET_FILE_DIR:example_cube>/${texture_name})
+endif()

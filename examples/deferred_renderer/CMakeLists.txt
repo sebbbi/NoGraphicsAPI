@@ -42,9 +42,13 @@ NoGraphicsAPI_add_example(example_deferred_renderer
 )
 target_link_libraries(example_deferred_renderer PRIVATE NoGraphicsAPIUtility::math NoGraphicsAPIUtility::textures)
 target_compile_definitions(example_deferred_renderer PRIVATE
-    NOGRAPHICSAPI_SIMULATION_COMPUTE_SPV_PATH="${simulation_compute_spv}"
-    NOGRAPHICSAPI_GBUFFER_MESH_SPV_PATH="${gbuffer_mesh_spv}"
-    NOGRAPHICSAPI_GBUFFER_FRAGMENT_SPV_PATH="${gbuffer_fragment_spv}"
-    NOGRAPHICSAPI_DEFERRED_VERTEX_SPV_PATH="${deferred_vertex_spv}"
-    NOGRAPHICSAPI_DEFERRED_FRAGMENT_SPV_PATH="${deferred_fragment_spv}"
+    NOGRAPHICSAPI_SIMULATION_COMPUTE_SPV_PATH="shaders/simulation.comp.spv"
+    NOGRAPHICSAPI_GBUFFER_MESH_SPV_PATH="shaders/gbuffer.mesh.spv"
+    NOGRAPHICSAPI_GBUFFER_FRAGMENT_SPV_PATH="shaders/gbuffer.frag.spv"
+    NOGRAPHICSAPI_DEFERRED_VERTEX_SPV_PATH="shaders/deferred.vert.spv"
+    NOGRAPHICSAPI_DEFERRED_FRAGMENT_SPV_PATH="shaders/deferred.frag.spv"
 )
+if(CMAKE_CONFIGURATION_TYPES)
+    add_custom_command(TARGET example_deferred_renderer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${shader_dir} $<TARGET_FILE_DIR:example_deferred_renderer>/shaders)
+endif()
