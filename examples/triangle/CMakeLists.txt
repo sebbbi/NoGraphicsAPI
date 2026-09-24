@@ -13,6 +13,10 @@ NoGraphicsAPI_add_example(example_triangle
     ${fragment_spv}
 )
 target_compile_definitions(example_triangle PRIVATE
-    NOGRAPHICSAPI_VERTEX_SPV_PATH="${vertex_spv}"
-    NOGRAPHICSAPI_FRAGMENT_SPV_PATH="${fragment_spv}"
+    NOGRAPHICSAPI_VERTEX_SPV_PATH="shaders/triangle.vert.spv"
+    NOGRAPHICSAPI_FRAGMENT_SPV_PATH="shaders/triangle.frag.spv"
 )
+if(CMAKE_CONFIGURATION_TYPES)
+    add_custom_command(TARGET example_triangle POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${shader_dir} $<TARGET_FILE_DIR:example_triangle>/shaders)
+endif()
