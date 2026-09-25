@@ -59,16 +59,39 @@ else()
     target_compile_options(NoGraphicsAPIUtility_textures PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
 endif()
 
+add_library(NoGraphicsAPIUtility_uploads STATIC
+    include/NoGraphicsAPIUtility/upload_queue.hpp
+    include/NoGraphicsAPIUtility/texture_upload.hpp
+    src/upload_queue.cpp
+    src/texture_upload.cpp
+)
+add_library(NoGraphicsAPIUtility::uploads ALIAS NoGraphicsAPIUtility_uploads)
+set_target_properties(NoGraphicsAPIUtility_uploads PROPERTIES EXPORT_NAME uploads)
+target_compile_features(NoGraphicsAPIUtility_uploads PUBLIC cxx_std_20)
+target_include_directories(NoGraphicsAPIUtility_uploads PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
+target_link_libraries(NoGraphicsAPIUtility_uploads PUBLIC NoGraphicsAPI::NoGraphicsAPI)
+NoGraphicsAPI_disable_exceptions(NoGraphicsAPIUtility_uploads)
+if(MSVC)
+    target_compile_options(NoGraphicsAPIUtility_uploads PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(NoGraphicsAPIUtility_uploads PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+endif()
+
 add_library(NoGraphicsAPIUtility_utility INTERFACE)
 add_library(NoGraphicsAPIUtility::utility ALIAS NoGraphicsAPIUtility_utility)
 set_target_properties(NoGraphicsAPIUtility_utility PROPERTIES EXPORT_NAME utility)
-target_link_libraries(NoGraphicsAPIUtility_utility INTERFACE NoGraphicsAPIUtility::math NoGraphicsAPIUtility::allocators NoGraphicsAPIUtility::textures)
+target_link_libraries(NoGraphicsAPIUtility_utility INTERFACE
+    NoGraphicsAPIUtility::math NoGraphicsAPIUtility::allocators NoGraphicsAPIUtility::textures NoGraphicsAPIUtility::uploads)
 
 install(TARGETS
         NoGraphicsAPIUtility_types
         NoGraphicsAPIUtility_math
         NoGraphicsAPIUtility_allocators
         NoGraphicsAPIUtility_textures
+        NoGraphicsAPIUtility_uploads
         NoGraphicsAPIUtility_utility
     EXPORT NoGraphicsAPIUtilityTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}

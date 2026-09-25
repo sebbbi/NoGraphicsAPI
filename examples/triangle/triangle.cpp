@@ -33,25 +33,33 @@ int main()
     free(vertex_spirv.data);
 
     TimelinePoint latest_completion{ .semaphore = create_timeline_semaphore(device) };
+    CommandPool* command_pools[] = {create_command_pool(device), create_command_pool(device)};
 
     while (pump_example_window(window))
     {
-        const SwapchainFrame frame = acquire(device);
+        if (latest_completion.value >= 2)
+            wait_timeline({.semaphore = latest_completion.semaphore, .value = latest_completion.value - 1});
+        CommandPool* command_pool = command_pools[latest_completion.value % 2];
+        reset_command_pool(command_pool);
+        CommandBuffer* commands = begin_commands(command_pool);
+        const SwapchainFrame frame = acquire(commands);
         if (!frame.render_view)
             continue;
-        CommandBuffer* commands = begin_commands(device);
         begin_render_pass(commands, {
             .colors = { { .render_view = frame.render_view, .load = LoadOp::clear } },
         });
         bind_pso(commands, triangle_pso);
         draw(commands, {}, 3);
         end_render_pass(commands);
+        end_commands(commands);
         latest_completion.value++;
-        submit_and_present(device, { commands }, latest_completion);
+        submit_and_present(device, {.commands = {commands}, .completion = latest_completion});
     }
 
     wait_idle(device);
 
+    destroy_command_pool(command_pools[1]);
+    destroy_command_pool(command_pools[0]);
     destroy_timeline_semaphore(latest_completion.semaphore);
     destroy_pso(triangle_pso);
 

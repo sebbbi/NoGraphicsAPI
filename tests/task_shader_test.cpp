@@ -26,6 +26,7 @@ struct ShaderCode
 struct Fixture
 {
     gpu::Device* device = nullptr;
+    gpu::CommandPool* pool = nullptr;
     gpu::PSO* pso = nullptr;
     gpu::TextureHeap texture_heap{};
     gpu::Texture* target = nullptr;
@@ -70,7 +71,9 @@ static bool initialize(Fixture& fixture) noexcept
         .usage = gpu::TextureUsage::color_attachment | gpu::TextureUsage::transfer_source,
     };
     fixture.texture_heap = gpu::create_texture_heap(fixture.device, gpu::get_texture_size_align(fixture.device, target_desc).size);
-    fixture.target = gpu::create_texture(fixture.device, target_desc, fixture.texture_heap, 0);
+    fixture.pool = gpu::create_command_pool(fixture.device);
+    gpu::CommandBuffer* commands = gpu::begin_commands(fixture.pool);
+    fixture.target = gpu::create_texture(commands, target_desc, fixture.texture_heap, 0);
     if (!fixture.target) return false;
     fixture.view = gpu::create_render_view(fixture.target);
     if (!fixture.view) return false;
@@ -79,6 +82,10 @@ static bool initialize(Fixture& fixture) noexcept
     fixture.seed = gpu::create_gpu_heap(fixture.device, data_bytes);
     fixture.data = gpu::create_gpu_heap(fixture.device, data_bytes, gpu::MemoryType::gpu_only);
     fixture.readback = gpu::create_gpu_heap(fixture.device, pixel_offset + pixel_bytes, gpu::MemoryType::readback);
+    gpu::end_commands(commands);
+    ++fixture.completion.value;
+    gpu::submit(fixture.device, {.commands = {commands}, .completion = fixture.completion});
+    gpu::wait_timeline(fixture.completion);
     return true;
 }
 
@@ -97,7 +104,8 @@ static bool render_case(Fixture& fixture, uint32 count, uint32 visible_mask, uin
         .visible_mask = visible_mask,
         .color = {.x = 1.0f, .y = float(scenario & 1u), .z = float(indirect), .w = 1.0f},
     };
-    gpu::CommandBuffer* commands = gpu::begin_commands(fixture.device);
+    gpu::reset_command_pool(fixture.pool);
+    gpu::CommandBuffer* commands = gpu::begin_commands(fixture.pool);
     gpu::barrier(commands, gpu::Stage::task | gpu::Stage::mesh | gpu::Stage::transfer, gpu::Access::shader_write | gpu::Access::transfer_read,
         gpu::Stage::transfer, gpu::Access::transfer_write);
     gpu::copy_memory(commands, gpu::gpu_range(fixture.seed), gpu::gpu_range(fixture.data));
@@ -119,8 +127,9 @@ static bool render_case(Fixture& fixture, uint32 count, uint32 visible_mask, uin
         {.gpu = fixture.readback.range.gpu, .size = sizeof(TaskTestData)});
     gpu::copy_texture_to_memory(commands, fixture.target, {.gpu = fixture.readback.range.gpu + pixel_offset, .size = pixel_bytes});
     gpu::barrier(commands, gpu::Stage::transfer, gpu::Access::transfer_write, gpu::Stage::host, gpu::Access::host_read);
+    gpu::end_commands(commands);
     ++fixture.completion.value;
-    gpu::submit({commands}, fixture.completion);
+    gpu::submit(fixture.device, {.commands = {commands}, .completion = fixture.completion});
     gpu::wait_timeline(fixture.completion);
 
     const TaskTestData& actual = *reinterpret_cast<const TaskTestData*>(fixture.readback.range.cpu);
@@ -167,6 +176,7 @@ int main()
                 valid &= render_case(fixture, counts[scenario], masks[scenario], scenario, indirect != 0);
     }
     gpu::wait_idle(fixture.device);
+    gpu::destroy_command_pool(fixture.pool);
     gpu::destroy_gpu_heap(fixture.readback);
     gpu::destroy_gpu_heap(fixture.data);
     gpu::destroy_gpu_heap(fixture.seed);

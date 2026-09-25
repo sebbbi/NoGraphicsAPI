@@ -36,9 +36,8 @@ constexpr uint32 max_instance_extensions = 256;
 constexpr uint32 max_instance_layers = 64;
 constexpr uint32 max_physical_devices = 32;
 constexpr uint32 max_queue_families = 64;
+constexpr uint32 queue_type_count = 3; // General, compute-only, copy-only.
 constexpr uint32 max_color_attachments = 8;
-constexpr uint32 image_barrier_batch_size = 64;
-constexpr uint32 initial_command_context_count = 2;
 constexpr uint32 max_swapchain_images = 8;
 constexpr VkPresentModeKHR swapchain_present_mode = VK_PRESENT_MODE_FIFO_KHR;
 constexpr uint32 gpu_allocation_alignment = 16;
@@ -182,14 +181,12 @@ VkFormat to_vk(Format format)
     case Format::rgba16_uint: return VK_FORMAT_R16G16B16A16_UINT;
     case Format::r32_uint: return VK_FORMAT_R32_UINT;
     case Format::rg32_uint: return VK_FORMAT_R32G32_UINT;
-    case Format::rgb32_uint: return VK_FORMAT_R32G32B32_UINT;
     case Format::rgba32_uint: return VK_FORMAT_R32G32B32A32_UINT;
     case Format::r16_float: return VK_FORMAT_R16_SFLOAT;
     case Format::rg16_float: return VK_FORMAT_R16G16_SFLOAT;
     case Format::rgba16_float: return VK_FORMAT_R16G16B16A16_SFLOAT;
     case Format::r32_float: return VK_FORMAT_R32_SFLOAT;
     case Format::rg32_float: return VK_FORMAT_R32G32_SFLOAT;
-    case Format::rgb32_float: return VK_FORMAT_R32G32B32_SFLOAT;
     case Format::rgba32_float: return VK_FORMAT_R32G32B32A32_SFLOAT;
     case Format::rgb10a2_unorm: return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
     case Format::rg11b10_float: return VK_FORMAT_B10G11R11_UFLOAT_PACK32;
@@ -543,52 +540,6 @@ struct RetiredSwapchain
     uint32 view_count = 0;
 };
 
-struct TextureInitialization
-{
-    VkImage image = VK_NULL_HANDLE;
-    VkImageAspectFlags aspect_mask = 0;
-    uint32 mip_levels = 0;
-    uint32 array_layers = 0;
-    TextureInitialization* previous = nullptr;
-    TextureInitialization* next = nullptr;
-    struct TextureInitializationList* owner = nullptr;
-};
-
-struct TextureInitializationList
-{
-    TextureInitialization* first = nullptr;
-    TextureInitialization* last = nullptr;
-};
-
-void append_texture_initialization(TextureInitializationList& list, TextureInitialization& initialization) noexcept
-{
-    assert(!initialization.owner && !initialization.previous && !initialization.next);
-    initialization.owner = &list;
-    initialization.previous = list.last;
-    if (list.last)
-        list.last->next = &initialization;
-    else
-        list.first = &initialization;
-    list.last = &initialization;
-}
-
-void remove_texture_initialization(TextureInitialization& initialization) noexcept
-{
-    TextureInitializationList* list = initialization.owner;
-    assert(list);
-    if (initialization.previous)
-        initialization.previous->next = initialization.next;
-    else
-        list->first = initialization.next;
-    if (initialization.next)
-        initialization.next->previous = initialization.previous;
-    else
-        list->last = initialization.previous;
-    initialization.owner = nullptr;
-    initialization.previous = nullptr;
-    initialization.next = nullptr;
-}
-
 } // namespace detail
 
 struct Swapchain;
@@ -615,18 +566,40 @@ struct CommandBuffer
 {
     Device* state = nullptr;
     CommandBuffer* next = nullptr;
-    CommandBuffer* previous = nullptr;
     VkCommandPool command_pool = VK_NULL_HANDLE;
     VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+    VkCommandBuffer epilogue = VK_NULL_HANDLE;
     VkQueryPool timestamp_pool = VK_NULL_HANDLE;
     VkDeviceAddress* timestamp_destinations = nullptr;
     uint32 timestamp_count = 0;
-    uint64 retire_value = 0;
     Swapchain* swapchain = nullptr;
+    bool suspending = false;
+    bool has_epilogue = false;
+};
+
+struct CommandPool
+{
+    Device* state = nullptr;
+    VkCommandPool command_pool = VK_NULL_HANDLE;
+    CommandBuffer* first = nullptr;
+    CommandBuffer* last = nullptr;
+    CommandBuffer* next_buffer = nullptr;
+    bool timestamps = false;
 };
 
 namespace detail
 {
+
+struct Queue
+{
+    VkQueue queue = VK_NULL_HANDLE;
+    uint32 family_index = 0;
+    bool timestamps = false;
+    VkCommandBufferSubmitInfo* command_submit_infos = nullptr;
+    size_t command_submit_capacity = 0;
+    VkSemaphoreSubmitInfo* wait_submit_infos = nullptr;
+    size_t wait_submit_capacity = 0;
+};
 
 struct PresentContext
 {
@@ -646,9 +619,11 @@ struct Device
     PFN_vkDestroyDebugUtilsMessengerEXT destroy_debug_messenger = nullptr;
     VkPhysicalDevice physical_device = VK_NULL_HANDLE;
     VkDevice device = VK_NULL_HANDLE;
-    VkQueue queue = VK_NULL_HANDLE;
+    detail::Queue* queues = nullptr;
+    uint32 queue_count = 0;
     VkSurfaceKHR surface = VK_NULL_HANDLE;
-    uint32 queue_family = 0;
+    uint32 queue_families[queue_type_count]{};
+    uint32 queue_family_count = 0;
     uint32 timestamp_query_count = 0;
     VkPhysicalDeviceMemoryProperties memory_properties{};
     VkPhysicalDeviceProperties physical_properties{};
@@ -663,20 +638,14 @@ struct Device
     DeviceCaps caps;
     VkFormatFeatureFlags2 format_features[format_count]{};
     bool texture_compression_etc2 = false;
-    detail::TextureInitializationList pending_texture_initializations;
-    CommandBuffer* next_command_context = nullptr;
-    VkCommandBufferSubmitInfo* command_submit_infos = nullptr;
-    size_t command_submit_capacity = 0;
-    size_t command_context_count = 0;
-    VkSemaphore command_retirement = VK_NULL_HANDLE;
-    uint64 command_retirement_value = 0;
-    uint64 completed_command_retirement = 0;
+    VkSemaphore presentation_retirement = VK_NULL_HANDLE;
+    uint64 presentation_retirement_value = 0;
+    uint64 completed_presentation_retirement = 0;
     detail::SwapchainDeleteQueue swapchain_delete_queue;
     detail::PresentContext present_contexts[max_swapchain_images]{};
     detail::RetiredSwapchain retired_swapchains[max_swapchain_images]{};
     Swapchain* swapchain = nullptr;
     Swapchain* acquired_swapchain = nullptr;
-    uint32 active_command_buffers = 0;
     uint32 present_context_count = 0;
     uint32 next_present_context = 0;
 
@@ -736,7 +705,9 @@ struct Device
             .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
             .size = size,
             .usage = usage,
-            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .sharingMode = queue_family_count > 1 ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = queue_family_count,
+            .pQueueFamilyIndices = queue_families,
         };
         require_vk(vkCreateBuffer(device, &buffer_info, nullptr, &result.buffer));
 
@@ -779,17 +750,9 @@ struct Device
 
     [[nodiscard]] GpuHeap allocate_gpu_heap(VkDeviceSize size, MemoryType memory) noexcept;
     [[nodiscard]] GpuHeap allocate_descriptor_heap(VkDeviceSize size, MemoryType memory) noexcept;
-    [[nodiscard]] Error create_command_contexts() noexcept;
-    [[nodiscard]] Error create_command_context(CommandBuffer& context) noexcept;
-    [[nodiscard]] Error grow_command_context_pool() noexcept;
-    void destroy_command_context(CommandBuffer& context) noexcept;
-    void destroy_command_contexts() noexcept;
-    void reset_command_context(CommandBuffer& context) noexcept;
-    void reset_retired_command_contexts() noexcept;
-    [[nodiscard]] CommandBuffer& acquire_command_context() noexcept;
-    [[nodiscard]] uint64 next_command_retirement() noexcept;
-    void poll_command_retirement() noexcept;
-    void wait_command_retirement(uint64 value) noexcept;
+    [[nodiscard]] uint64 next_presentation_retirement() noexcept;
+    void poll_presentation_retirement() noexcept;
+    void wait_presentation_retirement(uint64 value) noexcept;
     [[nodiscard]] Error create_present_context(detail::PresentContext& context) noexcept;
     void destroy_present_context(detail::PresentContext& context) noexcept;
     void finish_present_context(detail::PresentContext& context) noexcept;
@@ -809,7 +772,9 @@ VkMemoryRequirements buffer_memory_requirements(Device& device, VkBufferUsageFla
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .size = 1,
         .usage = usage,
-        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .sharingMode = device.queue_family_count > 1 ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = device.queue_family_count,
+        .pQueueFamilyIndices = device.queue_families,
     };
     const VkDeviceBufferMemoryRequirements requirements_info{
         .sType = VK_STRUCTURE_TYPE_DEVICE_BUFFER_MEMORY_REQUIREMENTS,
@@ -909,7 +874,9 @@ bool select_texture_memory_type(Device& device) noexcept
         .samples = VK_SAMPLE_COUNT_1_BIT,
         .tiling = VK_IMAGE_TILING_OPTIMAL,
         .usage = color_usage,
-        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .sharingMode = device.queue_family_count > 1 ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = device.queue_family_count,
+        .pQueueFamilyIndices = device.queue_families,
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
     if (!supports_image_create_info(device, image_info))
@@ -1001,16 +968,21 @@ void destroy_owned_swapchain(Device& device) noexcept;
 
 Device::~Device()
 {
-    assert(active_command_buffers == 0 && "device destroyed while a command buffer is active");
     assert(!acquired_swapchain && "device destroyed while a swapchain image is acquired");
     if (device)
     {
         drain_contexts();
         destroy_owned_swapchain(*this);
-        swapchain_delete_queue.collect(device, completed_command_retirement);
+        swapchain_delete_queue.collect(device, completed_presentation_retirement);
         assert(swapchain_delete_queue.count == 0);
     }
-    destroy_command_contexts();
+    if (device && presentation_retirement) vkDestroySemaphore(device, presentation_retirement, nullptr);
+    for (uint32 index = 0; index < queue_count; ++index)
+    {
+        free(queues[index].command_submit_infos);
+        free(queues[index].wait_submit_infos);
+    }
+    delete[] queues;
     free(swapchain_delete_queue.entries);
     for (uint32 index = 0; index < present_context_count; ++index)
     {
@@ -1020,175 +992,6 @@ Device::~Device()
     if (instance && surface) vkDestroySurfaceKHR(instance, surface, nullptr);
     if (instance && debug_messenger && destroy_debug_messenger) destroy_debug_messenger(instance, debug_messenger, nullptr);
     if (instance) vkDestroyInstance(instance, nullptr);
-}
-
-Error Device::create_command_contexts() noexcept
-{
-    assert(!next_command_context && !command_retirement && !command_context_count);
-    const VkSemaphoreTypeCreateInfo type_info{
-        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
-        .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE,
-    };
-    const VkSemaphoreCreateInfo semaphore_info{
-        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-        .pNext = &type_info,
-    };
-    Error error = error_from_vk(vkCreateSemaphore(device, &semaphore_info, nullptr, &command_retirement));
-    if (error != Error::none)
-        return error;
-    for (uint32 index = 0; index < initial_command_context_count; ++index)
-    {
-        error = grow_command_context_pool();
-        if (error != Error::none)
-        {
-            destroy_command_contexts();
-            return error;
-        }
-    }
-    return Error::none;
-}
-
-Error Device::create_command_context(CommandBuffer& context) noexcept
-{
-    assert(!context.next && !context.previous && !context.command_pool &&
-           !context.command_buffer && !context.timestamp_pool && !context.state &&
-           context.retire_value == 0);
-    const VkCommandPoolCreateInfo pool_info{
-        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-        .flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
-        .queueFamilyIndex = queue_family,
-    };
-    Error error = error_from_vk(vkCreateCommandPool(device, &pool_info, nullptr, &context.command_pool));
-    if (error != Error::none)
-        return error;
-    const VkCommandBufferAllocateInfo allocate_info{
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-        .commandPool = context.command_pool,
-        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-        .commandBufferCount = 1,
-    };
-    error = error_from_vk(vkAllocateCommandBuffers(device, &allocate_info, &context.command_buffer));
-    if (error != Error::none)
-    {
-        destroy_command_context(context);
-        return error;
-    }
-    if (timestamp_query_count != 0)
-    {
-        const VkQueryPoolCreateInfo query_info{
-            .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
-            .queryType = VK_QUERY_TYPE_TIMESTAMP,
-            .queryCount = timestamp_query_count,
-        };
-        error = error_from_vk(vkCreateQueryPool(device, &query_info, nullptr, &context.timestamp_pool));
-        if (error != Error::none)
-        {
-            destroy_command_context(context);
-            return error;
-        }
-        context.timestamp_destinations = static_cast<VkDeviceAddress*>(malloc(sizeof(VkDeviceAddress) * timestamp_query_count));
-    }
-    return error;
-}
-
-Error Device::grow_command_context_pool() noexcept
-{
-    CommandBuffer* context = new CommandBuffer;
-    const Error error = create_command_context(*context);
-    if (error != Error::none)
-    {
-        delete context;
-        return error;
-    }
-    if (command_context_count == command_submit_capacity)
-    {
-        command_submit_capacity = command_submit_capacity == 0 ? initial_command_context_count : command_submit_capacity * 2;
-        command_submit_infos = static_cast<VkCommandBufferSubmitInfo*>(realloc(command_submit_infos, command_submit_capacity * sizeof(*command_submit_infos)));
-    }
-    ++command_context_count;
-    if (!next_command_context)
-    {
-        context->next = context;
-        context->previous = context;
-        next_command_context = context;
-    }
-    else
-    {
-        context->next = next_command_context;
-        context->previous = next_command_context->previous;
-        context->previous->next = context;
-        next_command_context->previous = context;
-    }
-    return Error::none;
-}
-
-void Device::destroy_command_context(CommandBuffer& context) noexcept
-{
-    if (device && context.timestamp_pool) vkDestroyQueryPool(device, context.timestamp_pool, nullptr);
-    if (device && context.command_pool) vkDestroyCommandPool(device, context.command_pool, nullptr);
-    free(context.timestamp_destinations);
-    context = {};
-}
-
-void Device::destroy_command_contexts() noexcept
-{
-    if (next_command_context) next_command_context->previous->next = nullptr;
-    while (next_command_context)
-    {
-        CommandBuffer* context = next_command_context;
-        next_command_context = context->next;
-        destroy_command_context(*context);
-        delete context;
-    }
-    free(command_submit_infos);
-    command_submit_infos = nullptr;
-    command_submit_capacity = 0;
-    command_context_count = 0;
-    if (device && command_retirement) vkDestroySemaphore(device, command_retirement, nullptr);
-    command_retirement = VK_NULL_HANDLE;
-    command_retirement_value = 0;
-    completed_command_retirement = 0;
-}
-
-void Device::reset_command_context(CommandBuffer& context) noexcept
-{
-    assert(context.command_pool && context.command_buffer &&
-           !context.state &&
-           context.retire_value <= completed_command_retirement);
-    assert_vk(vkResetCommandPool(device, context.command_pool, 0));
-    context.retire_value = 0;
-}
-
-void Device::reset_retired_command_contexts() noexcept
-{
-    if (!next_command_context)
-        return;
-    CommandBuffer* context = next_command_context;
-    do
-    {
-        if (context->retire_value != 0 && context->retire_value <= completed_command_retirement)
-            reset_command_context(*context);
-        context = context->next;
-    } while (context != next_command_context);
-}
-
-CommandBuffer& Device::acquire_command_context() noexcept
-{
-    CommandBuffer* context = next_command_context;
-    assert(context);
-    if (active_command_buffers == 0 && context->retire_value > completed_command_retirement)
-        poll_command_retirement();
-    if (context->state || context->retire_value > completed_command_retirement)
-    {
-        require_error(grow_command_context_pool());
-        context = next_command_context->previous;
-        assert(context != next_command_context &&
-               context->next == next_command_context &&
-               context->retire_value == 0);
-    }
-    if (context->retire_value != 0) reset_command_context(*context);
-    next_command_context = context->next;
-    return *context;
 }
 
 namespace
@@ -1203,52 +1006,49 @@ uint64 query_timeline_value(const TimelineSemaphore& semaphore) noexcept
 
 } // namespace
 
-void Device::poll_command_retirement() noexcept
+void Device::poll_presentation_retirement() noexcept
 {
-    if (!command_retirement || completed_command_retirement == command_retirement_value)
+    if (!presentation_retirement || completed_presentation_retirement == presentation_retirement_value)
         return;
     uint64 completed = 0;
-    assert_vk(vkGetSemaphoreCounterValue(device, command_retirement, &completed));
-    assert(completed >= completed_command_retirement && completed <= command_retirement_value);
-    if (completed == completed_command_retirement)
+    assert_vk(vkGetSemaphoreCounterValue(device, presentation_retirement, &completed));
+    assert(completed >= completed_presentation_retirement && completed <= presentation_retirement_value);
+    if (completed == completed_presentation_retirement)
         return;
-    completed_command_retirement = completed;
-    reset_retired_command_contexts();
-    swapchain_delete_queue.collect(device, completed_command_retirement);
+    completed_presentation_retirement = completed;
+    swapchain_delete_queue.collect(device, completed_presentation_retirement);
 }
 
-void Device::wait_command_retirement(uint64 value) noexcept
+void Device::wait_presentation_retirement(uint64 value) noexcept
 {
-    assert(value <= command_retirement_value);
-    if (value <= completed_command_retirement)
+    assert(value <= presentation_retirement_value);
+    if (value <= completed_presentation_retirement)
     {
-        reset_retired_command_contexts();
-        swapchain_delete_queue.collect(device, completed_command_retirement);
+        swapchain_delete_queue.collect(device, completed_presentation_retirement);
         return;
     }
     const VkSemaphoreWaitInfo wait_info{
         .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
         .semaphoreCount = 1,
-        .pSemaphores = &command_retirement,
+        .pSemaphores = &presentation_retirement,
         .pValues = &value,
     };
     assert_vk(vkWaitSemaphores(device, &wait_info, ~uint64{0}));
-    completed_command_retirement = value;
-    reset_retired_command_contexts();
-    swapchain_delete_queue.collect(device, completed_command_retirement);
+    completed_presentation_retirement = value;
+    swapchain_delete_queue.collect(device, completed_presentation_retirement);
 }
 
-uint64 Device::next_command_retirement() noexcept
+uint64 Device::next_presentation_retirement() noexcept
 {
-    const uint64 next = command_retirement_value + 1;
-    if (next - completed_command_retirement > max_timeline_value_difference)
+    const uint64 next = presentation_retirement_value + 1;
+    if (next - completed_presentation_retirement > max_timeline_value_difference)
     {
-        poll_command_retirement();
-        if (next - completed_command_retirement > max_timeline_value_difference)
-            wait_command_retirement(next - max_timeline_value_difference);
-        assert(next - completed_command_retirement <= max_timeline_value_difference);
+        poll_presentation_retirement();
+        if (next - completed_presentation_retirement > max_timeline_value_difference)
+            wait_presentation_retirement(next - max_timeline_value_difference);
+        assert(next - completed_presentation_retirement <= max_timeline_value_difference);
     }
-    command_retirement_value = next;
+    presentation_retirement_value = next;
     return next;
 }
 
@@ -1331,20 +1131,19 @@ void Device::poll_present_contexts() noexcept
 void Device::queue_retired_swapchain(detail::RetiredSwapchain& retired) noexcept
 {
     assert(retired.handle && retired.view_count != 0);
-    assert(active_command_buffers == 0 && "swapchain retirement is not allowed while a command buffer is recording");
     for (uint32 index = 0; index < retired.view_count; ++index)
     {
         const VkImageView view = retired.views[index];
         assert(view);
-        swapchain_delete_queue.push(command_retirement_value, retired.handle, view);
+        swapchain_delete_queue.push(presentation_retirement_value, retired.handle, view);
     }
     retired = {};
-    swapchain_delete_queue.collect(device, completed_command_retirement);
+    swapchain_delete_queue.collect(device, completed_presentation_retirement);
 }
 
 void Device::drain_contexts() noexcept
 {
-    wait_command_retirement(command_retirement_value);
+    wait_presentation_retirement(presentation_retirement_value);
     for (uint32 index = 0; index < present_context_count; ++index)
     {
         wait_present_context(present_contexts[index]);
@@ -1353,7 +1152,7 @@ void Device::drain_contexts() noexcept
     {
         assert(!retired.handle);
     }
-    swapchain_delete_queue.collect(device, completed_command_retirement);
+    swapchain_delete_queue.collect(device, completed_presentation_retirement);
 }
 
 GpuHeap Device::allocate_gpu_heap(VkDeviceSize size, MemoryType memory) noexcept
@@ -1436,11 +1235,9 @@ struct Texture
     uint32 layer_count = 0;
     TextureType type = TextureType::two_d;
     Format format = Format::rgba8_unorm;
-    detail::TextureInitialization initialization;
 
     ~Texture()
     {
-        if (initialization.owner) detail::remove_texture_initialization(initialization);
         vkDestroyImage(state->device, image, nullptr);
     }
 };
@@ -1495,11 +1292,28 @@ namespace
 
 void record_image_barriers(VkCommandBuffer command_buffer, Span<const VkImageMemoryBarrier2> barriers) noexcept
 {
-    assert((command_buffer && barriers.data && barriers.size != 0 && barriers.size <= UINT_MAX) && "image barrier batch is invalid");
+    assert(command_buffer && barriers.data && barriers.size != 0);
     const VkDependencyInfo dependency{
         .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
         .imageMemoryBarrierCount = static_cast<uint32>(barriers.size),
         .pImageMemoryBarriers = barriers.data,
+    };
+    vkCmdPipelineBarrier2(command_buffer, &dependency);
+}
+
+void record_barrier(VkCommandBuffer command_buffer, Stage before, Access before_access, Stage after, Access after_access) noexcept
+{
+    const VkMemoryBarrier2 memory_barrier{
+        .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+        .srcStageMask = to_vk(before),
+        .srcAccessMask = to_vk(before_access),
+        .dstStageMask = to_vk(after),
+        .dstAccessMask = to_vk(after_access),
+    };
+    const VkDependencyInfo dependency{
+        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .memoryBarrierCount = 1,
+        .pMemoryBarriers = &memory_barrier,
     };
     vkCmdPipelineBarrier2(command_buffer, &dependency);
 }
@@ -1573,7 +1387,10 @@ struct QueriedFeatures
 struct Candidate
 {
     VkPhysicalDevice physical_device = VK_NULL_HANDLE;
-    uint32 queue_family = 0;
+    uint32 queue_families[queue_type_count]{};
+    uint32 queue_counts[queue_type_count]{};
+    bool timestamps[queue_type_count]{};
+    uint32x3 copy_texture_granularity = {.x = 1, .y = 1, .z = 1};
     VkPhysicalDeviceProperties properties{};
     VkPhysicalDeviceMemoryProperties memory_properties{};
     bool unified_image_layouts = false;
@@ -1589,7 +1406,7 @@ struct Candidate
 };
 
 Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, bool khr_surface_maintenance1, bool ext_surface_maintenance1,
-                        Candidate& output) noexcept
+                        const DeviceDesc& desc, Candidate& output) noexcept
 {
     VkExtensionProperties extensions[max_device_extensions]{};
     uint32 extension_count = 0;
@@ -1699,15 +1516,32 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
     VkQueueFamilyProperties queues[max_queue_families]{};
     uint32 queue_count = available_queue_count;
     vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &queue_count, queues);
-    uint32 queue_family = queue_count;
-    constexpr VkQueueFlags required_queue_flags = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT;
     for (uint32 index = 0; index < queue_count; ++index)
     {
-        if (queues[index].queueCount == 0 || queues[index].timestampValidBits != 64 ||
-            (queues[index].queueFlags & required_queue_flags) != required_queue_flags)
+        if (queues[index].queueCount == 0)
             continue;
+        const VkQueueFlags flags = queues[index].queueFlags;
+        uint32 type = 0;
+        if (flags & VK_QUEUE_GRAPHICS_BIT)
+        {
+            if (!(flags & VK_QUEUE_COMPUTE_BIT)) continue;
+        }
+        else if (flags & VK_QUEUE_COMPUTE_BIT)
+        {
+            type = 1;
+        }
+        else if ((flags & VK_QUEUE_TRANSFER_BIT) &&
+                 !(flags & ~(VK_QUEUE_TRANSFER_BIT | VK_QUEUE_SPARSE_BINDING_BIT | VK_QUEUE_PROTECTED_BIT)))
+        {
+            type = 2;
+        }
+        else
+        {
+            continue;
+        }
+        if (result.queue_counts[type] != 0) continue;
         VkBool32 presentation_supported = VK_TRUE;
-        if (surface)
+        if (surface && type == 0)
         {
             const Error presentation_error = error_from_vk(vkGetPhysicalDeviceSurfaceSupportKHR(physical_device, index, surface, &presentation_supported));
             if (presentation_error != Error::none)
@@ -1715,14 +1549,23 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
         }
         if (presentation_supported == VK_TRUE)
         {
-            queue_family = index;
-            break;
+            result.queue_families[type] = index;
+            result.queue_counts[type] = queues[index].queueCount;
+            result.timestamps[type] = desc.timestamp_query_count != 0 && queues[index].timestampValidBits == 64 && features.vulkan12.hostQueryReset;
+            if (type == 2)
+            {
+                result.copy_texture_granularity = {
+                    .x = queues[index].minImageTransferGranularity.width,
+                    .y = queues[index].minImageTransferGranularity.height,
+                    .z = queues[index].minImageTransferGranularity.depth,
+                };
+            }
         }
     }
-    if (queue_family == queue_count)
+    if (result.queue_counts[0] == 0 || (desc.desired_compute_queue_count && result.queue_counts[1] == 0) ||
+        (desc.desired_copy_queue_count && result.queue_counts[2] == 0))
         return Error::unsupported;
 
-    result.queue_family = queue_family;
     output = result;
     return Error::none;
 }
@@ -1748,6 +1591,7 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept;
 
 DeviceInit create_device(const DeviceDesc& desc) noexcept
 {
+    assert(desc.desired_queue_count != 0 && "create_device requires at least one queue");
     const bool presentation = desc.window != nullptr;
     assert(desc.desired_swapchain_image_count != 0 && desc.desired_swapchain_image_count <= max_swapchain_images &&
            "swapchain image count must fit the wrapper's presentation context array");
@@ -1891,7 +1735,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     {
         const VkPhysicalDevice physical_device = physical_devices[index];
         Candidate candidate{};
-        error = inspect_candidate(physical_device, state->surface, khr_surface_maintenance1, ext_surface_maintenance1, candidate);
+        error = inspect_candidate(physical_device, state->surface, khr_surface_maintenance1, ext_surface_maintenance1, desc, candidate);
         if (error == Error::unsupported)
             continue;
         if (error != Error::none)
@@ -1908,7 +1752,6 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         return fail_device_creation(state, Error::unsupported);
 
     state->physical_device = selected.physical_device;
-    state->queue_family = selected.queue_family;
     state->physical_properties = selected.properties;
     state->driver_properties = selected.driver_properties;
     state->heap_properties = selected.heap_properties;
@@ -1944,6 +1787,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     enabled_features.vulkan12.shaderFloat16 = VK_TRUE;
     enabled_features.vulkan12.scalarBlockLayout = VK_TRUE;
     enabled_features.vulkan12.timelineSemaphore = VK_TRUE;
+    enabled_features.vulkan12.hostQueryReset = selected.timestamps[0] || selected.timestamps[1] || selected.timestamps[2];
     enabled_features.vulkan12.bufferDeviceAddress = VK_TRUE;
     enabled_features.vulkan13.synchronization2 = VK_TRUE;
     enabled_features.vulkan13.dynamicRendering = VK_TRUE;
@@ -1957,13 +1801,31 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     enabled_features.mesh_shader.meshShader = VK_TRUE;
     enabled_features.swapchain_maintenance1.swapchainMaintenance1 = VK_TRUE;
 
-    constexpr float queue_priority = 1.0f;
-    const VkDeviceQueueCreateInfo queue_info{
-        .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-        .queueFamilyIndex = state->queue_family,
-        .queueCount = 1,
-        .pQueuePriorities = &queue_priority,
-    };
+    const uint32 requested_counts[]{desc.desired_queue_count, desc.desired_compute_queue_count, desc.desired_copy_queue_count};
+    uint32 queue_counts[queue_type_count]{};
+    for (uint32 type = 0; type < queue_type_count; ++type)
+    {
+        queue_counts[type] = requested_counts[type] < selected.queue_counts[type] ? requested_counts[type] : selected.queue_counts[type];
+        state->queue_count += queue_counts[type];
+    }
+    state->queues = new detail::Queue[state->queue_count];
+    float* queue_priorities = new float[state->queue_count];
+    for (uint32 index = 0; index < state->queue_count; ++index)
+        queue_priorities[index] = 1.0f;
+    VkDeviceQueueCreateInfo queue_infos[queue_type_count]{};
+    uint32 first_queue = 0;
+    for (uint32 type = 0; type < queue_type_count; ++type)
+    {
+        if (queue_counts[type] == 0) continue;
+        state->queue_families[state->queue_family_count] = selected.queue_families[type];
+        queue_infos[state->queue_family_count++] = {
+            .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+            .queueFamilyIndex = selected.queue_families[type],
+            .queueCount = queue_counts[type],
+            .pQueuePriorities = queue_priorities + first_queue,
+        };
+        first_queue += queue_counts[type];
+    }
     const char* enabled_device_extensions[7]{};
     uint32 enabled_device_extension_count = 0;
     enabled_device_extensions[enabled_device_extension_count++] = VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME;
@@ -1986,15 +1848,26 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     const VkDeviceCreateInfo device_info{
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
         .pNext = &enabled_features.core,
-        .queueCreateInfoCount = 1,
-        .pQueueCreateInfos = &queue_info,
+        .queueCreateInfoCount = state->queue_family_count,
+        .pQueueCreateInfos = queue_infos,
         .enabledExtensionCount = enabled_device_extension_count,
         .ppEnabledExtensionNames = enabled_device_extensions,
     };
     error = error_from_vk(vkCreateDevice(state->physical_device, &device_info, nullptr, &state->device));
+    delete[] queue_priorities;
     if (error != Error::none)
         return fail_device_creation(state, error);
-    vkGetDeviceQueue(state->device, state->queue_family, 0, &state->queue);
+    first_queue = 0;
+    for (uint32 type = 0; type < queue_type_count; ++type)
+    {
+        for (uint32 index = 0; index < queue_counts[type]; ++index)
+        {
+            detail::Queue& queue = state->queues[first_queue++];
+            queue.family_index = selected.queue_families[type];
+            queue.timestamps = selected.timestamps[type];
+            vkGetDeviceQueue(state->device, queue.family_index, index, &queue.queue);
+        }
+    }
     if (!supports_gpu_heap_memory(*state) || !select_texture_memory_type(*state))
         return fail_device_creation(state, Error::unsupported);
 
@@ -2025,14 +1898,25 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         return fail_device_creation(state, Error::driver_error);
     }
 
-    error = state->create_command_contexts();
-    if (error != Error::none)
-        return fail_device_creation(state, error);
-    for (uint32 index = 0; index < state->present_context_count; ++index)
+    if (presentation)
     {
-        error = state->create_present_context(state->present_contexts[index]);
+        const VkSemaphoreTypeCreateInfo type_info{
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
+            .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE,
+        };
+        const VkSemaphoreCreateInfo semaphore_info{
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            .pNext = &type_info,
+        };
+        error = error_from_vk(vkCreateSemaphore(state->device, &semaphore_info, nullptr, &state->presentation_retirement));
         if (error != Error::none)
             return fail_device_creation(state, error);
+        for (uint32 index = 0; index < state->present_context_count; ++index)
+        {
+            error = state->create_present_context(state->present_contexts[index]);
+            if (error != Error::none)
+                return fail_device_creation(state, error);
+        }
     }
 
     uint64 device_local_memory_size = 0;
@@ -2075,6 +1959,12 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         .host_visible_device_local_memory_size = host_visible_device_local_memory_size,
     };
     state->caps = {
+        .device_name = state->physical_properties.deviceName,
+        .queue_count = state->queue_count,
+        .general_queue_count = queue_counts[0],
+        .compute_queue_count = queue_counts[1],
+        .copy_queue_count = queue_counts[2],
+        .copy_texture_granularity = selected.copy_texture_granularity,
         .max_push_data_size = state->heap_properties.maxPushDataSize,
         .texture_heap_alignment = state->texture_heap_alignment,
         .texture_descriptor_size = state->heap_properties.imageDescriptorSize,
@@ -2162,12 +2052,12 @@ void wait_timeline(TimelinePoint point) noexcept
         semaphore->state->device,
         &wait_info,
         ~uint64{0}));
-    semaphore->state->poll_command_retirement();
 }
 
 void write_timestamp(CommandBuffer* commands, uint64* gpu_destination, Stage stage) noexcept
 {
     assert(commands && commands->state);
+    if (!commands->timestamp_pool) return;
     assert(commands->timestamp_count < commands->state->timestamp_query_count);
     commands->timestamp_destinations[commands->timestamp_count] = static_cast<VkDeviceAddress>(reinterpret_cast<uintptr>(gpu_destination));
     vkCmdWriteTimestamp2(commands->command_buffer, to_vk(stage), commands->timestamp_pool, commands->timestamp_count++);
@@ -2259,9 +2149,7 @@ void destroy_owned_swapchain(Device& device) noexcept
     if (!device.swapchain)
         return;
     Swapchain* swapchain = device.swapchain;
-    assert((swapchain->state == &device && !swapchain->acquired &&
-                       device.acquired_swapchain != swapchain &&
-                       device.active_command_buffers == 0) && "device-owned swapchain destroyed while its image or command buffer is active");
+    assert(!swapchain->acquired && device.acquired_swapchain != swapchain);
     retire_swapchain_handle(*swapchain);
     swapchain->state = nullptr;
     delete swapchain;
@@ -2304,7 +2192,7 @@ VkCompositeAlphaFlagBitsKHR choose_composite_alpha(VkCompositeAlphaFlagsKHR supp
 Error recreate_swapchain(Swapchain& swapchain) noexcept
 {
     Device& device = *swapchain.state;
-    assert(!swapchain.acquired && !device.acquired_swapchain && device.active_command_buffers == 0);
+    assert(!swapchain.acquired && !device.acquired_swapchain);
     const VkSurfacePresentModeKHR present_mode_info{
         .sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_KHR,
         .presentMode = swapchain_present_mode,
@@ -2385,7 +2273,9 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept
         .imageExtent = extent,
         .imageArrayLayers = 1,
         .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-        .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .imageSharingMode = device.queue_family_count > 1 ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = device.queue_family_count,
+        .pQueueFamilyIndices = device.queue_families,
         .preTransform = capabilities.currentTransform,
         .compositeAlpha = composite_alpha,
         .presentMode = swapchain_present_mode,
@@ -2471,9 +2361,7 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept
 uint32x2 get_drawable_extent(Device* device) noexcept
 {
     assert(device && "get_drawable_extent called with a null device");
-    assert(device->active_command_buffers == 0 &&
-           !device->acquired_swapchain &&
-           "get_drawable_extent must be called outside command recording and presentation");
+    assert(!device->acquired_swapchain && "get_drawable_extent must be called outside presentation");
     if (!device->swapchain)
         return {};
 
@@ -2497,13 +2385,12 @@ uint32x2 get_drawable_extent(Device* device) noexcept
     };
 }
 
-SwapchainFrame acquire(Device* device) noexcept
+SwapchainFrame acquire(CommandBuffer* commands) noexcept
 {
-    assert((device && device->swapchain &&
-                       device->swapchain->state == device &&
-                       !device->swapchain->acquired &&
-                       !device->acquired_swapchain &&
-                       device->active_command_buffers == 0) && "acquire received a device without an available swapchain");
+    assert(commands && commands->state && !commands->swapchain);
+    Device* device = commands->state;
+    assert(device->swapchain && !device->swapchain->acquired && !device->acquired_swapchain);
+    device->poll_presentation_retirement();
 
     Swapchain* swapchain = device->swapchain;
     detail::PresentContext* present_context = nullptr;
@@ -2548,6 +2435,25 @@ SwapchainFrame acquire(Device* device) noexcept
         swapchain->acquired = true;
         swapchain->recreate_required = result == VK_SUBOPTIMAL_KHR && swapchain_surface_configuration_changed(*swapchain);
         device->acquired_swapchain = swapchain;
+        const VkImageMemoryBarrier2 barrier{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+            .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+            .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+            .oldLayout = swapchain->initialized[image_index] ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR : VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = swapchain->images[image_index],
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .levelCount = 1,
+                .layerCount = 1,
+            },
+        };
+        record_image_barriers(commands->command_buffer, {&barrier, 1});
+        commands->swapchain = swapchain;
+        swapchain->transition_commands = commands;
         return {
             .render_view = &swapchain->render_views[image_index],
             .extent = {.x = swapchain->width, .y = swapchain->height},
@@ -2625,7 +2531,9 @@ void prepare_texture(Device& device, const TextureDesc& desc, PreparedTexture& o
         .samples = VK_SAMPLE_COUNT_1_BIT,
         .tiling = VK_IMAGE_TILING_OPTIMAL,
         .usage = usage,
-        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .sharingMode = device.queue_family_count > 1 ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = device.queue_family_count,
+        .pQueueFamilyIndices = device.queue_families,
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
 }
@@ -2669,11 +2577,10 @@ SizeAlign get_texture_size_align(Device* device, const TextureDesc& desc) noexce
     };
 }
 
-Texture* create_texture(Device* device, const TextureDesc& desc, const TextureHeap& heap, uint64 offset) noexcept
+Texture* create_texture(CommandBuffer* commands, const TextureDesc& desc, const TextureHeap& heap, uint64 offset) noexcept
 {
-    const TextureHeapOwner* owner = heap.owner;
-    assert(device && owner && owner->state == device && owner->memory && "create_texture requires a texture heap from the same device");
-    assert(device->active_command_buffers == 0 && "create_texture is not allowed while a command buffer is recording");
+    assert(commands && commands->state && heap.owner);
+    Device* device = commands->state;
     PreparedTexture texture{};
     prepare_texture(*device, desc, texture);
 
@@ -2687,15 +2594,25 @@ Texture* create_texture(Device* device, const TextureDesc& desc, const TextureHe
         .format = desc.format,
     };
     require_vk(vkCreateImage(device->device, &texture.image_info, nullptr, &result->image));
-    require_vk(vkBindImageMemory(device->device, result->image, owner->memory, offset));
+    require_vk(vkBindImageMemory(device->device, result->image, heap.owner->memory, offset));
 
-    result->initialization = {
+    const VkImageMemoryBarrier2 barrier{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+        .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+        .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+        .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .image = result->image,
-        .aspect_mask = image_aspects(desc.format),
-        .mip_levels = desc.mip_levels,
-        .array_layers = desc.layer_count,
+        .subresourceRange = {
+            .aspectMask = image_aspects(desc.format),
+            .levelCount = desc.mip_levels,
+            .layerCount = desc.layer_count,
+        },
     };
-    detail::append_texture_initialization(device->pending_texture_initializations, result->initialization);
+    record_image_barriers(commands->command_buffer, {&barrier, 1});
     return result;
 }
 
@@ -3027,64 +2944,130 @@ void destroy_pso(PSO* pso) noexcept
     delete pso;
 }
 
-CommandBuffer* begin_commands(Device* device) noexcept
+CommandPool* create_command_pool(Device* device, uint32 queue_index) noexcept
 {
-    assert(device && "begin_commands called with a null device");
-    CommandBuffer* result = &device->acquire_command_context();
+    assert(device && queue_index < device->queue_count && "create_command_pool requires an available queue index");
+    CommandPool* pool = new CommandPool{.state = device, .timestamps = device->queues[queue_index].timestamps};
+    const VkCommandPoolCreateInfo pool_info{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
+        .queueFamilyIndex = device->queues[queue_index].family_index,
+    };
+    require_vk(vkCreateCommandPool(device->device, &pool_info, nullptr, &pool->command_pool));
+    return pool;
+}
+
+void destroy_command_pool(CommandPool* pool) noexcept
+{
+    if (!pool) return;
+    while (pool->first)
+    {
+        CommandBuffer* commands = pool->first;
+        assert(!commands->swapchain && "an acquired swapchain image must be presented before destroying its command pool");
+        pool->first = commands->next;
+        if (commands->timestamp_pool) vkDestroyQueryPool(pool->state->device, commands->timestamp_pool, nullptr);
+        free(commands->timestamp_destinations);
+        delete commands;
+    }
+    vkDestroyCommandPool(pool->state->device, pool->command_pool, nullptr);
+    delete pool;
+}
+
+void reset_command_pool(CommandPool* pool) noexcept
+{
+    assert(pool && pool->state && pool->command_pool);
+#if !defined(NDEBUG)
+    for (CommandBuffer* commands = pool->first; commands; commands = commands->next)
+        assert(!commands->swapchain && "an acquired swapchain image must be presented before resetting its command pool");
+#endif
+    assert_vk(vkResetCommandPool(pool->state->device, pool->command_pool, 0));
+    pool->next_buffer = pool->first;
+}
+
+CommandBuffer* begin_commands(CommandPool* pool) noexcept
+{
+    assert(pool && pool->state && pool->command_pool);
+    CommandBuffer* commands = pool->next_buffer;
+    if (commands)
+    {
+        pool->next_buffer = commands->next;
+    }
+    else
+    {
+        commands = new CommandBuffer{.state = pool->state, .command_pool = pool->command_pool};
+        const VkCommandBufferAllocateInfo allocate_info{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = pool->command_pool,
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+        require_vk(vkAllocateCommandBuffers(pool->state->device, &allocate_info, &commands->command_buffer));
+        if (pool->timestamps)
+        {
+            const VkQueryPoolCreateInfo query_info{
+                .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                .queryType = VK_QUERY_TYPE_TIMESTAMP,
+                .queryCount = pool->state->timestamp_query_count,
+            };
+            require_vk(vkCreateQueryPool(pool->state->device, &query_info, nullptr, &commands->timestamp_pool));
+            commands->timestamp_destinations = static_cast<VkDeviceAddress*>(malloc(sizeof(VkDeviceAddress) * pool->state->timestamp_query_count));
+        }
+        if (pool->last)
+            pool->last->next = commands;
+        else
+            pool->first = commands;
+        pool->last = commands;
+    }
+    assert(!commands->swapchain);
     const VkCommandBufferBeginInfo begin_info{
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
     };
-    assert_vk(vkBeginCommandBuffer(result->command_buffer, &begin_info));
-    result->state = device;
-    result->timestamp_count = 0;
-    if (result->timestamp_pool)
-        vkCmdResetQueryPool(result->command_buffer, result->timestamp_pool, 0, device->timestamp_query_count);
-    if (device->pending_texture_initializations.first)
+    assert_vk(vkBeginCommandBuffer(commands->command_buffer, &begin_info));
+    commands->timestamp_count = 0;
+    commands->suspending = false;
+    commands->has_epilogue = false;
+    if (commands->timestamp_pool)
+        vkResetQueryPool(pool->state->device, commands->timestamp_pool, 0, pool->state->timestamp_query_count);
+    return commands;
+}
+
+void end_commands(CommandBuffer* commands) noexcept
+{
+    assert(commands);
+    VkCommandBuffer command_buffer = commands->command_buffer;
+    if (commands->swapchain || (commands->suspending && commands->timestamp_count != 0))
     {
-        VkImageMemoryBarrier2 barriers[image_barrier_batch_size]{};
-        uint32 barrier_count = 0;
-        while (device->pending_texture_initializations.first)
+        assert_vk(vkEndCommandBuffer(command_buffer));
+        if (!commands->epilogue)
         {
-            detail::TextureInitialization* initialization = device->pending_texture_initializations.first;
-            detail::remove_texture_initialization(*initialization);
-            barriers[barrier_count++] = {
-                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-                .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
-                .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .image = initialization->image,
-                .subresourceRange = {
-                    .aspectMask = initialization->aspect_mask,
-                    .levelCount = initialization->mip_levels,
-                    .layerCount = initialization->array_layers,
-                },
+            const VkCommandBufferAllocateInfo allocate_info{
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+                .commandPool = commands->command_pool,
+                .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+                .commandBufferCount = 1,
             };
-            if (barrier_count == image_barrier_batch_size)
-            {
-                record_image_barriers(result->command_buffer, {barriers, barrier_count});
-                barrier_count = 0;
-            }
+            require_vk(vkAllocateCommandBuffers(commands->state->device, &allocate_info, &commands->epilogue));
         }
-        if (barrier_count != 0) record_image_barriers(result->command_buffer, {barriers, barrier_count});
+        const VkCommandBufferBeginInfo begin_info{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        };
+        command_buffer = commands->epilogue;
+        assert_vk(vkBeginCommandBuffer(command_buffer, &begin_info));
+        commands->has_epilogue = true;
     }
-    if (device->acquired_swapchain && !device->acquired_swapchain->transition_commands)
+    if (commands->swapchain)
     {
-        Swapchain* swapchain = device->acquired_swapchain;
-        assert((swapchain->state == device && swapchain->acquired &&
-                           swapchain->present_context &&
-                           swapchain->image_index < swapchain->image_count) && "the acquired swapchain state is invalid");
+        Swapchain* swapchain = commands->swapchain;
+        assert(swapchain->acquired && swapchain->transition_commands == commands);
         const VkImageMemoryBarrier2 barrier{
             .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-            .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
-            .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-            .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-            .oldLayout = swapchain->initialized[swapchain->image_index] ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR : VK_IMAGE_LAYOUT_UNDEFINED,
-            .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+            .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+            .srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
+            .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+            .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .image = swapchain->images[swapchain->image_index],
@@ -3094,170 +3077,165 @@ CommandBuffer* begin_commands(Device* device) noexcept
                 .layerCount = 1,
             },
         };
-        record_image_barriers(result->command_buffer, {&barrier, 1});
-        result->swapchain = swapchain;
-        swapchain->transition_commands = result;
+        record_image_barriers(command_buffer, {&barrier, 1});
     }
-    ++device->active_command_buffers;
-    return result;
+    for (uint32 timestamp = 0; timestamp < commands->timestamp_count; ++timestamp)
+    {
+        const VkStridedDeviceAddressRangeKHR destination{
+            .address = commands->timestamp_destinations[timestamp],
+            .size = sizeof(uint64),
+            .stride = sizeof(uint64),
+        };
+        commands->state->fn.cmd_copy_query_pool_results_to_memory(command_buffer, commands->timestamp_pool, timestamp, 1,
+                                                                 &destination, address_flags, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+    }
+    if (commands->timestamp_count != 0)
+        record_barrier(command_buffer, Stage::transfer, Access::transfer_write, Stage::host, Access::host_read);
+    assert_vk(vkEndCommandBuffer(command_buffer));
 }
 
 namespace
 {
 
-void submit_commands(Span<CommandBuffer* const> commands, Device* device, TimelinePoint completion, VkSemaphore wait_semaphore,
-                     VkSemaphore signal_semaphore) noexcept
+void submit_commands(Device* device, const SubmitDesc& desc, uint32 queue_index, VkSemaphore wait_semaphore, VkSemaphore signal_semaphore) noexcept
 {
-    TimelineSemaphore* completion_semaphore = completion.semaphore;
-    assert((completion_semaphore &&
-                                  completion_semaphore->state == device &&
-                                  completion_semaphore->semaphore) && "submission completion requires a live timeline semaphore owned by the device");
-    assert(commands.data && commands.size != 0 && commands.size <= UINT_MAX);
-    assert(device->active_command_buffers == commands.size && "submit must consume every begun command buffer");
-    assert(!device->pending_texture_initializations.first && !device->pending_texture_initializations.last && "pending texture transitions were not recorded");
-    assert(device->command_context_count >= commands.size);
-    for (size_t index = 0; index < commands.size; ++index)
+    detail::Queue* queue = &device->queues[queue_index];
+    TimelineSemaphore* completion = desc.completion.semaphore;
+    assert(completion);
+    assert(desc.waits.data || desc.waits.size == 0);
+    size_t command_count = desc.commands.size;
+    for (size_t index = 0; index < desc.commands.size; ++index)
     {
-        CommandBuffer* current = commands.data[index];
-        assert((current && current->state == device) && "command buffer batch contains an invalid handle");
-        for (uint32 timestamp = 0; timestamp < current->timestamp_count; ++timestamp)
-        {
-            const VkStridedDeviceAddressRangeKHR destination{
-                .address = current->timestamp_destinations[timestamp],
-                .size = sizeof(uint64),
-                .stride = sizeof(uint64),
-            };
-            device->fn.cmd_copy_query_pool_results_to_memory(current->command_buffer, current->timestamp_pool, timestamp, 1,
-                                                            &destination, address_flags, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
-        }
-        if (current->timestamp_count != 0)
-            barrier(current, Stage::transfer, Access::transfer_write, Stage::host, Access::host_read);
-        assert_vk(vkEndCommandBuffer(current->command_buffer));
-        current->state = nullptr;
-        assert(device->active_command_buffers != 0);
-        --device->active_command_buffers;
-        device->command_submit_infos[index] = {
+        assert(desc.commands.data[index]);
+        if (desc.commands.data[index]->has_epilogue) ++command_count;
+    }
+    if (command_count > queue->command_submit_capacity)
+    {
+        queue->command_submit_capacity = queue->command_submit_capacity == 0 ? 4 : queue->command_submit_capacity * 2;
+        if (queue->command_submit_capacity < command_count) queue->command_submit_capacity = command_count;
+        queue->command_submit_infos = static_cast<VkCommandBufferSubmitInfo*>(
+            realloc(queue->command_submit_infos, queue->command_submit_capacity * sizeof(VkCommandBufferSubmitInfo)));
+    }
+    for (size_t index = 0; index < desc.commands.size; ++index)
+    {
+        CommandBuffer* commands = desc.commands.data[index];
+        assert(commands);
+        queue->command_submit_infos[index] = {
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
-            .commandBuffer = current->command_buffer,
+            .commandBuffer = commands->command_buffer,
             .deviceMask = 1,
         };
     }
-    assert(device->active_command_buffers == 0);
-    const uint64 retirement = device->next_command_retirement();
-    const VkSemaphoreSubmitInfo wait_info{
-        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-        .semaphore = wait_semaphore,
-        .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-    };
-    const VkSemaphoreSubmitInfo work_signal_infos[2]{
-      {
-        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-        .semaphore = completion_semaphore->semaphore,
-        .value = completion.value,
-        .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-      },
-      {
-        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-        .semaphore = signal_semaphore,
-        .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-      },
-    };
-    const VkSemaphoreSubmitInfo retirement_signal_info{
-        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-        .semaphore = device->command_retirement,
-        .value = retirement,
-        .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-    };
-    const VkSubmitInfo2 submit_infos[2]{
-      {
-        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-        .waitSemaphoreInfoCount = wait_semaphore ? 1u : 0u,
-        .pWaitSemaphoreInfos = wait_semaphore ? &wait_info : nullptr,
-        .commandBufferInfoCount = static_cast<uint32>(commands.size),
-        .pCommandBufferInfos = device->command_submit_infos,
-        .signalSemaphoreInfoCount = signal_semaphore ? 2u : 1u,
-        .pSignalSemaphoreInfos = work_signal_infos,
-      },
-      {
-        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-        .signalSemaphoreInfoCount = 1,
-        .pSignalSemaphoreInfos = &retirement_signal_info,
-      },
-    };
-    assert_vk(vkQueueSubmit2(device->queue, 2, submit_infos, VK_NULL_HANDLE));
-
-    for (size_t index = 0; index < commands.size; ++index)
+    // Deferred query copies and presentation transitions must follow every suspended/resumed segment.
+    size_t epilogue_index = desc.commands.size;
+    for (size_t index = 0; index < desc.commands.size; ++index)
     {
-        CommandBuffer* current = commands.data[index];
-        current->retire_value = retirement;
-        current->swapchain = nullptr;
+        CommandBuffer* commands = desc.commands.data[index];
+        if (commands->has_epilogue)
+        {
+            queue->command_submit_infos[epilogue_index++] = {
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+                .commandBuffer = commands->epilogue,
+                .deviceMask = 1,
+            };
+        }
     }
+    const size_t wait_count = desc.waits.size + (wait_semaphore ? 1 : 0);
+    if (wait_count > queue->wait_submit_capacity)
+    {
+        queue->wait_submit_capacity = queue->wait_submit_capacity == 0 ? 4 : queue->wait_submit_capacity * 2;
+        if (queue->wait_submit_capacity < wait_count) queue->wait_submit_capacity = wait_count;
+        queue->wait_submit_infos = static_cast<VkSemaphoreSubmitInfo*>(
+            realloc(queue->wait_submit_infos, queue->wait_submit_capacity * sizeof(VkSemaphoreSubmitInfo)));
+    }
+    for (size_t index = 0; index < desc.waits.size; ++index)
+    {
+        const TimelinePoint point = desc.waits.data[index];
+        assert(point.semaphore);
+        queue->wait_submit_infos[index] = {
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+            .semaphore = point.semaphore->semaphore,
+            .value = point.value,
+            .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+        };
+    }
+    if (wait_semaphore)
+    {
+        queue->wait_submit_infos[desc.waits.size] = {
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+            .semaphore = wait_semaphore,
+            .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+        };
+    }
+    VkSemaphoreSubmitInfo signal_infos[3]{
+        {
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+            .semaphore = completion->semaphore,
+            .value = desc.completion.value,
+            .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+        },
+    };
+    uint32 signal_count = 1;
+    if (signal_semaphore)
+    {
+        signal_infos[signal_count++] = {
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+            .semaphore = signal_semaphore,
+            .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+        };
+        signal_infos[signal_count++] = {
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+            .semaphore = device->presentation_retirement,
+            .value = device->next_presentation_retirement(),
+            .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+        };
+    }
+    const VkSubmitInfo2 submit_info{
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+        .waitSemaphoreInfoCount = static_cast<uint32>(wait_count),
+        .pWaitSemaphoreInfos = queue->wait_submit_infos,
+        .commandBufferInfoCount = static_cast<uint32>(command_count),
+        .pCommandBufferInfos = queue->command_submit_infos,
+        .signalSemaphoreInfoCount = signal_count,
+        .pSignalSemaphoreInfos = signal_infos,
+    };
+    assert_vk(vkQueueSubmit2(queue->queue, 1, &submit_info, VK_NULL_HANDLE));
 }
 
 } // namespace
 
-void submit(Span<CommandBuffer* const> commands, TimelinePoint completion) noexcept
+void submit(Device* device, const SubmitDesc& desc, uint32 queue_index) noexcept
 {
-    assert(commands.data && commands.size != 0);
-    CommandBuffer* first = commands.data[0];
-    assert(first && first->state);
-    Device* device = first->state;
-    assert(!device->acquired_swapchain && "an acquired swapchain frame must be submitted with submit_and_present");
+    assert(device && queue_index < device->queue_count && "submit requires an available queue index");
+    assert(desc.commands.data || desc.commands.size == 0);
 #if !defined(NDEBUG)
-    for (size_t index = 0; index < commands.size; ++index)
-    {
-        assert(!commands.data[index]->swapchain && "swapchain command buffers must be submitted with submit_and_present");
-    }
+    for (size_t index = 0; index < desc.commands.size; ++index)
+        assert(desc.commands.data[index] && !desc.commands.data[index]->swapchain && "swapchain commands require submit_and_present");
 #endif
-    submit_commands(commands, device, completion, VK_NULL_HANDLE, VK_NULL_HANDLE);
+    submit_commands(device, desc, queue_index, VK_NULL_HANDLE, VK_NULL_HANDLE);
 }
 
-void submit_and_present(Device* device, Span<CommandBuffer* const> commands, TimelinePoint completion) noexcept
+void submit_and_present(Device* device, const SubmitDesc& desc) noexcept
 {
-    const bool has_swapchain = device && device->swapchain && device->swapchain->state == device;
-    assert(has_swapchain && "submit_and_present received a device without a swapchain");
+    assert(device);
+    assert(desc.commands.data || desc.commands.size == 0);
     Swapchain* swapchain = device->swapchain;
-    assert(commands.data && commands.size != 0);
-    CommandBuffer* first_commands = commands.data[0];
-    CommandBuffer* last_commands = commands.data[commands.size - 1];
-    assert(first_commands && first_commands->state &&
-           last_commands && last_commands->state == first_commands->state);
-    Device* command_device = first_commands->state;
-    assert((swapchain->acquired &&
-                       command_device == device &&
-                       first_commands->swapchain == swapchain &&
-                       swapchain->transition_commands == first_commands &&
-                       swapchain->present_context) && "submit_and_present received an invalid swapchain command buffer batch");
+    assert(swapchain && swapchain->acquired && swapchain->transition_commands && swapchain->present_context);
 #if !defined(NDEBUG)
-    for (size_t index = 1; index < commands.size; ++index)
+    bool contains_swapchain = false;
+    for (size_t index = 0; index < desc.commands.size; ++index)
     {
-        assert(!commands.data[index]->swapchain && "only the first command buffer may own the swapchain transition");
+        assert(desc.commands.data[index] && (!desc.commands.data[index]->swapchain || desc.commands.data[index] == swapchain->transition_commands));
+        if (desc.commands.data[index] == swapchain->transition_commands) contains_swapchain = true;
     }
+    assert(contains_swapchain && "presentation submission must include the acquired command buffer");
 #endif
-
-    Device& owner = *device;
     detail::PresentContext& present_context = *swapchain->present_context;
-    const VkImageMemoryBarrier2 barrier{
-        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-        .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-        .srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT,
-        .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
-        .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
-        .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .image = swapchain->images[swapchain->image_index],
-        .subresourceRange = {
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .levelCount = 1,
-            .layerCount = 1,
-        },
-    };
-    record_image_barriers(last_commands->command_buffer, {&barrier, 1});
     assert(!present_context.present_pending && !present_context.swapchain);
-    assert_vk(vkResetFences(owner.device, 1, &present_context.presented));
+    assert_vk(vkResetFences(device->device, 1, &present_context.presented));
+    submit_commands(device, desc, 0, present_context.acquired, present_context.rendered);
+    swapchain->transition_commands->swapchain = nullptr;
     swapchain->transition_commands = nullptr;
-    submit_commands(commands, command_device, completion, present_context.acquired, present_context.rendered);
     swapchain->initialized[swapchain->image_index] = true;
 
     const VkSwapchainPresentFenceInfoKHR fence_info{
@@ -3274,13 +3252,13 @@ void submit_and_present(Device* device, Span<CommandBuffer* const> commands, Tim
         .pSwapchains = &swapchain->handle,
         .pImageIndices = &swapchain->image_index,
     };
-    const VkResult result = vkQueuePresentKHR(owner.queue, &present_info);
+    const VkResult result = vkQueuePresentKHR(device->queues[0].queue, &present_info);
     present_context.present_pending = true;
     present_context.swapchain = swapchain->handle;
     swapchain->present_context = nullptr;
     swapchain->acquired = false;
-    owner.acquired_swapchain = nullptr;
-    owner.next_present_context = (owner.next_present_context + 1) % owner.present_context_count;
+    device->acquired_swapchain = nullptr;
+    device->next_present_context = (device->next_present_context + 1) % device->present_context_count;
     if (result == VK_ERROR_OUT_OF_DATE_KHR)
         swapchain->recreate_required = true;
     else if (result == VK_SUBOPTIMAL_KHR)
@@ -3292,8 +3270,8 @@ void submit_and_present(Device* device, Span<CommandBuffer* const> commands, Tim
 void wait_idle(Device* device) noexcept
 {
     assert(device && "wait_idle called with a null device");
-    assert(device->active_command_buffers == 0 && "wait_idle is not allowed while a command buffer is recording");
     assert(!device->acquired_swapchain && "wait_idle is not allowed while a swapchain image is acquired");
+    assert_vk(vkDeviceWaitIdle(device->device));
     device->drain_contexts();
     device->next_present_context = 0;
 }
@@ -3494,7 +3472,7 @@ void set_depth_stencil(CommandBuffer* commands, const DepthStencilState& state) 
     vkCmdSetStencilReference(commands->command_buffer, VK_STENCIL_FACE_BACK_BIT, state.back.reference);
 }
 
-void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc) noexcept
+void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc, RenderingFlags flags) noexcept
 {
     assert(commands && (desc.colors.size == 0 || desc.colors.data) && desc.colors.size <= max_color_attachments);
     const RenderView* area_view = desc.colors.size ? desc.colors.data[0].render_view
@@ -3546,6 +3524,7 @@ void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc) noexc
     };
     const VkRenderingInfo rendering_info{
         .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+        .flags = static_cast<VkRenderingFlags>(flags),
         .renderArea = {
             .extent = {.width = area_view->width, .height = area_view->height},
         },
@@ -3556,6 +3535,7 @@ void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc) noexc
         .pStencilAttachment = desc.stencil.render_view ? &stencil_attachment : nullptr,
     };
     vkCmdBeginRendering(commands->command_buffer, &rendering_info);
+    commands->suspending = (static_cast<uint32>(flags) & static_cast<uint32>(RenderingFlags::suspending)) != 0;
 
     set_viewport(commands, {.width = static_cast<float>(area_view->width), .height = static_cast<float>(area_view->height)});
     set_scissor(commands, {.width = area_view->width, .height = area_view->height});
@@ -3745,19 +3725,7 @@ void copy_texture_to_memory(CommandBuffer* commands, Texture* source, GpuRange d
 void barrier(CommandBuffer* commands, Stage before, Access before_access, Stage after, Access after_access) noexcept
 {
     assert(commands);
-    const VkMemoryBarrier2 memory_barrier{
-        .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
-        .srcStageMask = to_vk(before),
-        .srcAccessMask = to_vk(before_access),
-        .dstStageMask = to_vk(after),
-        .dstAccessMask = to_vk(after_access),
-    };
-    const VkDependencyInfo dependency{
-        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-        .memoryBarrierCount = 1,
-        .pMemoryBarriers = &memory_barrier,
-    };
-    vkCmdPipelineBarrier2(commands->command_buffer, &dependency);
+    record_barrier(commands->command_buffer, before, before_access, after, after_access);
 }
 
 } // namespace gpu

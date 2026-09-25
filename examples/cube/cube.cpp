@@ -8,6 +8,7 @@
 #include <NoGraphicsAPIUtility/bump_allocator.hpp>
 #include <NoGraphicsAPIUtility/math.hpp>
 #include <NoGraphicsAPIUtility/texture_allocator.hpp>
+#include <NoGraphicsAPIUtility/upload_queue.hpp>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -110,15 +111,18 @@ int main() {
 	memcpy(index_allocation.cpu, cube_indices, sizeof(cube_indices));
     read_binary_file(NOGRAPHICSAPI_CUBE_TEXTURE_PATH, Span<byte>(upload_allocation.cpu, texture_byte_count));
 
+	UploadQueue uploads(device, texture_byte_count);
 	GpuHeap texture_descriptor_heap = create_gpu_heap(device, caps.texture_descriptor_size, MemoryType::texture_descriptor_heap);
 	GpuHeap sampler_descriptor_heap = create_gpu_heap(device, caps.sampler_descriptor_size, MemoryType::sampler_descriptor_heap);
 	TextureHeap texture_heap = create_texture_heap(device, texture_heap_size);
     TextureAllocator texture_allocator(device, texture_heap, 16);
 
 	TimelinePoint latest_completion{.semaphore = create_timeline_semaphore(device)};
+	CommandPool* command_pools[] = {create_command_pool(device), create_command_pool(device)};
+	CommandBuffer* texture_commands = begin_commands(command_pools[0]);
 
 	// Textures
-	PlacedTexture texture = texture_allocator.allocate({
+	PlacedTexture texture = texture_allocator.allocate(texture_commands, {
 		.extent = {.x = texture_width, .y = texture_height, .z = 1},
 		.format = Format::rgba8_srgb,
 		.usage = TextureUsage::sampled | TextureUsage::transfer_destination,
@@ -131,16 +135,12 @@ int main() {
 		.address_u = AddressMode::clamp_to_edge,
 		.address_v = AddressMode::clamp_to_edge,
 	});
-
-	CommandBuffer* upload_commands = begin_commands(device);
-	copy_memory_to_texture(upload_commands, gpu_range(upload_allocation), texture.texture);
-
-	barrier(upload_commands,
-		Stage::transfer, Access::transfer_write,
-		Stage::fragment, Access::shader_read);
-
+	end_commands(texture_commands);
 	latest_completion.value++;
-	submit({ upload_commands }, latest_completion);
+	submit(device, {.commands = {texture_commands}, .completion = latest_completion});
+    uploads.upload_texture(texture.texture, {upload_allocation.cpu, texture_byte_count});
+    uploads.wait();
+    uploads.destroy();
 
 	PlacedTexture depth{};
 	RenderView* depth_render_view = nullptr;
@@ -150,7 +150,12 @@ int main() {
 
 	while (pump_example_window(window))
 	{
-        const SwapchainFrame frame = acquire(device);
+        if (latest_completion.value >= 2)
+            wait_timeline({.semaphore = latest_completion.semaphore, .value = latest_completion.value - 1});
+        CommandPool* command_pool = command_pools[latest_completion.value % 2];
+        reset_command_pool(command_pool);
+        CommandBuffer* commands = begin_commands(command_pool);
+        const SwapchainFrame frame = acquire(commands);
         if (!frame.render_view)
             continue;
 
@@ -161,7 +166,7 @@ int main() {
 				wait_timeline(latest_completion);
 			destroy_render_view(depth_render_view);
 			texture_allocator.free(depth);
-			depth = texture_allocator.allocate({
+			depth = texture_allocator.allocate(commands, {
 				.extent = {.x = frame.extent.x, .y = frame.extent.y, .z = 1},
 				.format = Format::d32_float,
 				.usage = TextureUsage::depth_stencil_attachment,
@@ -171,7 +176,6 @@ int main() {
 		}
 
 		// Render
-		CommandBuffer* commands = begin_commands(device);
         set_texture_descriptor_heap(commands, gpu_range(texture_descriptor_heap));
         set_sampler_descriptor_heap(commands, gpu_range(sampler_descriptor_heap));
 
@@ -208,13 +212,16 @@ int main() {
 		end_render_pass(commands);
 
         // Submit
+        end_commands(commands);
         latest_completion.value++;
-		submit_and_present(device, {commands}, latest_completion);
+		submit_and_present(device, {.commands = {commands}, .completion = latest_completion});
 	}
 
     wait_idle(device);
 
 	// Cleanup
+	destroy_command_pool(command_pools[1]);
+	destroy_command_pool(command_pools[0]);
 	destroy_timeline_semaphore(latest_completion.semaphore);
     destroy_pso(cube_pso);
 	destroy_render_view(depth_render_view);

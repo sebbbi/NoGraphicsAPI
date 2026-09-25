@@ -37,7 +37,8 @@
 - Do not use PIMPL interfaces.
 - Avoid standard-library algorithms; prefer straightforward loops.
 - Do not use hash maps or ordered maps.
-- Do not use mutexes or atomics in the graphics API. The API is intentionally single-threaded and is not thread-safe yet. The utility
+- Do not use mutexes or atomics in the graphics API. Queues and command pools are externally synchronized; independent pools, queues,
+  resource creation, and timeline waits can run concurrently. The utility
   `BumpAllocator::allocate_atomic()` is the sole exception: it supports relaxed-atomic reservation of disjoint mapped ranges while allocation
   lifetime and GPU submission remain caller-synchronized.
 - Avoid copying large user data structures. Prefer references to structures, and use spans for array data in structures and function parameters.
@@ -49,6 +50,7 @@
   behind preprocessor conditionals.
 - Keep each shader source file's CPU-shared declarations in its own matching shared header. Keep shader-specific root data and constants in that header;
   put types used by multiple shader files in a neutral common header.
+- Use shared (CPU/GPU) data headers for structs, enums, and constants. Do not put arbitrary C/C++ code in them behind `#if !defined(__SLANG__)` blocks.
 - Always review code for performance issues before considering work complete.
 - Line length is 160 characters. Please don't chop expressions to multiple lines if not needed.
 

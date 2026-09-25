@@ -57,20 +57,20 @@ void destroy_gbuffer(TextureAllocator& texture_allocator, GBuffer& gbuffer) noex
     gbuffer = {};
 }
 
-void recreate_gbuffer(Device* device, TextureAllocator& texture_allocator, GBuffer& gbuffer, byte* descriptors, uint64 descriptor_size,
+void recreate_gbuffer(CommandBuffer* commands, Device* device, TextureAllocator& texture_allocator, GBuffer& gbuffer, byte* descriptors, uint64 descriptor_size,
                      uint32 width, uint32 height) noexcept
 {
     gbuffer = {
-        .albedo = texture_allocator.allocate({
+        .albedo = texture_allocator.allocate(commands, {
             .extent = {.x = width, .y = height, .z = 1},
             .usage = TextureUsage::sampled | TextureUsage::color_attachment,
         }),
-        .normal_roughness = texture_allocator.allocate({
+        .normal_roughness = texture_allocator.allocate(commands, {
             .extent = {.x = width, .y = height, .z = 1},
             .format = Format::rgba16_float,
             .usage = TextureUsage::sampled | TextureUsage::color_attachment,
         }),
-        .depth = texture_allocator.allocate({
+        .depth = texture_allocator.allocate(commands, {
             .extent = {.x = width, .y = height, .z = 1},
             .format = Format::d32_float,
             .usage = TextureUsage::sampled | TextureUsage::depth_stencil_attachment,
@@ -228,6 +228,7 @@ int main()
 
     TimelinePoint latest_completion{.semaphore = create_timeline_semaphore(device)};
     DeleteQueue delete_queue(latest_completion.semaphore, frames_in_flight);
+    CommandPool* command_pools[frames_in_flight] = {create_command_pool(device), create_command_pool(device)};
 
     while (pump_example_window(window))
     {
@@ -238,7 +239,10 @@ int main()
         }
         delete_queue.tick();
 
-        const SwapchainFrame frame = acquire(device);
+        CommandPool* command_pool = command_pools[latest_completion.value % frames_in_flight];
+        reset_command_pool(command_pool);
+        CommandBuffer* commands = begin_commands(command_pool);
+        const SwapchainFrame frame = acquire(commands);
         if (!frame.render_view)
             continue;
         const uint32x2 extent = frame.extent;
@@ -251,12 +255,11 @@ int main()
                 delete_queue.defer(latest_completion.value, [&texture_allocator, gbuffer]() mutable noexcept { destroy_gbuffer(texture_allocator, gbuffer); });
                 descriptor_row = (descriptor_row + 1) % frames_in_flight;
             }
-            recreate_gbuffer(device, texture_allocator, gbuffer,
+            recreate_gbuffer(commands, device, texture_allocator, gbuffer,
                              texture_descriptor_heap.range.cpu + size_t(descriptor_row * gbuffer_texture_count) * caps.texture_descriptor_size,
                              caps.texture_descriptor_size, extent.x, extent.y);
         }
 
-        CommandBuffer* commands = begin_commands(device);
         set_texture_descriptor_heap(commands, gpu_range(texture_descriptor_heap));
 
         // Simulation
@@ -351,14 +354,17 @@ int main()
         end_render_pass(commands);
 
         // Submit
+        end_commands(commands);
         latest_completion.value++;
-        submit_and_present(device, {commands}, latest_completion);
+        submit_and_present(device, {.commands = {commands}, .completion = latest_completion});
     }
 
     wait_idle(device);
     delete_queue.drain();
 
     // Cleanup
+    for (uint32 i = 0; i != frames_in_flight; ++i)
+        destroy_command_pool(command_pools[i]);
     destroy_timeline_semaphore(latest_completion.semaphore);
     destroy_pso(deferred_lighting_pso);
     destroy_pso(gbuffer_pso);

@@ -122,7 +122,8 @@ struct NonTrivialRoot
     }
 };
 
-static_assert(!CompleteType<gpu::Device> && !CompleteType<gpu::Texture> && !CompleteType<gpu::RenderView> &&
+static_assert(!CompleteType<gpu::Device> && !CompleteType<gpu::CommandPool> &&
+              !CompleteType<gpu::Texture> && !CompleteType<gpu::RenderView> &&
               !CompleteType<gpu::PSO> && !CompleteType<gpu::CommandBuffer> &&
               !CompleteType<gpu::TimelineSemaphore> && !CompleteType<gpu::GpuHeapOwner> &&
               !CompleteType<gpu::TextureHeapOwner>);
@@ -251,10 +252,10 @@ constexpr gpu::Format texture_formats[]{
     gpu::Format::rg16_unorm,    gpu::Format::rgba16_unorm,  gpu::Format::r8_uint,
     gpu::Format::rg8_uint,      gpu::Format::rgba8_uint,    gpu::Format::bgra8_uint,
     gpu::Format::r16_uint,      gpu::Format::rg16_uint,     gpu::Format::rgba16_uint,
-    gpu::Format::r32_uint,      gpu::Format::rg32_uint,     gpu::Format::rgb32_uint,
-    gpu::Format::rgba32_uint,   gpu::Format::r16_float,     gpu::Format::rg16_float,
-    gpu::Format::rgba16_float,  gpu::Format::r32_float,     gpu::Format::rg32_float,
-    gpu::Format::rgb32_float,   gpu::Format::rgba32_float,  gpu::Format::rgb10a2_unorm,
+    gpu::Format::r32_uint,      gpu::Format::rg32_uint,     gpu::Format::rgba32_uint,
+    gpu::Format::r16_float,     gpu::Format::rg16_float,    gpu::Format::rgba16_float,
+    gpu::Format::r32_float,     gpu::Format::rg32_float,    gpu::Format::rgba32_float,
+    gpu::Format::rgb10a2_unorm,
     gpu::Format::rg11b10_float, gpu::Format::d16_unorm,     gpu::Format::d24_unorm_s8_uint,
     gpu::Format::d32_float,     gpu::Format::s8_uint,       gpu::Format::d32_float_s8_uint,
     gpu::Format::eac_rg,        gpu::Format::astc_4x4_srgb, gpu::Format::astc_4x4_unorm,
@@ -339,7 +340,10 @@ static_assert(sizeof(gpu::TimelinePoint) == 16 && offsetof(gpu::TimelinePoint, s
               offsetof(gpu::TimelinePoint, value) == 8);
 
 constexpr gpu::DeviceCaps default_caps{};
-    static_assert(default_caps.max_push_data_size == 0 &&
+static_assert(default_caps.queue_count == 0 && default_caps.general_queue_count == 0 && default_caps.compute_queue_count == 0 &&
+              default_caps.copy_queue_count == 0 && default_caps.copy_texture_granularity.x == 1 &&
+              default_caps.copy_texture_granularity.y == 1 && default_caps.copy_texture_granularity.z == 1);
+static_assert(default_caps.max_push_data_size == 0 &&
               default_caps.texture_heap_alignment == 0 &&
               default_caps.texture_descriptor_size == 0 &&
               default_caps.sampler_descriptor_size == 0 && !default_caps.texture_compression_bc &&
@@ -350,7 +354,8 @@ static_assert(default_device_init.device == nullptr &&
 constexpr gpu::DeviceDesc default_device_desc{};
 static_assert(default_device_desc.window == nullptr &&
               default_device_desc.swapchain_format == gpu::Format::undefined &&
-              default_device_desc.desired_swapchain_image_count == 2 &&
+              default_device_desc.desired_swapchain_image_count == 2 && default_device_desc.desired_queue_count == 1 &&
+              default_device_desc.desired_compute_queue_count == 0 && default_device_desc.desired_copy_queue_count == 0 &&
               default_device_desc.timestamp_query_count == 256);
 constexpr gpu::uint32x2 default_uint32x2{};
 static_assert(default_uint32x2.x == 0 && default_uint32x2.y == 0);
@@ -476,6 +481,9 @@ constexpr gpu::SizeAlign default_size_align{};
 constexpr gpu::GpuHeap default_heap{};
 constexpr gpu::TextureHeap default_texture_heap{};
 constexpr gpu::TimelinePoint default_timeline_point{};
+constexpr gpu::SubmitDesc default_submit{};
+static_assert(plain_api_data<gpu::SubmitDesc> && default_submit.commands.size == 0 && default_submit.waits.size == 0 &&
+              default_submit.completion.semaphore == nullptr && default_submit.completion.value == 0);
 static_assert(default_range.gpu == nullptr && default_range.size == 0);
 static_assert(default_cpu_range.cpu == nullptr && default_cpu_range.gpu == nullptr && default_cpu_range.size == 0);
 static_assert(gpu::gpu_range(default_cpu_range).gpu == nullptr && gpu::gpu_range(default_cpu_range).size == 0);
@@ -492,14 +500,18 @@ using DestroyGpuHeapFunction = void (*)(const gpu::GpuHeap&) noexcept;
 using CreateTextureHeapFunction = gpu::TextureHeap (*)(gpu::Device*, uint64) noexcept;
 using DestroyTextureHeapFunction = void (*)(const gpu::TextureHeap&) noexcept;
 using GetTextureSizeAlignFunction = gpu::SizeAlign (*)(gpu::Device*, const gpu::TextureDesc&) noexcept;
-using CreateTextureFunction = gpu::Texture* (*)(gpu::Device*, const gpu::TextureDesc&, const gpu::TextureHeap&, uint64) noexcept;
+using CreateTextureFunction = gpu::Texture* (*)(gpu::CommandBuffer*, const gpu::TextureDesc&, const gpu::TextureHeap&, uint64) noexcept;
 using CreateDeviceFunction = gpu::DeviceInit (*)(const gpu::DeviceDesc&) noexcept;
 using GetDrawableExtentFunction = gpu::uint32x2 (*)(gpu::Device*) noexcept;
-using AcquireFunction = gpu::SwapchainFrame (*)(gpu::Device*) noexcept;
+using AcquireFunction = gpu::SwapchainFrame (*)(gpu::CommandBuffer*) noexcept;
+using CreateCommandPoolFunction = gpu::CommandPool* (*)(gpu::Device*, uint32) noexcept;
+using CommandPoolFunction = void (*)(gpu::CommandPool*) noexcept;
+using BeginCommandsFunction = gpu::CommandBuffer* (*)(gpu::CommandPool*) noexcept;
+using EndCommandsFunction = void (*)(gpu::CommandBuffer*) noexcept;
 using CommandBatch = gpu::Span<gpu::CommandBuffer* const>;
 using CreateComputePSOFunction = gpu::PSO* (*)(gpu::Device*, gpu::Span<const uint32>) noexcept;
-using SubmitFunction = void (*)(CommandBatch, gpu::TimelinePoint) noexcept;
-using SubmitAndPresentFunction = void (*)(gpu::Device*, CommandBatch, gpu::TimelinePoint) noexcept;
+using SubmitFunction = void (*)(gpu::Device*, const gpu::SubmitDesc&, uint32) noexcept;
+using SubmitAndPresentFunction = void (*)(gpu::Device*, const gpu::SubmitDesc&) noexcept;
 using WriteTimestampFunction = void (*)(gpu::CommandBuffer*, uint64*, gpu::Stage) noexcept;
 using SetHeapFunction = void (*)(gpu::CommandBuffer*, gpu::GpuRange) noexcept;
 using SetViewportFunction = void (*)(gpu::CommandBuffer*, const gpu::Viewport&) noexcept;
@@ -526,6 +538,11 @@ static_assert(gpu::detail::is_same_v<decltype(&gpu::create_texture), CreateTextu
 static_assert(gpu::detail::is_same_v<decltype(&gpu::create_device), CreateDeviceFunction>);
 static_assert(gpu::detail::is_same_v<decltype(&gpu::get_drawable_extent), GetDrawableExtentFunction>);
 static_assert(gpu::detail::is_same_v<decltype(&gpu::acquire), AcquireFunction>);
+static_assert(gpu::detail::is_same_v<decltype(&gpu::create_command_pool), CreateCommandPoolFunction>);
+static_assert(gpu::detail::is_same_v<decltype(&gpu::destroy_command_pool), CommandPoolFunction>);
+static_assert(gpu::detail::is_same_v<decltype(&gpu::reset_command_pool), CommandPoolFunction>);
+static_assert(gpu::detail::is_same_v<decltype(&gpu::begin_commands), BeginCommandsFunction>);
+static_assert(gpu::detail::is_same_v<decltype(&gpu::end_commands), EndCommandsFunction>);
 static_assert(gpu::detail::is_same_v<decltype(&gpu::create_compute_pso), CreateComputePSOFunction>);
 static_assert(gpu::detail::is_same_v<decltype(&gpu::submit), SubmitFunction>);
 static_assert(gpu::detail::is_same_v<decltype(&gpu::submit_and_present), SubmitAndPresentFunction>);
@@ -570,8 +587,9 @@ static_assert(__is_constructible(CommandBatch, std::initializer_list<gpu::Comman
     gpu::destroy_timeline_semaphore(timeline);
 
     gpu::uint32x2 drawable_extent = gpu::get_drawable_extent(device);
-    gpu::SwapchainFrame frame = gpu::acquire(device);
-    gpu::submit_and_present(device, {commands}, {.semaphore = semaphore, .value = 2});
+    gpu::SwapchainFrame frame = gpu::acquire(commands);
+    gpu::end_commands(commands);
+    gpu::submit_and_present(device, {.commands = {commands}, .completion = {.semaphore = semaphore, .value = 2}});
 
     gpu::GpuHeap bytes = gpu::create_gpu_heap(device, 64);
     gpu::GpuHeap gpu_only = gpu::create_gpu_heap(device, 64, gpu::MemoryType::gpu_only);
@@ -585,7 +603,7 @@ static_assert(__is_constructible(CommandBatch, std::initializer_list<gpu::Comman
 
     const gpu::SizeAlign texture_size_align = gpu::get_texture_size_align(device, {});
     gpu::TextureHeap texture_heap = gpu::create_texture_heap(device, texture_size_align.size);
-    gpu::Texture* created_texture = gpu::create_texture(device, {}, texture_heap, 0);
+    gpu::Texture* created_texture = gpu::create_texture(commands, {}, texture_heap, 0);
     gpu::RenderView* created_render_view = gpu::create_render_view(texture);
     gpu::write_texture_descriptor(device, descriptor, texture, gpu::TextureDescriptorType::sampled);
     gpu::write_sampler_descriptor(device, descriptor);
@@ -601,8 +619,9 @@ static_assert(__is_constructible(CommandBatch, std::initializer_list<gpu::Comman
     gpu::destroy_pso(compute);
     gpu::destroy_pso(pso);
 
-    gpu::CommandBuffer* a = gpu::begin_commands(device);
-    gpu::CommandBuffer* b = gpu::begin_commands(device);
+    gpu::CommandPool* pool = gpu::create_command_pool(device);
+    gpu::CommandBuffer* a = gpu::begin_commands(pool);
+    gpu::CommandBuffer* b = gpu::begin_commands(pool);
     gpu::write_timestamp(a, reinterpret_cast<uint64*>(range.gpu));
     gpu::write_timestamp(b, reinterpret_cast<uint64*>(range.gpu) + 1, gpu::Stage::transfer);
     gpu::bind_pso(a, pso);
@@ -627,8 +646,14 @@ static_assert(__is_constructible(CommandBatch, std::initializer_list<gpu::Comman
     gpu::copy_memory_to_texture(a, range, texture);
     gpu::copy_texture_to_memory(a, texture, range);
     gpu::barrier(a, gpu::Stage::transfer, gpu::Access::transfer_write, gpu::Stage::fragment, gpu::Access::shader_read);
-    gpu::submit({a, b}, {.semaphore = semaphore, .value = 3});
+    gpu::end_commands(a);
+    gpu::end_commands(b);
+    gpu::submit(device, {.commands = {a, b}, .waits = {{.semaphore = semaphore, .value = 2}}, .completion = {.semaphore = semaphore, .value = 3}});
+    gpu::submit(device, {.completion = {.semaphore = semaphore, .value = 4}}, 0);
+    gpu::submit(device, {.waits = {{.semaphore = semaphore, .value = 4}}, .completion = {.semaphore = semaphore, .value = 5}}, 1);
     gpu::wait_idle(device);
+    gpu::reset_command_pool(pool);
+    gpu::destroy_command_pool(pool);
 
     (void)device_init;
     (void)window_device_init;

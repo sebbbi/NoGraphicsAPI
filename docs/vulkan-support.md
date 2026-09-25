@@ -16,6 +16,17 @@ The current backend targets desktop Vulkan 1.4. MoltenVK is intentionally unsupp
 the only presentation backend. Headless library builds are supported on the other configured
 desktop platforms.
 
+## Compatibility target
+
+Mesh shaders, buffer device address, and native descriptor heaps define the required graphics model.
+Other differences should be handled by backend adaptations or optional capabilities, including device
+address commands, unified image layouts, and timestamp support. Profiling must not exclude a device
+from ordinary rendering.
+
+The priority targets are desktop PCs, ROG Ally, and Intel on Windows, with support determined by the
+drivers available for those systems. The requirements below describe the current implementation,
+which still has stricter checks than this target.
+
 ## Vulkan feature surface
 
 Support is determined by extension enumeration and feature queries at startup. A Vulkan version
@@ -33,8 +44,8 @@ conventional feature checked by device creation.
 | Buffer device address | Gives GPU heaps 64-bit shader addresses for their lifetime and enables typed pointer fields in shared structures. |
 | Vulkan 1.3 `synchronization2` and `dynamicRendering` | Resource-free barriers and rendering without render-pass or framebuffer objects. |
 | Core Vulkan dynamic state | Command-set viewport, scissor, and exposed depth/stencil state. |
-| Timeline semaphores | Application-visible completion points plus private command-context retirement. |
-| 64-bit graphics/compute timestamps | GPU markers resolve to application-owned GPU addresses at command-buffer end. |
+| Timeline semaphores | Application-visible completion points and cross-queue waits; private swapchain retirement. |
+| 64-bit timestamps (optional) | Supported queues resolve GPU markers to application-owned GPU addresses by submission completion. |
 | Shader and layout features | Scalar layout, float16, 16-bit push/storage access, draw parameters, independent blending, and formatless storage-image access. |
 | Texture features | At least BC or ASTC LDR compression; exact format and usage support remains queryable. |
 | Win32 WSI | `VK_KHR_surface`, `VK_KHR_win32_surface`, `VK_KHR_swapchain`, and the maintenance extensions listed below. |
@@ -206,6 +217,11 @@ not implied by rendering boundaries. Each `begin_render_pass()` sets a full rend
 scissor and disables depth/stencil, preventing state from leaking between passes. Applications call
 `set_viewport()`, `set_scissor()`, or `set_depth_stencil()` after beginning a pass to override those defaults.
 
+`RenderingFlags::suspending` and `resuming` split one pass across independently recorded command buffers.
+Each segment repeats the rendering description and has its own begin/end pair; only the first loads
+or clears, and only the last stores. Submit the full chain in order in one batch, without action
+commands, synchronization, or other passes between segments. Each buffer sets its own bindings.
+
 The raster path has empty fixed vertex input because shaders fetch through GPU pointers. Mesh PSOs
 use `VK_EXT_mesh_shader`, with task and mesh support enabled as part of the fixed device baseline.
 `MeshPSODesc::task_spirv` adds `taskMain` before `meshMain`; direct and indirect draw counts then launch
@@ -217,16 +233,40 @@ stages share the same root ABI and descriptor heaps.
 
 `write_timestamp(commands, gpu_destination)` captures a 64-bit timestamp, defaulting to `Stage::all_commands`.
 `DeviceDesc::timestamp_query_count` sets each command buffer's capacity and defaults to 256. Zero disables timestamps and their pool/storage allocation.
-Markers target distinct, 8-byte-aligned destinations. Private query pools resolve to those addresses
-at command-buffer end through `vkCmdCopyQueryPoolResultsToMemoryKHR`; markers are valid inside rendering, and the copies execute outside it.
+Timestamp calls are ignored and leave their destinations unchanged when disabled or when the command buffer's queue lacks 64-bit counters
+or host query reset support. These capabilities do not restrict device or queue selection, and unsupported queues allocate no timestamp storage.
+Markers target distinct, 8-byte-aligned destinations. The backend copies private query results to those
+addresses through `vkCmdCopyQueryPoolResultsToMemoryKHR`, outside rendering and after any suspended chain.
+Markers are valid inside each rendering segment, but not between suspension and resumption.
 The backend makes copied results host-visible. Read mapped `MemoryType::readback` destinations after the submission timeline completes,
 and multiply unsigned tick differences by `DeviceCaps::timestamp_period_ns` to obtain nanoseconds. Results are published at completion;
-markers do not make results available to subsequent commands within the same recording. Query pools retire with their command contexts.
+markers do not make results available to subsequent commands within the same submission. Timestamp storage follows command-pool reuse and destruction.
 
-Command buffers are one-shot recording handles. Every buffer begun since the previous submission
-must appear exactly once in the next submit or present span. The span defines execution order, all
-handles are consumed, and the caller-provided timeline point is signaled without waiting for
-execution.
+Command buffers are one-shot recording handles allocated from explicit command pools. End each buffer
+before submitting any subset to a selected queue. Other pools can continue recording independently.
+Reset a pool only after all its submitted work completes; reset discards unsubmitted work and invalidates
+its command-buffer handles. Pools retain storage for reuse until destruction.
+
+Device creation requests general, compute-only, and copy-only queue counts, each capped to its family's capacity.
+A nonzero request requires a matching family; queue indices run general first, then compute, then copy.
+`DeviceCaps` reports the actual counts. `create_command_pool(device, queue_index)` selects the recording family;
+submit its command buffers only to queues in that family. Queue zero remains the general/presentation queue.
+All buffers, textures, and swapchain images use concurrent sharing across the enabled families, so ownership
+transfers are unnecessary. With only one family, Vulkan's exclusive mode already covers all its queues.
+`submit(device, desc, queue_index)` selects a queue by index and defaults to zero.
+Submission accepts timeline waits covering all command stages and signals the caller's completion point.
+Use waits for cross-queue hazards; an ordinary barrier only synchronizes work on its own queue.
+Prefer one signaling timeline per queue, or explicitly order signals to a shared timeline.
+
+Copy-only texture transfers follow `DeviceCaps::copy_texture_granularity`; depth/stencil copies require a general queue.
+`UploadQueue` accepts any queue index. Its tightly packed texture helper respects copy granularity, provided staging
+fits one granularity block at the mip edge. Compute upload callbacks require a general or compute queue.
+
+Each `(device, queue_index)` and command pool is externally synchronized, including command recording within the pool.
+Distinct resource creation, immutable queries, timeline waits, and descriptor writes to disjoint slots
+can run concurrently on one device. Texture creation records its `UNDEFINED` to `GENERAL` transition
+in the supplied command buffer; every use must follow that initialization. Resource lifetime and
+mutable utility allocators remain caller-synchronized. No internal queue, pool, or device-wide locks are used.
 
 Public timeline semaphores are the application's reuse mechanism. Poll or wait for the point that
 last used mutable upload data, readback storage, a texture placement, indirect argument memory, or a
@@ -239,8 +279,12 @@ timeline values complete. Applications normally tick it once per frame. At shutd
 The backend does not recycle application allocator entries or descriptor slots; `wait_idle()` remains
 an intentional whole-device drain.
 
-For presentation, `acquire()` returns a swapchain-owned `RenderView` and extent, or an empty frame
-while the drawable extent is zero. Binary WSI semaphores remain private, while
+For presentation, `acquire(commands)` returns a swapchain-owned `RenderView` and extent, or an empty frame
+while the drawable extent is zero. Later command buffers in the same submission may also access the image.
+Submit through `submit_and_present(device, desc)`, which always uses queue zero and transitions the image
+back to presentation after all submitted command buffers.
+Windowed device creation/destruction, drawable queries, acquire, and presentation stay on the native
+message-pump thread; other work follows the threading rules above. Binary WSI semaphores remain private, while
 `VK_KHR_swapchain_maintenance1` present fences support safe reuse and swapchain replacement without
 draining unrelated queue work.
 
@@ -249,6 +293,8 @@ draining unrelated queue work.
 The tests cover the public CPU-facing contracts, while the examples exercise representative GPU
 paths. Debug builds enable Vulkan validation when it is installed. Runtime extension and feature
 queries remain authoritative.
+
+See [known driver issues](known-driver-issues.md) for observed driver-specific behavior and workarounds.
 
 See [No Graphics API comparison](no-graphics-api-comparison.md) for the feature-by-feature assessment
 of direct matches, Vulkan adaptations, and intentionally unsupported areas.

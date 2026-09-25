@@ -220,7 +220,10 @@ The public command surface maps without structural changes:
 - direct, indexed, indirect, mesh, and compute work use Metal 4 render or compute commands;
 - render-pass attachments map to Metal load, store, and clear actions;
 - buffer and texture copies use native Metal copy commands;
-- command-buffer batches map to ordered grouped queue commits.
+- command pools map to independently owned command allocators, and ended batches map to grouped queue commits.
+
+Render-pass `suspending` and `resuming` would map to `MTL4RenderEncoderOptions`, joining independently
+recorded segments in one ordered commit.
 
 The public global barrier also remains. Metal does not expose every NoGraphicsAPI stage separately,
 so index, indirect, color-output, and depth/stencil scopes are widened to conservative Metal render
@@ -236,7 +239,8 @@ coalescing.
 ## Timelines, presentation, and lifetime
 
 Each public timeline semaphore maps to `MTLSharedEvent`. Submission signals the requested value only
-after its entire ordered command-buffer group. Polling, host waiting, `wait_idle`, allocator reuse,
+after its entire ordered command-buffer group; cross-queue dependencies wait on the supplied event values.
+Polling, host waiting, `wait_idle`, allocator reuse,
 root-ring reuse, and deferred destruction all use completed event values.
 
 For a windowed device, `DeviceDesc::window` is proposed to identify a `CAMetalLayer`. A platform
@@ -246,7 +250,7 @@ value is an `NSView`, `UIView`, or some other wrapper.
 The existing flow remains recognizable:
 
 1. `get_drawable_extent` reads the layer size without acquiring a drawable.
-2. `acquire` obtains a drawable and returns its render view and extent.
+2. `acquire(commands)` associates a drawable with an explicit command buffer and returns its render view and extent.
 3. `submit_and_present` waits for the drawable, commits the ordered command group, signals its
    timeline point and the drawable, then presents it in Metal's required order.
 
@@ -255,8 +259,8 @@ wait behavior, resizing, occlusion, and error propagation still need platform va
 
 ## Residency
 
-Metal 4 requires explicit residency. The proposed backend attaches one persistent
-`MTLResidencySet` to its command queue. It contains the placement heaps used for ordinary buffers
+Metal 4 requires explicit residency. The proposed backend must provide persistent
+`MTLResidencySet` coverage on every exposed command queue. It contains the placement heaps used for ordinary buffers
 and textures, plus render and compute pipeline allocations. A windowed device also attaches the
 `CAMetalLayer` residency set required for drawable textures.
 
@@ -264,6 +268,7 @@ Heap membership is tracked at heap granularity. A heap or pipeline allocation le
 after all submitted work that may reference it has completed. The application responds to
 exhaustion by creating another explicit heap.
 
+Concurrent resource creation also needs a residency-update policy that preserves independently submitted queues.
 Residency is backend machinery and requires no public resource list. It guarantees addressability,
 not ordering, visibility, or lifetime beyond the application's existing timeline contract.
 
@@ -289,8 +294,10 @@ descriptions, barriers, or command submission.
 
 ## Deliberate scope
 
-The port does not expand the existing API. It remains single-threaded, uses one general command
-queue abstraction, and adds no public sparse resources, ray tracing, command graphs,
+The port must preserve indexed general, compute, and copy queues, independent command pools,
+and externally synchronized queue operations. Queue counts describe the roles requested by the application;
+whether Metal exposes independently scheduled engines for those roles remains a porting question.
+It adds no public sparse resources, ray tracing, command graphs,
 queries, pipeline cache, transient-alias activation, or legacy Metal path. Such features need their
 own cross-backend contracts rather than Metal-only escape hatches.
 

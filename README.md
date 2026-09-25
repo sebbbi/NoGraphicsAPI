@@ -1,189 +1,102 @@
 # NoGraphicsAPI
 
-`NoGraphicsAPI` is an experimental Vulkan 1.4 implementation of the ideas in Sebastian Aaltonen's
-[*No Graphics API*](https://www.sebastianaaltonen.com/blog/no-graphics-api). It explores how much of
-a conventional graphics API disappears when shaders use 64-bit GPU pointers, texture and sampler
-descriptors live in application-owned GPU memory, and synchronization describes hazards instead of
-resource state.
+NoGraphicsAPI is an experimental C++20 graphics library implementing the ideas in Sebastian Aaltonen's
+[*No Graphics API*](https://www.sebastianaaltonen.com/blog/no-graphics-api) with Vulkan 1.4 and Slang.
 
-The Vulkan backend is implemented and exercised by three example applications. Metal support is not
-implemented; [the Metal 4 design](docs/metal-porting.md) records the proposed mapping and open issues.
+The goal is to make GPU programming feel more like working with ordinary memory and data structures:
+GPU pointers for data, heap indices for textures, and a small argument structure for each draw or dispatch.
 
-## How it maps to *No Graphics API*
+The implemented backend is Vulkan, with windowed examples on Windows x86-64 and headless builds on
+other supported x86-64 platforms. This is a prototype: expect API changes and please report bugs.
 
-- **GPU pointers replace buffer objects and bindings.** `create_gpu_heap()` returns a raw allocation
-  with a GPU address and, for mapped memory, a CPU address. Address-based commands consume
-  `GpuRange {gpu, size}` directly, and shaders follow typed 64-bit pointers for vertex fetch and
-  arbitrary data structures.
-- **Applications own descriptor heaps.** Texture and sampler descriptor heaps are mapped GPU heaps.
-  The application chooses slots, writes descriptors through the CPU address, binds the GPU range,
-  and passes 32-bit indices to shaders.
-- **Root data is one small payload.** A shared C++/Slang structure is copied with
-  `vkCmdPushDataEXT` for each draw or dispatch. Its pointer fields are GPU addresses. Unlike the
-  blog's GPU-resident, stage-specific roots, graphics stages share one CPU-supplied root.
-- **Barriers describe execution and memory hazards.** The public API exposes global stage/access
-  barriers, not per-resource transition lists. Normal textures remain in one unified layout.
-- **Pipeline binding state stays small.** There are no public buffer objects, descriptor sets,
-  descriptor layouts, pipeline layouts, or sampler objects. Viewport, scissor, and exposed
-  depth/stencil behavior are command state rather than PSO permutations, while data arrives through the root and descriptor heaps.
-- **Submission is explicit and asynchronous.** Applications provide timeline points for reuse and
-  deferred destruction. Submitted command buffers are one-shot.
+## What changes from classic rendering?
 
-The [design comparison](docs/no-graphics-api-comparison.md) separates faithful mappings, Vulkan-driven
-differences, and features that remain outside the prototype.
+A conventional renderer creates buffer objects, describes vertex and resource-binding layouts, and
+assembles bindings before drawing. The blog asks how much of this machinery modern bindless hardware
+still needs. NoGraphicsAPI makes that alternative data model the foundation of the library:
 
-## Vulkan realization
+- **Memory allocation without buffer objects.** Allocate GPU heaps and partition them with an
+  application-side allocator. Mapped heaps provide CPU and GPU addresses, so the CPU can write data
+  directly. Vertex data, constants, and arbitrary structures are allocations, not separate public buffer types.
+- **Typed GPU pointers.** Shaders follow 64-bit pointers stored in shared C++/Slang structures.
+  Arrays, pointer arithmetic, and nested data structures work without buffer descriptors or binding slots.
+  Vertex shaders fetch their own vertices; there is no vertex-layout declaration.
+- **Bindless textures and samplers.** The application owns descriptor heaps and chooses their indices.
+  Materials carry those indices as data. Changing materials does not require constructing or rebinding
+  per-material descriptor sets.
+- **Root arguments instead of binding tables.** Each draw or dispatch receives one small structure
+  containing GPU pointers, texture indices, and constants. The CPU and shader share its declaration;
+  there are no descriptor-set layouts or pipeline layouts to keep in agreement.
+- **Less pipeline-state coupling.** Resource-binding and vertex layouts are absent from pipeline
+  creation. Viewport, scissor, and depth/stencil state are set independently, reducing pipeline
+  permutations. Rasterization, blending, and attachment formats still belong to pipeline objects.
+- **Barriers without resource lists.** Synchronization describes which work produces and consumes
+  data, not a list of buffer and image transitions. Applications do not track image layouts.
 
-The backend intentionally creates no `VkDescriptorSetLayout`, `VkDescriptorPool`, `VkDescriptorSet`,
-or `VkPipelineLayout`. Its central extensions are:
+This is a low-level library: the application still owns allocation policy, resource lifetime, and
+GPU synchronization. The optional NoGraphicsAPIUtility library supplies shared shader types, math,
+allocators, upload queues, and deferred deletion without making them part of the graphics API.
 
-- `VK_EXT_descriptor_heap` for application-owned resource/sampler heaps and `vkCmdPushDataEXT`;
-- `VK_KHR_device_address_commands` for address-based index, indirect, and copy commands;
-- `VK_KHR_shader_untyped_pointers` as the descriptor-heap SPIR-V prerequisite;
-- `VK_KHR_unified_image_layouts`, when available, to optimize ordinary texture access in
-  `VK_IMAGE_LAYOUT_GENERAL`;
-- `VK_EXT_mesh_shader` for task/mesh pipelines and dispatch.
+### What a draw's data looks like
 
-NoGraphicsAPI is a low-level, thin Vulkan wrapper. Debug builds enable `VK_EXT_debug_utils` and the
-Khronos validation layer when available.
-
-Vulkan 1.4 supplies buffer device addresses, timeline semaphores, dynamic rendering,
-synchronization2, scalar block layout, and the remaining core features. See
-[Vulkan support](docs/vulkan-support.md) for the concise feature and command mapping.
-
-## GPU memory and descriptor heaps
-
-There are no public buffer objects or internal suballocators. Applications own data and descriptor
-heaps; optimal-tiled textures use separate GPU-only heaps. The optional utility library provides
-application-side data and texture allocation policies.
-
-`GpuRange` is the non-owning address/size view used by commands. Texture and sampler descriptors are
-addressed in Slang through the standard heap syntax:
-
-```slang
-Texture2D<float4> texture = ResourceDescriptorHeap[texture_index];
-SamplerState sampler = SamplerDescriptorHeap[sampler_index];
-float4 texel = texture.Sample(sampler, uv);
-```
-
-## Shared root ABI
-
-Shared scalar, vector, and matrix types come from `<NoGraphicsAPIUtility/shader_types.h>`. Root
-structures are declared once and included by C++ and Slang:
+Declare the arguments once in a shared C++/Slang header:
 
 ```cpp
 struct RootArguments
 {
     Vertex* vertices;
-    float4x4 mvp;
+    Material* material;
+    float4x4 transform;
 };
 ```
 
-On the CPU, pointer fields receive GPU virtual addresses while ordinary values are copied directly:
+Fill it with GPU addresses and pass it to a draw:
 
 ```cpp
-GpuCpuRange<Vertex> vertex_memory = bump_allocator.allocate<Vertex>(vertex_count);
 RootArguments root{
     .vertices = vertex_memory.gpu,
-    .mvp = mvp,
+    .material = material_memory.gpu,
+    .transform = transform,
 };
 gpu::draw(commands, root, vertex_count);
 ```
 
-Slang declares the same root as push-constant data and reads both pointer and value fields directly:
+The shader reads `root.vertices[vertex_id]` and follows `root.material` directly. Larger data structures
+remain behind pointers; there is no buffer-binding step for either field.
 
-```slang
-[[vk::push_constant]] ConstantBuffer<RootArguments> root;
+One deliberate difference from the blog: this implementation copies small root arguments (up to 256 bytes) per command
+and shares them across graphics stages, rather than passing separate GPU root pointers for each stage.
+See the [design comparison](docs/no-graphics-api-comparison.md) for the remaining differences and
+the [shader guide](docs/slang.md) for complete examples.
 
-Vertex vertex = root.vertices[vertex_id];
-float4x4 mvp = root.mvp;
-```
+## Threading
 
-The draw or dispatch copies the root bytes immediately through `vkCmdPushDataEXT`; the root does not
-need to outlive the call. Shared structures use C layout, and matrix-bearing roots use row-major matrix
-layout. Root values must be trivially copyable, have a size divisible by four, and fit within 256 bytes
-and `DeviceCaps::max_push_data_size`. Larger data remains accessible through GPU pointers in the root.
+There are no internal mutexes. The application must externally synchronize each queue and command pool.
+The recommended setup is one command pool per in-flight frame per recording thread.
+Independent pools can record concurrently, and work can be submitted to multiple GPU queues.
 
-Public descriptor structures have useful defaults. Call sites use C++20 designated initializers to
-name only fields that differ from those defaults. `Span` and `ByteSpan` are non-owning pointer/count
-views used for function inputs.
+The utility library's `BumpAllocator::allocate_atomic()` supports concurrent bump allocation using relaxed atomic operations.
 
-The full shader-side contract is in the [Slang shader contract](docs/slang.md).
+## Hardware requirements
 
-## Build and run
+The library targets little-endian x86-64. Examples using the utility math library require AVX2 and FMA.
+The GPU needs Vulkan 1.4 plus recent extensions. Three important extensions behind this API are:
 
-Requirements:
+- [`VK_EXT_descriptor_heap`][descriptor-heap] — required; application-owned descriptor heaps.
+- [`VK_KHR_device_address_commands`][address-commands] — required; commands operate on GPU addresses.
+- [`VK_KHR_unified_image_layouts`][unified-layouts] — optional; efficient texture access using a single image layout.
 
-- CMake 3.24+, a C++20 compiler, and Vulkan SDK headers and development libraries version 1.4.357
-  or newer;
-- a little-endian x86-64 target; the optional utility math target additionally requires AVX2 and FMA;
-- a Vulkan 1.4 loader and device exposing the required descriptor-heap, device-address-command,
-  untyped-pointer, and mesh extensions above, plus their required BDA, synchronization, and
-  16-bit/scalar-layout features;
-- coherent CPU-visible GPU memory through a PCIe BAR on a discrete GPU or UMA on an integrated GPU,
-  plus device-local memory compatible with the supported buffers and textures;
-- Slang 2026.14.1+ and SPIRV-Tools 2026.3+ when building the examples.
+Descriptor heaps and device-address commands are brand-new 2026 extensions. Unified image layouts
+was introduced in 2025. Missing required extensions are the main reason for unsupported GPUs below;
+the remaining [requirements](docs/vulkan-support.md#vulkan-feature-surface) are more widely supported
+on recent GPUs. Vulkan 1.4 support alone is not sufficient.
 
-MSVC and clang-cl are supported on Windows. GNU and Clang can build the headless library on other
-platforms. MinGW, 32-bit x86, and ARM targets are not supported.
-
-The utility implementation is shipped in-tree, so configuration has no Git or network dependency.
-The default configuration builds NoGraphicsAPI and its companion utility library. Examples and tests
-are opt-in so embedding NoGraphicsAPI with `add_subdirectory()` does not add development targets:
-
-```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-cmake --install build --prefix path/to/install
-```
-
-The same install provides independent `NoGraphicsAPI` and `NoGraphicsAPIUtility` packages:
-
-```cmake
-find_package(NoGraphicsAPI CONFIG REQUIRED)
-find_package(NoGraphicsAPIUtility CONFIG REQUIRED)
-target_link_libraries(my_application PRIVATE
-    NoGraphicsAPI::NoGraphicsAPI
-    NoGraphicsAPIUtility::math
-    NoGraphicsAPIUtility::textures)
-```
-
-NoGraphicsAPIUtility provides shared C++/Slang types, math, data and texture suballocation, and a
-timeline-driven `DeleteQueue`. These are optional application-side policies; NoGraphicsAPI does not
-depend on them. The queue delays allocator reuse and resource destruction until the application
-timeline completes. `BumpAllocator::allocate_atomic()` supports relaxed-atomic concurrent reservations from worker threads.
-
-For repository development on Windows, enable the examples and tests explicitly. Building examples
-requires the Slang and SPIR-V Tools versions listed above.
-
-```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNOGRAPHICSAPI_BUILD_EXAMPLES=ON -DNOGRAPHICSAPI_BUILD_TESTS=ON
-cmake --build build
-ctest --test-dir build --output-on-failure
-```
-
-The Windows examples use the normal swapchain path:
-
-- [`triangle`](examples/triangle/triangle.cpp): the minimum vertex/fragment draw and presentation path;
-- [`cube`](examples/cube/cube.cpp): typed GPU-pointer vertex fetch plus application-owned texture and
-  sampler heaps;
-- [`deferred_renderer`](examples/deferred_renderer/deferred_renderer.cpp): GPU-compute simulation and
-  mesh-shader rendering in a multi-pass workload with pointer-based scene data, barriers between
-  passes, and timeline-managed CPU/GPU overlap.
-
-They can be run from their corresponding directories under `build/examples` when
-`NOGRAPHICSAPI_BUILD_EXAMPLES` is enabled.
-
-## Hardware support
-
-Driver support was checked on 5 September 2026 against the latest available packages; linked reports
-are representative snapshots. `create_device()` remains authoritative; Vulkan 1.4 alone does not
-provide the required new extensions.
-
-The latest available Windows drivers are [AMD Adrenalin 26.9.1](https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-9-1.html)
+The table preserves the driver reports checked on **5 September 2026**. These are compatibility
+snapshots, not a live driver list. The checked Windows packages were
+[AMD Adrenalin 26.9.1](https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-9-1.html)
 and [NVIDIA 616.64 WHQL](https://us.download.nvidia.com/Windows/616.64/616.64-win11-win10-release-notes.pdf).
 
-| Architecture | Current driver | Products | CPU-visible heap | Required extensions |
+| Architecture | Driver snapshot | Products | CPU-visible heap | Required extensions |
 | --- | --- | --- | --- | --- |
 | AMD RDNA 2 (dGPU) | Windows / Adrenalin 26.9.1 | [RX 6000][rdna2-rebar] | PCIe ReBAR or<br>🔴 [256 MiB fixed BAR][rdna2-fixed] | 🔴 Unsupported |
 | AMD RDNA 2 (iGPU) | Windows / Adrenalin 26.9.1 | [600M](https://vulkan.gpuinfo.org/displayreport.php?id=47714) | UMA | 🔴 Unsupported |
@@ -191,64 +104,95 @@ and [NVIDIA 616.64 WHQL](https://us.download.nvidia.com/Windows/616.64/616.64-wi
 | AMD RDNA 3 (dGPU) | Windows / Adrenalin 26.9.1 | [RX 7000](https://vulkan.gpuinfo.org/displayreport.php?id=51443) | PCIe ReBAR | Supported |
 | AMD RDNA 3 (iGPU) | Windows / Adrenalin 26.9.1 | [700M](https://vulkan.gpuinfo.org/displayreport.php?id=49646) | UMA | Supported |
 | AMD RDNA 4 (dGPU) | Windows / Adrenalin 26.9.1 | [RX 9000](https://vulkan.gpuinfo.org/displayreport.php?id=51293) | PCIe ReBAR | Supported |
-| NVIDIA Turing | Windows / NVIDIA 616.64 | [GTX 16 series][gtx16] | 🔴 [256 MiB fixed BAR][turing-rebar] (214 MiB exposed) | Supported |
-| NVIDIA Turing | Windows / NVIDIA 616.64 | [RTX 20 series][turing] | 🔴 [256 MiB fixed BAR][turing-rebar] (214 MiB exposed) | Supported |
+| NVIDIA Turing | Windows / NVIDIA 616.64 | [GTX 16 series][gtx16] | 🔴 [256 MiB fixed BAR][turing-rebar] | Supported |
+| NVIDIA Turing | Windows / NVIDIA 616.64 | [RTX 20 series][turing] | 🔴 [256 MiB fixed BAR][turing-rebar] | Supported |
 | NVIDIA Ampere | Windows / NVIDIA 616.64 | [RTX 30 series](https://vulkan.gpuinfo.org/displayreport.php?id=51549) | PCIe ReBAR | Supported |
 | NVIDIA Ada Lovelace | Windows / NVIDIA 616.64 | [RTX 40 series](https://vulkan.gpuinfo.org/displayreport.php?id=51469) | PCIe ReBAR | Supported |
 | NVIDIA Blackwell | Windows / NVIDIA 616.64 | [RTX 50 series](https://vulkan.gpuinfo.org/displayreport.php?id=51573) | PCIe ReBAR | Supported |
 
-🔴 marks missing required extensions or a capacity-limited fixed BAR. All checked ReBAR GPUs expose
-their main VRAM heap as CPU-visible; availability depends on platform firmware. A fixed BAR can still
-satisfy the memory requirement, but limits the default CPU-visible heaps; GPU-only allocations
-can use separate VRAM.
+🔴 marks missing extensions or a capacity-limited fixed BAR. Mapped heaps require coherent CPU-visible
+GPU memory. Enable ReBAR where available on discrete GPUs; integrated GPUs use UMA. A fixed BAR can
+still work, but limits mapped-heap capacity. Separate GPU-only allocations can use the remaining VRAM.
+UMA heap sizes depend on system configuration.
 
-Checked UMA heap sizes are 5.1 GiB on a Windows
-[Radeon 680M](https://vulkan.gpuinfo.org/displayreport.php?id=47714), 5.8 GiB on
-[Steam Deck](https://vulkan.gpuinfo.org/displayreport.php?id=51189), and 21.2 GiB on a Windows
-[Radeon 780M](https://vulkan.gpuinfo.org/displayreport.php?id=49646); they vary with system configuration.
+The checked Windows RDNA 2 reports lack descriptor-heap support.
+[Pascal / GTX 10](https://vulkan.gpuinfo.org/displayreport.php?id=51084) lacks the required extensions.
+Intel Windows support was not verified; the checked
+[Arc report](https://vulkan.gpuinfo.org/displayreport.php?id=51355) also lacks required extensions.
+Mesa RADV and ANV [26.2+](https://docs.mesa3d.org/relnotes/26.2.0.html) expose the required extensions
+on the reported Linux/SteamOS targets.
 
-Current Windows RDNA 2 reports lack `VK_EXT_descriptor_heap`; the checked RDNA 3 and RDNA 4 AMD GPUs
-and all listed NVIDIA GPUs advertise every required extension. With Mesa
-[RADV 26.2 or newer](https://docs.mesa3d.org/relnotes/26.2.0.html), Steam Deck also has all required
-extensions. Linux/SteamOS window presentation is not implemented yet and is planned for a near-term update.
+See [known driver issues](docs/known-driver-issues.md) for observed problems and workarounds.
 
-🔴 [Pascal / GeForce GTX 10](https://vulkan.gpuinfo.org/displayreport.php?id=51084) is below the NVIDIA
-floor: it lacks all four new extensions and exposes a 214 MiB fixed BAR.
+## Windows installation and quick start
 
-Intel Windows support is not verified. The latest public
-[Arc report](https://vulkan.gpuinfo.org/displayreport.php?id=51355) lacks the descriptor-heap,
-device-address-command, and shader-untyped-pointer extensions. Mesa ANV
-[26.2 or newer](https://docs.mesa3d.org/relnotes/26.2.0.html) exposes the required extensions on Linux,
-but this repository currently lacks Linux swap chain support (to be implemented).
+1. Install [Visual Studio 2022](https://visualstudio.microsoft.com/vs/older-downloads/) with the
+   [Desktop development with C++ workload](https://learn.microsoft.com/en-us/cpp/build/vscpp-step-0-installation?view=msvc-170),
+   including the Windows SDK. The supplied `msvc` preset targets Visual Studio 2022 x64.
+2. Install [CMake 3.24+](https://cmake.org/download/) and make `cmake` available on `PATH`.
+3. Install the [Vulkan SDK 1.4.357+](https://vulkan.lunarg.com/sdk/home). Shader validation requires
+   SPIRV-Tools 2026.3+; make the SDK's `Bin` directory, containing `spirv-val.exe`, available on `PATH`.
+4. Use Slang 2026.13.1+ from the Vulkan SDK, or download a [standalone Windows x64 release](https://github.com/shader-slang/slang/releases),
+   extract it, and add its `bin` directory to `PATH`.
+5. Install a GPU driver meeting the hardware requirements above. The Vulkan SDK does not replace
+   the GPU driver.
 
+Clone the repository or download its source archive, then open PowerShell in the repository directory.
+Configure, build, test, and run the triangle example:
+
+```powershell
+cmake --preset msvc
+cmake --build --preset msvc-release
+ctest --preset msvc-release
+.\build-msvc\examples\triangle\Release\example_triangle.exe
+```
+
+To open the generated solution in Visual Studio, use `build-msvc/NoGraphicsAPI.sln`.
+For a validation-enabled Debug build, use `msvc-debug` in the build and test commands.
+
+If the shader tools are not on `PATH`, supply their locations when configuring. Adjust these example
+paths to your installations:
+
+```powershell
+cmake --preset msvc -DNOGRAPHICSAPI_SLANGC=C:/Slang/2026.14.1/bin/slangc.exe -DNOGRAPHICSAPI_SPIRV_VAL=C:/VulkanSDK/1.4.357.0/Bin/spirv-val.exe
+```
+
+To install the Release libraries and headers locally:
+
+```powershell
+cmake --install build-msvc --config Release --prefix ./install
+```
+
+The install includes the independent NoGraphicsAPI and NoGraphicsAPIUtility CMake packages.
+See [building and integration](docs/building.md) for using them in your own project or building
+the library without examples and tests.
+
+## Examples
+
+- [Triangle](examples/triangle/triangle.cpp) — the smallest rendering example.
+- [Cube](examples/cube/cube.cpp) — GPU-pointer vertex fetch and bindless textures.
+- [Deferred renderer](examples/deferred_renderer/deferred_renderer.cpp) — compute simulation and mesh-shader rendering.
+
+The executables are under `build-msvc/examples/<example>/Release` when using the supplied preset.
+
+## Documentation
+
+- [Comparison with *No Graphics API*](docs/no-graphics-api-comparison.md)
+- [Vulkan support and behavior](docs/vulkan-support.md)
+- [Slang shaders and root ABI](docs/slang.md)
+- [Public API](include/NoGraphicsAPI/NoGraphicsAPI.hpp)
+- [Metal porting plan — not implemented](docs/metal-porting.md)
+
+## License
+
+NoGraphicsAPI and NoGraphicsAPIUtility use the [MIT License](LICENSE).
+See [third-party notices](THIRD_PARTY_NOTICES.md) for bundled assets and dependencies.
+
+[descriptor-heap]: https://www.khronos.org/blog/vulkan-introduces-roadmap-2026-and-new-descriptor-heap-extension
+[address-commands]: https://docs.vulkan.org/refpages/latest/refpages/source/VK_KHR_device_address_commands.html
+[unified-layouts]: https://www.khronos.org/blog/so-long-image-layouts-simplifying-vulkan-synchronisation
 [rdna2-rebar]: https://vulkan.gpuinfo.org/displayreport.php?id=42800
 [rdna2-fixed]: https://vulkan.gpuinfo.org/displayreport.php?id=48951
 [gtx16]: https://vulkan.gpuinfo.org/displayreport.php?id=51563
 [turing]: https://vulkan.gpuinfo.org/displayreport.php?id=51475
 [turing-rebar]: https://www.nvidia.com/en-us/geforce/graphics-cards/compare/?section=compare-specs
-
-## Current scope
-
-The library has been reviewed with GPT-6 Astra Ultra, but remains a prototype and may contain bugs. Please report issues.
-
-Implemented today: graphics, task/mesh, and compute PSOs; direct and indirect work; GPU-address copies;
-application-owned descriptor heaps; common texture types and views; dynamic rendering and
-viewport/scissor/depth-stencil state; global barriers; timeline submission; deferred destruction; and Win32 presentation.
-
-This is a deliberately single-threaded, single-queue graphics API. Ray tracing, sparse memory,
-device-generated command graphs beyond the existing indirect operations, pipeline caching, MSAA, non-Win32
-presentation, and a Metal backend are outside the current implementation. The public header remains the source
-of truth for the exact API surface.
-
-Further reading:
-
-- [Comparison with *No Graphics API*](docs/no-graphics-api-comparison.md)
-- [Vulkan extension and command mapping](docs/vulkan-support.md)
-- [Slang shader contract and root ABI](docs/slang.md)
-- [Proposed Metal 4 port](docs/metal-porting.md)
-
-## License
-
-NoGraphicsAPI and NoGraphicsAPIUtility are distributed under the [MIT License](LICENSE). The cube
-example's texture is derived from Vulkan-Tools and is redistributed under Apache-2.0. See
-[third-party notices](THIRD_PARTY_NOTICES.md) for complete attribution and license details.

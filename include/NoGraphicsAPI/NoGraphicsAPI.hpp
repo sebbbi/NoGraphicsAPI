@@ -19,6 +19,7 @@ struct uint32x3
 };
 
 struct Device;
+struct CommandPool;
 struct Texture;
 struct RenderView;
 struct PSO;
@@ -84,6 +85,13 @@ struct TimelinePoint
     uint64 value = 0;
 };
 
+struct SubmitDesc
+{
+    Span<CommandBuffer* const> commands = {};
+    Span<const TimelinePoint> waits = {}; // GPU waits cover all command stages.
+    TimelinePoint completion = {}; // Required for every submission.
+};
+
 enum class Format : uint8
 {
     r8_srgb,
@@ -112,7 +120,6 @@ enum class Format : uint8
     rgba16_uint,
     r32_uint,
     rg32_uint,
-    rgb32_uint,
     rgba32_uint,
 
     r16_float,
@@ -120,7 +127,6 @@ enum class Format : uint8
     rgba16_float,
     r32_float,
     rg32_float,
-    rgb32_float,
     rgba32_float,
 
     rgb10a2_unorm,
@@ -216,12 +222,6 @@ struct TextureFormatInfo
             .bytes_per_block = 8,
             .depth = format == Format::d32_float_s8_uint,
             .stencil = format == Format::d32_float_s8_uint,
-        };
-    case Format::rgb32_uint:
-    case Format::rgb32_float:
-        return {
-            .block_extent = {.x = 1, .y = 1},
-            .bytes_per_block = 12,
         };
     case Format::rgba32_uint:
     case Format::rgba32_float:
@@ -446,6 +446,14 @@ struct DeviceMemoryInfo
 
 struct DeviceCaps
 {
+    const char* device_name = nullptr;
+    // Flat queue indices: general first, then compute-only, then copy-only. Queue zero supports presentation.
+    uint32 queue_count = 0;
+    uint32 general_queue_count = 0;
+    uint32 compute_queue_count = 0;
+    uint32 copy_queue_count = 0;
+    // Copy-only texture offsets/extents align to these texel-block counts, except at mip edges. Zero means whole mip levels only.
+    uint32x3 copy_texture_granularity = {.x = 1, .y = 1, .z = 1};
     uint64 max_push_data_size = 0;
     // Common element size for suballocating TextureHeap storage; every SizeAlign::align divides this value.
     uint64 texture_heap_alignment = 0;
@@ -467,13 +475,17 @@ struct DeviceCaps
     bool swapchain_maintenance1 = false;
 };
 
-// A windowed device and every call using it must remain on the native
-// window's message-pump thread. The window must outlive the device.
+// Windowed device creation/destruction, drawable queries, acquire, and presentation stay on the window's message-pump thread.
+// The window must outlive the device. Other calls follow the object-level threading contract below.
 struct DeviceDesc
 {
     void* window = nullptr;
     Format swapchain_format = Format::undefined;
     uint32 desired_swapchain_image_count = 2; // 1..8 presentation contexts.
+    // Counts are capped to each family's capacity. A nonzero request requires that kind of queue to be available.
+    uint32 desired_queue_count = 1; // General graphics + compute queues; must be nonzero.
+    uint32 desired_compute_queue_count = 0;
+    uint32 desired_copy_queue_count = 0;
     uint32 timestamp_query_count = 256; // Per command buffer; zero disables timestamps.
 };
 
@@ -668,10 +680,26 @@ struct RenderingDesc
     StencilAttachment stencil = {};
 };
 
+enum class RenderingFlags : uint32
+{
+    none = 0,
+    suspending = 2,
+    resuming = 4,
+};
+
+constexpr RenderingFlags operator|(RenderingFlags lhs, RenderingFlags rhs) noexcept
+{
+    return static_cast<RenderingFlags>(static_cast<uint32>(lhs) | static_cast<uint32>(rhs));
+}
+
 // Rendering and raster PSOs accept at most eight color attachments. A render pass needs at least one attachment to infer its area.
 // All resource destruction is immediate. Destroy resources only when no recorded or executing GPU frame uses them.
 // The optional NoGraphicsAPIUtility DeleteQueue can defer destruction until a submitted frame completes.
 // Wait for all submitted frames to drain before destroying the device.
+// Distinct resource creation/destruction, immutable queries, and timeline waits may run concurrently on one device.
+// Resource lifetime changes must be synchronized with every CPU/GPU use of that resource. Descriptor writes require disjoint destinations.
+// Each (device, queue_index) and command pool (including recording its buffers) is externally synchronized; different queues/pools may run concurrently.
+// Device idle/destruction requires exclusive access. Destroy command pools before their device. There are no internal queue or pool locks.
 [[nodiscard]] DeviceInit create_device(const DeviceDesc& desc = {}) noexcept;
 void destroy_device(Device* device) noexcept;
 [[nodiscard]] const DeviceInfo& get_device_info(const Device* device) noexcept;
@@ -686,8 +714,11 @@ void destroy_timeline_semaphore(TimelineSemaphore* semaphore) noexcept;
 void wait_timeline(TimelinePoint point) noexcept;
 void wait_idle(Device* device) noexcept;
 
-[[nodiscard]] SwapchainFrame acquire(Device* device) noexcept; // Empty while the drawable extent is zero.
-void submit_and_present(Device* device, Span<CommandBuffer* const> commands, TimelinePoint completion) noexcept;
+// Acquire outside a render pass. Later buffers in the same presentation submission may also access the returned image.
+// submit_and_present prepares the image for presentation after all submitted buffers.
+// Empty while the drawable extent is zero. A nonempty acquire must be submitted with submit_and_present on queue zero.
+[[nodiscard]] SwapchainFrame acquire(CommandBuffer* commands) noexcept;
+void submit_and_present(Device* device, const SubmitDesc& desc) noexcept;
 
 // Every non-null returned pointer is 16-byte aligned. Descriptor heaps are exact allocations;
 // cpu_visible, gpu_only, and readback heaps are raw blocks for application-side suballocation.
@@ -711,7 +742,8 @@ template<typename T>
 [[nodiscard]] TextureHeap create_texture_heap(Device* device, uint64 byte_count) noexcept;
 void destroy_texture_heap(const TextureHeap& heap) noexcept;
 [[nodiscard]] SizeAlign get_texture_size_align(Device* device, const TextureDesc& desc) noexcept;
-[[nodiscard]] Texture* create_texture(Device* device, const TextureDesc& desc, const TextureHeap& heap, uint64 offset) noexcept;
+// Records texture initialization into commands. Use outside of a render pass. Commands must be submitted before other use of the texture.
+[[nodiscard]] Texture* create_texture(CommandBuffer* commands, const TextureDesc& desc, const TextureHeap& heap, uint64 offset) noexcept;
 void destroy_texture(Texture* texture) noexcept;
 [[nodiscard]] RenderView* create_render_view(Texture* texture, const RenderViewDesc& desc = {}) noexcept;
 void destroy_render_view(RenderView* render_view) noexcept;
@@ -724,26 +756,38 @@ void write_sampler_descriptor(Device* device, void* cpu_destination, const Sampl
 [[nodiscard]] PSO* create_compute_pso(Device* device, Span<const uint32> compute_spirv) noexcept;
 void destroy_pso(PSO* pso) noexcept;
 
-// Create textures before beginning commands. The first begun command buffer initializes them and must be submitted first.
-// Every begun command buffer must be included exactly once in the next submit or submit_and_present call.
-[[nodiscard]] CommandBuffer* begin_commands(Device* device) noexcept;
-void submit(Span<CommandBuffer* const> commands, TimelinePoint completion) noexcept;
+// Pools retain command storage until destruction. Reset only after every submitted buffer from this pool completes; unsubmitted buffers are discarded.
+// Reset invalidates all previously returned CommandBuffer handles. Use one pool per worker and in-flight frame for independent recording/reuse.
+// Buffers from a pool must be submitted to the selected queue's family.
+[[nodiscard]] CommandPool* create_command_pool(Device* device, uint32 queue_index = 0) noexcept;
+void destroy_command_pool(CommandPool* pool) noexcept;
+void reset_command_pool(CommandPool* pool) noexcept;
+[[nodiscard]] CommandBuffer* begin_commands(CommandPool* pool) noexcept;
+void end_commands(CommandBuffer* commands) noexcept;
+// Submit any ended subset exactly once before pool reset. Order completion semaphore signal values across queues.
+// queue_index must be less than DeviceCaps::queue_count; omitted selects queue zero.
+void submit(Device* device, const SubmitDesc& desc, uint32 queue_index = 0) noexcept;
 
 void set_texture_descriptor_heap(CommandBuffer* commands, GpuRange heap) noexcept; // Heap range must be full GpuHeap range
 void set_sampler_descriptor_heap(CommandBuffer* commands, GpuRange heap) noexcept; // Heap range must be full GpuHeap range
 
 void copy_memory(CommandBuffer* commands, GpuRange source, GpuRange destination) noexcept;
+// Depth/stencil copies require a general queue. Copy-only queues also require DeviceCaps::copy_texture_granularity alignment.
 void copy_memory_to_texture(CommandBuffer* commands, GpuRange source, Texture* destination, const TextureCopyDesc& copy = {}) noexcept;
 void copy_texture_to_memory(CommandBuffer* commands, Texture* source, GpuRange destination, const TextureCopyDesc& copy = {}) noexcept;
 
 void barrier(CommandBuffer* commands, Stage before, Access before_access, Stage after, Access after_access) noexcept;
 
 // Up to DeviceDesc::timestamp_query_count markers per command buffer. stage must map to a single GPU pipeline stage.
+// Ignored, leaving the destination unchanged, when timestamps are disabled or the queue lacks profiling support.
 // Destinations must be 8-byte aligned and distinct until submission completes.
-// Results are copied at command-buffer end; read mapped readback memory only after submission completes.
+// Results are available after submission completes; only then read mapped readback memory.
 void write_timestamp(CommandBuffer* commands, uint64* gpu_destination, Stage stage = Stage::all_commands) noexcept;
 
-void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc) noexcept;
+// Each segment needs matching attachments, load/store operations, and clear values, and its own begin/end_render_pass pair.
+// Submit the complete suspend/resume chain in order in one batch. No action or synchronization commands may occur between segments.
+// Resuming skips load/clear operations; suspending defers store operations. Command-buffer bindings are not inherited.
+void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc, RenderingFlags flags = RenderingFlags::none) noexcept;
 void end_render_pass(CommandBuffer* commands) noexcept;
 
 // begin_render_pass resets a full render-area viewport and scissor and disables depth/stencil; these commands override those defaults until the next pass
