@@ -23,7 +23,7 @@ function(NoGraphicsAPI_require_tool_version program argument name minimum patter
 endfunction()
 
 NoGraphicsAPI_require_tool_version(
-    "${NOGRAPHICSAPI_SLANGC}" -version Slang 2026.14.1
+    "${NOGRAPHICSAPI_SLANGC}" -version Slang 2026.13.1
     "([0-9]+\\.[0-9]+(\\.[0-9]+)?)")
 NoGraphicsAPI_require_tool_version(
     "${NOGRAPHICSAPI_SPIRV_VAL}" --version SPIRV-Tools 2026.3
@@ -32,7 +32,7 @@ NoGraphicsAPI_require_tool_version(
 function(NoGraphicsAPI_compile_slang output source entry stage)
     cmake_parse_arguments(SLANG "" "" "DEPENDS" ${ARGN})
     set(options)
-    if(stage STREQUAL "mesh")
+    if(stage STREQUAL "mesh" OR stage STREQUAL "amplification")
         list(APPEND options -capability spvMeshShadingEXT)
     endif()
 

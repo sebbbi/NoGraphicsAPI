@@ -378,23 +378,24 @@ enum class StencilOp : uint8
 // Ordered by Vulkan's logical execution order where stages are comparable.
 // A barrier's before execution scope includes the selected and logically earlier
 // stages; its after execution scope includes the selected and logically later
-// stages. Vertex and mesh are alternative graphics branches, depth_stencil_tests
+// stages. Vertex and task/mesh are alternative graphics branches, depth_stencil_tests
 // spans early and late tests around fragment, compute and transfer are separate
 // pipelines, host is a pseudo-stage, and none/all_commands are special masks.
 enum class Stage : uint64
 {
     none = 0,
-    indirect = 1ull << 6u,
-    index_input = 1ull << 7u,
-    vertex = 1ull << 1u,
-    mesh = 1ull << 9u,
-    depth_stencil_tests = 1ull << 8u,
-    fragment = 1ull << 2u,
-    color_output = 1ull << 4u,
-    compute = 1ull << 3u,
-    transfer = 1ull << 0u,
-    host = 1ull << 5u, // Barrier destination only, paired with host_read.
-    all_commands = 1ull << 10u, // All GPU command stages; excludes host.
+    indirect = 1ull << 0u,
+    index_input = 1ull << 1u,
+    vertex = 1ull << 2u,
+    task = 1ull << 3u,
+    mesh = 1ull << 4u,
+    depth_stencil_tests = 1ull << 5u,
+    fragment = 1ull << 6u,
+    color_output = 1ull << 7u,
+    compute = 1ull << 8u,
+    transfer = 1ull << 9u,
+    host = 1ull << 10u, // Barrier destination only, paired with host_read.
+    all_commands = 1ull << 11u, // All GPU command stages; excludes host.
 };
 
 constexpr Stage operator|(Stage lhs, Stage rhs) noexcept
@@ -619,6 +620,7 @@ struct GraphicsPSODesc
 
 struct MeshPSODesc
 {
+    Span<const uint32> task_spirv = {}; // Empty launches mesh workgroups directly; otherwise draws launch taskMain workgroups.
     Span<const uint32> mesh_spirv = {};
     Span<const uint32> fragment_spirv = {}; // Empty omits the fragment stage, for depth-only rasterization.
     Span<const ColorTargetDesc> color_targets = {};
@@ -751,6 +753,7 @@ void set_depth_stencil(CommandBuffer* commands, const DepthStencilState& state) 
 
 void bind_pso(CommandBuffer* commands, const PSO* pso) noexcept;
 
+// Draw and dispatch root structures must fit 256 bytes. Larger data belongs in GPU memory referenced by root pointers.
 void draw(CommandBuffer* commands, ByteSpan root, uint32 vertex_count, uint32 instance_count = 1, uint32 first_vertex = 0, uint32 first_instance = 0) noexcept;
 void draw_indexed(CommandBuffer* commands, ByteSpan root, GpuRange indices, IndexType type, uint32 index_count, uint32 instance_count = 1,
                   uint32 first_index = 0, int32 vertex_offset = 0, uint32 first_instance = 0) noexcept;

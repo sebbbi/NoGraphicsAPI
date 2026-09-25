@@ -37,3 +37,25 @@ target_link_libraries(test_placed_texture PRIVATE NoGraphicsAPIUtility::textures
 add_test(NAME test_placed_texture COMMAND test_placed_texture)
 set_tests_properties(test_command_context test_placed_texture PROPERTIES
     SKIP_RETURN_CODE 77 TIMEOUT 60 FAIL_REGULAR_EXPRESSION "Validation Error")
+
+if(NOT COMMAND NoGraphicsAPI_compile_slang)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/../examples/NoGraphicsAPI_slang.cmake)
+endif()
+set(task_shader_spv ${CMAKE_CURRENT_BINARY_DIR}/shaders/task_shader.task.spv)
+set(task_mesh_spv ${CMAKE_CURRENT_BINARY_DIR}/shaders/task_mesh.mesh.spv)
+set(task_fragment_spv ${CMAKE_CURRENT_BINARY_DIR}/shaders/task_mesh.frag.spv)
+NoGraphicsAPI_compile_slang(${task_shader_spv} ${CMAKE_CURRENT_SOURCE_DIR}/task_shader.slang taskMain amplification
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/task_shader_shared.h ${CMAKE_CURRENT_SOURCE_DIR}/task_shader_common.h)
+NoGraphicsAPI_compile_slang(${task_mesh_spv} ${CMAKE_CURRENT_SOURCE_DIR}/task_mesh.slang meshMain mesh
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/task_mesh_shared.h ${CMAKE_CURRENT_SOURCE_DIR}/task_shader_common.h)
+NoGraphicsAPI_compile_slang(${task_fragment_spv} ${CMAKE_CURRENT_SOURCE_DIR}/task_mesh.slang fragmentMain fragment
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/task_mesh_shared.h ${CMAKE_CURRENT_SOURCE_DIR}/task_shader_common.h)
+add_executable(test_task_shader task_shader_test.cpp ${task_shader_spv} ${task_mesh_spv} ${task_fragment_spv})
+NoGraphicsAPI_disable_exceptions(test_task_shader)
+target_link_libraries(test_task_shader PRIVATE NoGraphicsAPI::NoGraphicsAPI NoGraphicsAPIUtility::types)
+target_compile_definitions(test_task_shader PRIVATE
+    NOGRAPHICSAPI_TASK_TEST_TASK_SPV="${task_shader_spv}"
+    NOGRAPHICSAPI_TASK_TEST_MESH_SPV="${task_mesh_spv}"
+    NOGRAPHICSAPI_TASK_TEST_FRAGMENT_SPV="${task_fragment_spv}")
+add_test(NAME test_task_shader COMMAND test_task_shader)
+set_tests_properties(test_task_shader PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60 FAIL_REGULAR_EXPRESSION "Validation Error;NoGraphicsAPI validation:")

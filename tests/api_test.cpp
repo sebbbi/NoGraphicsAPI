@@ -168,10 +168,11 @@ static_assert(static_cast<uint8>(gpu::Error::none) == 0 &&
               static_cast<uint8>(gpu::Error::device_lost) == 2 &&
               static_cast<uint8>(gpu::Error::driver_error) == 3);
 static_assert(static_cast<uint32>(gpu::TextureUsage::sampled | gpu::TextureUsage::storage) == 3);
-static_assert(static_cast<uint64>(gpu::Stage::vertex | gpu::Stage::fragment) == 6);
-static_assert(static_cast<uint64>(gpu::Stage::all_commands) == (1ull << 10u));
+static_assert(static_cast<uint64>(gpu::Stage::vertex | gpu::Stage::fragment) == 68);
+static_assert(static_cast<uint64>(gpu::Stage::task) == (1ull << 3u));
+static_assert(static_cast<uint64>(gpu::Stage::all_commands) == (1ull << 11u));
 static_assert(static_cast<uint64>(gpu::Stage::all_commands | gpu::Stage::host) ==
-              ((1ull << 10u) | (1ull << 5u)));
+              ((1ull << 11u) | (1ull << 10u)));
 static_assert(static_cast<uint64>(gpu::Access::shader_read | gpu::Access::shader_write) == 12);
 
 using ConstWordSpan = gpu::Span<const uint32>;
@@ -440,7 +441,8 @@ static_assert(default_graphics_pso.vertex_spirv.size == 0 &&
               default_graphics_pso.depth_format == gpu::Format::undefined &&
               default_graphics_pso.stencil_format == gpu::Format::undefined);
 constexpr gpu::MeshPSODesc default_mesh_pso{};
-static_assert(default_mesh_pso.mesh_spirv.size == 0 &&
+static_assert(default_mesh_pso.task_spirv.data == nullptr && default_mesh_pso.task_spirv.size == 0 &&
+              default_mesh_pso.mesh_spirv.size == 0 &&
               default_mesh_pso.fragment_spirv.size == 0 &&
               default_mesh_pso.color_targets.size == 0 &&
               default_mesh_pso.depth_format == gpu::Format::undefined &&

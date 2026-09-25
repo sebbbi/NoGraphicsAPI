@@ -42,7 +42,7 @@ or `VkPipelineLayout`. Its central extensions are:
 - `VK_KHR_shader_untyped_pointers` as the descriptor-heap SPIR-V prerequisite;
 - `VK_KHR_unified_image_layouts`, when available, to optimize ordinary texture access in
   `VK_IMAGE_LAYOUT_GENERAL`;
-- `VK_EXT_mesh_shader` for mesh pipelines and dispatch.
+- `VK_EXT_mesh_shader` for task/mesh pipelines and dispatch.
 
 NoGraphicsAPI is a low-level, thin Vulkan wrapper. Debug builds enable `VK_EXT_debug_utils` and the
 Khronos validation layer when available.
@@ -101,8 +101,8 @@ float4x4 mvp = root.mvp;
 
 The draw or dispatch copies the root bytes immediately through `vkCmdPushDataEXT`; the root does not
 need to outlive the call. Shared structures use C layout, and matrix-bearing roots use row-major matrix
-layout. Root values must be trivially copyable, have a size divisible by four, and be no larger than
-`DeviceCaps::max_push_data_size`.
+layout. Root values must be trivially copyable, have a size divisible by four, and fit within 256 bytes
+and `DeviceCaps::max_push_data_size`. Larger data remains accessible through GPU pointers in the root.
 
 Public descriptor structures have useful defaults. Call sites use C++20 designated initializers to
 name only fields that differ from those defaults. `Span` and `ByteSpan` are non-owning pointer/count
@@ -191,11 +191,11 @@ and [NVIDIA 616.64 WHQL](https://us.download.nvidia.com/Windows/616.64/616.64-wi
 | AMD RDNA 3 (dGPU) | Windows / Adrenalin 26.9.1 | [RX 7000](https://vulkan.gpuinfo.org/displayreport.php?id=51443) | PCIe ReBAR | Supported |
 | AMD RDNA 3 (iGPU) | Windows / Adrenalin 26.9.1 | [700M](https://vulkan.gpuinfo.org/displayreport.php?id=49646) | UMA | Supported |
 | AMD RDNA 4 (dGPU) | Windows / Adrenalin 26.9.1 | [RX 9000](https://vulkan.gpuinfo.org/displayreport.php?id=51293) | PCIe ReBAR | Supported |
-| NVIDIA Turing | Windows / NVIDIA 616.64 | [GTX 1600][gtx16] | 🔴 [256 MiB fixed BAR][turing-rebar] (214 MiB exposed) | Supported |
-| NVIDIA Turing | Windows / NVIDIA 616.64 | [RTX 2000][turing] | 🔴 [256 MiB fixed BAR][turing-rebar] (214 MiB exposed) | Supported |
-| NVIDIA Ampere | Windows / NVIDIA 616.64 | [RTX 3000](https://vulkan.gpuinfo.org/displayreport.php?id=51549) | PCIe ReBAR | Supported |
-| NVIDIA Ada Lovelace | Windows / NVIDIA 616.64 | [RTX 4000](https://vulkan.gpuinfo.org/displayreport.php?id=51469) | PCIe ReBAR | Supported |
-| NVIDIA Blackwell | Windows / NVIDIA 616.64 | [RTX 5000](https://vulkan.gpuinfo.org/displayreport.php?id=51573) | PCIe ReBAR | Supported |
+| NVIDIA Turing | Windows / NVIDIA 616.64 | [GTX 16 series][gtx16] | 🔴 [256 MiB fixed BAR][turing-rebar] (214 MiB exposed) | Supported |
+| NVIDIA Turing | Windows / NVIDIA 616.64 | [RTX 20 series][turing] | 🔴 [256 MiB fixed BAR][turing-rebar] (214 MiB exposed) | Supported |
+| NVIDIA Ampere | Windows / NVIDIA 616.64 | [RTX 30 series](https://vulkan.gpuinfo.org/displayreport.php?id=51549) | PCIe ReBAR | Supported |
+| NVIDIA Ada Lovelace | Windows / NVIDIA 616.64 | [RTX 40 series](https://vulkan.gpuinfo.org/displayreport.php?id=51469) | PCIe ReBAR | Supported |
+| NVIDIA Blackwell | Windows / NVIDIA 616.64 | [RTX 50 series](https://vulkan.gpuinfo.org/displayreport.php?id=51573) | PCIe ReBAR | Supported |
 
 🔴 marks missing required extensions or a capacity-limited fixed BAR. All checked ReBAR GPUs expose
 their main VRAM heap as CPU-visible; availability depends on platform firmware. A fixed BAR can still
@@ -231,11 +231,11 @@ but this repository currently lacks Linux swap chain support (to be implemented)
 
 The library has been reviewed with GPT-6 Astra Ultra, but remains a prototype and may contain bugs. Please report issues.
 
-Implemented today: graphics, mesh, and compute PSOs; direct and indirect work; GPU-address copies;
+Implemented today: graphics, task/mesh, and compute PSOs; direct and indirect work; GPU-address copies;
 application-owned descriptor heaps; common texture types and views; dynamic rendering and
 viewport/scissor/depth-stencil state; global barriers; timeline submission; deferred destruction; and Win32 presentation.
 
-This is a deliberately single-threaded, single-queue graphics API. Ray tracing, task shaders, sparse memory,
+This is a deliberately single-threaded, single-queue graphics API. Ray tracing, sparse memory,
 device-generated command graphs beyond the existing indirect operations, pipeline caching, MSAA, non-Win32
 presentation, and a Metal backend are outside the current implementation. The public header remains the source
 of truth for the exact API surface.
