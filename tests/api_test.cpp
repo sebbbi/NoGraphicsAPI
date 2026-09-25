@@ -339,11 +339,20 @@ static_assert(sizeof(gpu::TextureHeap) == 16 && offsetof(gpu::TextureHeap, size)
 static_assert(sizeof(gpu::TimelinePoint) == 16 && offsetof(gpu::TimelinePoint, semaphore) == 0 &&
               offsetof(gpu::TimelinePoint, value) == 8);
 
+constexpr gpu::DeviceInfo default_device_info{};
+static_assert(default_device_info.device_name == nullptr && default_device_info.driver_name == nullptr &&
+              default_device_info.driver_info == nullptr && default_device_info.vendor_id == 0 &&
+              default_device_info.device_id == 0 && default_device_info.device_type == 0 &&
+              default_device_info.api_version == 0 && default_device_info.driver_version == 0);
+constexpr gpu::DeviceMemoryInfo default_device_memory_info{};
+static_assert(default_device_memory_info.device_local_memory_size == 0 &&
+              default_device_memory_info.host_visible_memory_size == 0 &&
+              default_device_memory_info.host_visible_device_local_memory_size == 0);
 constexpr gpu::DeviceCaps default_caps{};
 static_assert(default_caps.queue_count == 0 && default_caps.general_queue_count == 0 && default_caps.compute_queue_count == 0 &&
               default_caps.copy_queue_count == 0 && default_caps.copy_texture_granularity.x == 1 &&
               default_caps.copy_texture_granularity.y == 1 && default_caps.copy_texture_granularity.z == 1);
-static_assert(default_caps.device_name == nullptr && default_caps.max_push_data_size == 0 &&
+static_assert(default_caps.max_push_data_size == 0 &&
               default_caps.texture_heap_alignment == 0 &&
               default_caps.texture_descriptor_size == 0 &&
               default_caps.sampler_descriptor_size == 0 && !default_caps.texture_compression_bc &&

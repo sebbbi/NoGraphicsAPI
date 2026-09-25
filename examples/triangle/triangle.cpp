@@ -20,7 +20,7 @@ int main()
         return 1;
     }
 
-    printf("Using %s\n", get_device_caps(device).device_name);
+    printf("Using %s\n", get_device_info(device).device_name);
 
     const Span<uint32> vertex_spirv = read_spirv(NOGRAPHICSAPI_VERTEX_SPV_PATH);
     const Span<uint32> fragment_spirv = read_spirv(NOGRAPHICSAPI_FRAGMENT_SPV_PATH);
