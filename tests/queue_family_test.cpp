@@ -166,8 +166,9 @@ static bool run_case(Fixture& fixture, uint32 iteration) noexcept
     const uint64* timestamps = reinterpret_cast<const uint64*>(fixture.readback.range.cpu + timestamp_offset);
     for (uint32 index = 0; index < 8; index += 2)
     {
-        valid = timestamps[index] != 0xa5a5a5a5a5a5a5a5ull && timestamps[index + 1] != 0xa5a5a5a5a5a5a5a5ull &&
-                timestamps[index + 1] >= timestamps[index] && valid;
+        valid = valid && (get_device_caps(fixture.device).timestamp_period_ns != 0
+            ? timestamps[index] != 0xa5a5a5a5a5a5a5a5ull && timestamps[index + 1] != 0xa5a5a5a5a5a5a5a5ull && timestamps[index + 1] >= timestamps[index]
+            : timestamps[index] == 0xa5a5a5a5a5a5a5a5ull && timestamps[index + 1] == 0xa5a5a5a5a5a5a5a5ull);
     }
     for (uint64 index = 0; index < fixture.readback.range.size; ++index)
     {

@@ -2,7 +2,7 @@
 
 Sebastian Aaltonen's [*No Graphics API*](https://www.sebastianaaltonen.com/blog/no-graphics-api)
 proposes GPU pointers, application-owned descriptor heaps and synchronization without resource lists.
-NoGraphicsAPI implements that model with Vulkan 1.4 and Metal 4. One GPU root is shared across
+NoGraphicsAPI implements that model with Vulkan 1.4 and Metal 3/4. One GPU root is shared across
 graphics stages; each draw or dispatch takes an application-owned GPU pointer directly.
 
 | Area | NoGraphicsAPI |
@@ -28,8 +28,8 @@ not suballocate application data or track pointer lifetimes.
 
 Textures and samplers occupy application-selected descriptor indices. Opaque heaps provide indexed
 writes, range copies and binding, without descriptor sets, per-material binding tables or pipeline
-resource signatures. Metal uses a texture-view pool and sampler resource IDs; Vulkan uses native
-`VK_EXT_descriptor_heap` storage. The public contract exposes CPU descriptor operations, not arbitrary
+resource signatures. Metal uses texture-view pools on OS 26+, texture resource-ID tables on older OS versions,
+and sampler resource IDs. Vulkan uses native `VK_EXT_descriptor_heap` storage. The public contract exposes CPU descriptor operations, not arbitrary
 CPU/GPU descriptor-byte mutation. This retains slot ownership while supporting both representations.
 
 Unlike the post's embedded sampler values, sampler indices refer to a separate application-owned
@@ -42,9 +42,9 @@ Each draw or dispatch takes a GPU pointer to an application-owned root. Pointer 
 storage, and descriptor fields hold indices. The root and referenced resources survive GPU completion.
 Mapped frame storage and `BumpAllocator::allocate<T>()` provide transient roots without per-command driver allocation.
 
-Roots use shared C layout and row-major matrices. Vulkan pushes their 64-bit address and Metal updates
-its argument table. GPU work can write root contents before later commands consume them. All active
-graphics stages share one root; separate stage roots and GPU-generated binding commands are not exposed.
+Roots use shared C layout and row-major matrices. Vulkan pushes their 64-bit address, Metal 4 updates
+its argument table, and Metal 3 binds the backing buffer and offset. GPU work can write root contents before
+later commands consume them. All graphics stages share one root; separate stage roots and GPU-generated binding commands are not exposed.
 
 `ShaderStage` contains precompiled bytes, an entry name and compute/task/mesh threadgroup dimensions.
 Vulkan accepts SPIR-V; Metal accepts metallib. Both use the same Slang source and root structures.
@@ -65,9 +65,8 @@ gpu::barrier(commands, gpu::Stage::compute, gpu::Access::shader_write,
 ```
 
 Vulkan emits a global memory barrier and keeps ordinary images in `GENERAL`; optional unified image
-layouts optimize this policy. Initial texture and presentation transitions remain internal. Metal
-maps the same scopes to native stage dependencies. Applications still describe actual hazards and
-use timeline waits between queues.
+layouts optimize this policy. Initial texture and presentation transitions remain internal. Metal 4 maps the same scopes
+to native stage dependencies; Metal 3 uses encoder fences. Applications describe actual hazards and use timeline waits between queues.
 
 The post's split barriers can signal and wait on tokens at GPU addresses. That interface is not
 exposed: Vulkan has no equivalent command with the proposed configurable atomic/comparison operations.
@@ -78,7 +77,8 @@ control command-pool reset and reuse of upload ranges, descriptors, indirect arg
 placements. Resource destruction is immediate; deferred deletion is an optional utility policy.
 
 Index data, indirect arguments and copies use GPU ranges. Vulkan device-address commands consume
-them directly; Metal resolves backing buffers where native copy operations require handles. Indirect
+them directly when available. Otherwise Vulkan and Metal 3 resolve backing buffers and offsets through
+the same table used for Metal copies. Metal 4 draws and dispatches retain native address commands. Indirect
 mesh drawing is optional on Metal Apple7/Apple8 and reported by `DeviceCaps::indirect_mesh_draw`.
 GPU draw-count pointers, root arrays and per-stage root strides remain outside the public interface.
 
@@ -98,8 +98,8 @@ native presentation synchronization and image transitions.
 
 ## Native API requirements and limits
 
-Vulkan requires `VK_EXT_descriptor_heap`, `VK_KHR_shader_untyped_pointers`,
-`VK_KHR_device_address_commands` and `VK_EXT_mesh_shader`, plus the core features documented in
+Vulkan requires `VK_EXT_descriptor_heap`, `VK_KHR_shader_untyped_pointers`
+and `VK_EXT_mesh_shader`, plus the core features documented in
 [Vulkan support](vulkan-support.md). Descriptor-heap pipelines use no `VkDescriptorSetLayout`,
 `VkDescriptorPool`, `VkDescriptorSet` or `VkPipelineLayout`.
 

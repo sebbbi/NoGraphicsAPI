@@ -241,12 +241,13 @@ bool render_iteration(Fixture& fixture, uint32 iteration) noexcept
             valid &= pixel[0] == (covered ? 255 : 0) && pixel[1] == 0 && pixel[2] == 0 && pixel[3] == 255;
         }
     const uint64* timestamps = reinterpret_cast<const uint64*>(fixture.readback.range.cpu + pixel_bytes);
+    const bool timestamps_enabled = gpu::get_device_caps(fixture.device).timestamp_period_ns != 0;
     for (uint32 index = 0; index < segment_count * 2; ++index)
     {
-        if (iteration & 1u) valid &= timestamps[index] == ~uint64{0};
+        if (!timestamps_enabled || (iteration & 1u)) valid &= timestamps[index] == ~uint64{0};
         else valid &= timestamps[index] != ~uint64{0} && (index == 0 || timestamps[index] >= timestamps[index - 1]);
     }
-    if ((iteration & 1u) == 0)
+    if (timestamps_enabled && (iteration & 1u) == 0)
     {
         valid &= timestamps[0] != fixture.previous_timestamp;
         fixture.previous_timestamp = timestamps[0];

@@ -304,7 +304,8 @@ bool test_independent_pool_timestamps(gpu::Device* device)
         gpu::wait_timeline({.semaphore = timeline, .value = 1});
         for (gpu::CommandPool* pool : pools) gpu::read_timestamps(pool);
         for (uint32 i = 0; i < pool_count; ++i)
-            valid &= timestamps[i] != 0 && timestamps[i] != ~uint64{0} && (!i || timestamps[i] >= timestamps[i - 1]);
+            valid &= gpu::get_device_caps(device).timestamp_period_ns != 0
+                ? timestamps[i] != 0 && timestamps[i] != ~uint64{0} && (!i || timestamps[i] >= timestamps[i - 1]) : timestamps[i] == ~uint64{0};
     }
     gpu::destroy_timeline_semaphore(timeline);
     for (gpu::CommandPool* pool : pools) gpu::destroy_command_pool(pool);

@@ -126,7 +126,7 @@ int main(int argc, const char* const* argv)
         passed &= result[0] == 211 + mode && result[1] == 123 + mode;
         for (uint32 vertex = 0; vertex < 3; ++vertex) passed &= result[2 + vertex] == 71 + mode;
         for (uint32 guard = 320; guard < 384; ++guard) passed &= readback.range.cpu[guard] == 0xa5;
-        if (timestamps)
+        if (timestamps && gpu::get_device_caps(device).timestamp_period_ns != 0)
         {
             const uint64* ticks = reinterpret_cast<const uint64*>(readback.range.cpu + 384);
             passed &= ticks[0] != 0 && ticks[1] >= ticks[0] && ticks[1] != 0xa5a5a5a5a5a5a5a5ull;

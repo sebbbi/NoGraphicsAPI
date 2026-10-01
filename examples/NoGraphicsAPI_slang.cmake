@@ -1,6 +1,13 @@
 find_program(NOGRAPHICSAPI_SLANGC NAMES slangc REQUIRED)
 if(APPLE)
     find_program(NOGRAPHICSAPI_XCRUN NAMES xcrun REQUIRED)
+    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        set(NOGRAPHICSAPI_METAL_SDK iphoneos)
+        set(NOGRAPHICSAPI_METAL_TARGET "air64-apple-ios${CMAKE_OSX_DEPLOYMENT_TARGET}")
+    else()
+        set(NOGRAPHICSAPI_METAL_SDK macosx)
+        set(NOGRAPHICSAPI_METAL_TARGET "air64-apple-macos${CMAKE_OSX_DEPLOYMENT_TARGET}")
+    endif()
     set(NOGRAPHICSAPI_SHADER_EXTENSION metallib CACHE INTERNAL "Native shader artifact extension" FORCE)
     set(NOGRAPHICSAPI_SLANG_MINIMUM 2026.18.2)
 else()
@@ -45,6 +52,7 @@ function(NoGraphicsAPI_compile_slang output source entry stage)
     set(dependencies ${source} ${SLANG_DEPENDS}
         ${PROJECT_SOURCE_DIR}/include/NoGraphicsAPI/types.h
         ${PROJECT_SOURCE_DIR}/include/NoGraphicsAPI/shader.slang
+        ${PROJECT_SOURCE_DIR}/include/NoGraphicsAPI/shader_shared.h
         ${PROJECT_SOURCE_DIR}/utility/include/NoGraphicsAPIUtility/shader_types.h)
     set(common_options
         -entry ${entry} -stage ${stage}
@@ -63,8 +71,9 @@ function(NoGraphicsAPI_compile_slang output source entry stage)
             COMMAND ${CMAKE_COMMAND} -E make_directory ${output_dir}
             COMMAND ${NOGRAPHICSAPI_SLANGC} ${source} -target metal -DNOGRAPHICSAPI_METAL
                 ${common_options} -o ${output}.metal
-            COMMAND ${NOGRAPHICSAPI_XCRUN} -sdk macosx metal -std=metal4.0 -c ${output}.metal -o ${output}.air
-            COMMAND ${NOGRAPHICSAPI_XCRUN} -sdk macosx metallib ${output}.air -o ${output}
+            COMMAND ${NOGRAPHICSAPI_XCRUN} -sdk ${NOGRAPHICSAPI_METAL_SDK} metal -std=metal3.0
+                -target ${NOGRAPHICSAPI_METAL_TARGET} -c ${output}.metal -o ${output}.air
+            COMMAND ${NOGRAPHICSAPI_XCRUN} -sdk ${NOGRAPHICSAPI_METAL_SDK} metallib ${output}.air -o ${output}
             DEPENDS ${dependencies}
             VERBATIM
             COMMENT "Compiling Slang ${stage} shader ${entry} to metallib"

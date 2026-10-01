@@ -27,7 +27,7 @@ conventional feature checked by device creation.
 | Vulkan 1.4 and `maintenance5` | Modern pipeline creation, including inline shader code without temporary shader modules. |
 | [`VK_EXT_descriptor_heap`][descriptor-heap] | Application-owned heaps, host descriptor writes, layout-free pipelines, and `vkCmdPushDataEXT`. |
 | [`VK_KHR_shader_untyped_pointers`][untyped-pointers] | Supplies the shader-untyped-pointer capability required by the descriptor-heap SPIR-V path. |
-| [`VK_KHR_device_address_commands`][address-commands] | Index, indirect, and copy commands consume GPU addresses rather than buffer handles. |
+| [`VK_KHR_device_address_commands`][address-commands] (optional) | Index, indirect, and copy commands consume GPU addresses directly. Otherwise addresses resolve to buffers and offsets. |
 | [`VK_KHR_unified_image_layouts`][unified-layouts] (optional) | Optimizes ordinary `GENERAL` image use; the public model is unchanged without it. |
 | [`VK_EXT_mesh_shader`][mesh-shader] | Required task and mesh shader support for direct and indirect workgroup draws. |
 | Buffer device address | Gives GPU heaps 64-bit shader addresses for their lifetime and enables typed pointer fields in shared structures. |
@@ -55,6 +55,11 @@ There is no host-only or non-coherent fallback path.
 `create_gpu_heap()` returns one application-sized block. `cpu_visible`, `gpu_only`, and `readback`
 provide addressable data storage. Opaque texture and sampler descriptor heaps use separate creation APIs.
 `GpuCpuRange<T>::size` is always bytes, regardless of `T`, and a GPU-only heap has a null CPU pointer.
+
+When device-address commands are unavailable, index, indirect and copy operations resolve addresses through
+the same table used by Metal. Each command range must fit in one GPU heap; at most 64 GPU heaps may be live
+per device. Lookups use binary search with atomic version checks; only table updates serialize.
+Devices with the extension pass command addresses directly and do not allocate the table.
 
 Application data has no backend suballocator. The optional utility library provides fixed-16-byte
 `BumpAllocator` and reusable `HeapAllocator` policies over `GpuHeap::range`; the graphics API does not

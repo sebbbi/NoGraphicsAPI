@@ -292,8 +292,9 @@ void churn_timestamp_contexts(void* argument) noexcept
                 uint32(values[timestamp_queries + 1]) == reinterpret_cast<const uint32*>(upload.range.cpu)[context];
             for (uint32 index = 0; index < timestamp_queries; ++index)
             {
-                valid = values[index + 1] > previous[context][index] && values[index + 1] != ~uint64{0} &&
-                    (!index || values[index + 1] >= values[index]) && valid;
+                valid = (gpu::get_device_caps(worker.device).timestamp_period_ns != 0
+                    ? values[index + 1] > previous[context][index] && values[index + 1] != ~uint64{0} &&
+                      (!index || values[index + 1] >= values[index]) : values[index + 1] == ~uint64{0}) && valid;
                 previous[context][index] = values[index + 1];
             }
             if (!valid) fprintf(stderr, "Timestamp slot collision or reuse failed on queue %u, iteration %u, context %u.\n",

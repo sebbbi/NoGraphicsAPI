@@ -1,7 +1,8 @@
-# Metal 4 validation
+# Metal validation
 
 Tested on Apple M3 Max, macOS 26.6.2, Xcode 27 and stock Slang 2026.18.2. The integrating bad_sdf
 application also runs on iPhone 15 Pro. M1/M2 hardware execution remains unverified.
+These results cover Metal 4. Metal 3 native compilation and runtime validation remain unverified.
 
 ## Running the checks
 
@@ -18,12 +19,15 @@ Add `-E '^test_render_continuation$'` to run the remaining checks separately.
 Coverage includes shared root layouts, GPU pointers, descriptor indexing/copies, direct and indirect
 commands, texture transfers, viewport orientation, presentation and command-pool reuse. Triangle,
 cube and deferred-renderer examples run with Metal API validation.
+The `_buffer_commands` tests force Metal 3 command encoding and exercise texture-view pools on OS 26+,
+or texture resource-ID tables on older supported OS versions.
 
 ## Concurrency and lifetime
 
 Tests exercise independent recording, cross-queue waits, heap creation/destruction, concurrent
 updates to disjoint descriptor slots, timestamp allocation and CPU retrieval. Address-index tests
-reach the 64-heap limit and repeatedly wrap snapshot storage. These checks pass with API and shader
+reach the 64-heap limit and repeatedly reuse entries. The shared CPU address-map test also exercises concurrent
+lookups during registration and removal. The prior Metal 4 GPU checks pass with API and shader
 validation. See [the implementation](metal-support.md) for synchronization responsibilities.
 
 ## Stage dependencies and overlap

@@ -1,3 +1,6 @@
+include(${PROJECT_SOURCE_DIR}/examples/NoGraphicsAPI_slang.cmake)
+find_package(Threads REQUIRED)
+
 add_executable(test_shader_types shader_types_test.cpp)
 NoGraphicsAPI_disable_exceptions(test_shader_types)
 target_link_libraries(test_shader_types PRIVATE NoGraphicsAPIUtility::types)
@@ -10,16 +13,20 @@ add_test(NAME test_math COMMAND test_math)
 
 add_executable(test_allocators ../utility/tests/allocator_test.cpp)
 NoGraphicsAPI_disable_exceptions(test_allocators)
-find_package(Threads REQUIRED)
 target_link_libraries(test_allocators PRIVATE NoGraphicsAPIUtility::allocators Threads::Threads)
 add_test(NAME test_allocators COMMAND test_allocators)
+
+add_executable(test_buffer_address_map buffer_address_map_test.cpp)
+NoGraphicsAPI_disable_exceptions(test_buffer_address_map)
+target_compile_features(test_buffer_address_map PRIVATE cxx_std_20)
+target_include_directories(test_buffer_address_map PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(test_buffer_address_map PRIVATE Threads::Threads)
+add_test(NAME test_buffer_address_map COMMAND test_buffer_address_map)
+set_tests_properties(test_buffer_address_map PROPERTIES TIMEOUT 60)
 
 add_executable(test_upload_queue ../utility/tests/upload_queue_test.cpp)
 NoGraphicsAPI_disable_exceptions(test_upload_queue)
 target_link_libraries(test_upload_queue PRIVATE NoGraphicsAPIUtility::uploads)
-if(NOT COMMAND NoGraphicsAPI_compile_slang)
-    include(${PROJECT_SOURCE_DIR}/examples/NoGraphicsAPI_slang.cmake)
-endif()
 set(upload_queue_shader ${CMAKE_CURRENT_SOURCE_DIR}/shaders/upload_queue.slang)
 set(upload_queue_spv ${CMAKE_CURRENT_BINARY_DIR}/shaders/upload_queue.comp.${NOGRAPHICSAPI_SHADER_EXTENSION})
 NoGraphicsAPI_compile_slang(${upload_queue_spv} ${upload_queue_shader} computeMain compute
@@ -115,6 +122,16 @@ add_test(NAME test_render_continuation COMMAND test_render_continuation)
 set_tests_properties(test_render_continuation PROPERTIES
     SKIP_RETURN_CODE 77 TIMEOUT 60 FAIL_REGULAR_EXPRESSION "Validation Error;NoGraphicsAPI validation:")
 
+add_executable(test_command_addresses command_addresses_test.cpp ${continuation_vertex_spv} ${continuation_fragment_spv})
+NoGraphicsAPI_disable_exceptions(test_command_addresses)
+target_link_libraries(test_command_addresses PRIVATE NoGraphicsAPI::NoGraphicsAPI)
+target_compile_definitions(test_command_addresses PRIVATE
+    NOGRAPHICSAPI_CONTINUATION_VERTEX_SPV="${continuation_vertex_spv}"
+    NOGRAPHICSAPI_CONTINUATION_FRAGMENT_SPV="${continuation_fragment_spv}")
+add_test(NAME test_command_addresses COMMAND test_command_addresses)
+set_tests_properties(test_command_addresses PROPERTIES
+    SKIP_RETURN_CODE 77 TIMEOUT 60 FAIL_REGULAR_EXPRESSION "Validation Error;NoGraphicsAPI validation:")
+
 if(WIN32)
     add_executable(test_presentation presentation_test.cpp)
     NoGraphicsAPI_disable_exceptions(test_presentation)
@@ -152,9 +169,10 @@ if(APPLE)
             OUTPUT ${output}
             BYPRODUCTS ${output}.air
             COMMAND ${CMAKE_COMMAND} -E make_directory ${output_dir}
-            COMMAND ${NOGRAPHICSAPI_XCRUN} -sdk macosx metal -std=metal4.0 -c ${source} -o ${output}.air
-            COMMAND ${NOGRAPHICSAPI_XCRUN} -sdk macosx metallib ${output}.air -o ${output}
-            DEPENDS ${source} ${ARGN}
+            COMMAND ${NOGRAPHICSAPI_XCRUN} -sdk ${NOGRAPHICSAPI_METAL_SDK} metal -std=metal3.0
+                -target ${NOGRAPHICSAPI_METAL_TARGET} -I ${PROJECT_SOURCE_DIR}/include -c ${source} -o ${output}.air
+            COMMAND ${NOGRAPHICSAPI_XCRUN} -sdk ${NOGRAPHICSAPI_METAL_SDK} metallib ${output}.air -o ${output}
+            DEPENDS ${source} ${ARGN} ${PROJECT_SOURCE_DIR}/include/NoGraphicsAPI/shader_shared.h
             VERBATIM
             COMMENT "Compiling native Metal test fixture ${source}"
         )
@@ -218,9 +236,6 @@ if(APPLE)
         ENVIRONMENT "MTL_DEBUG_LAYER=1;MTL_SHADER_VALIDATION=1")
 endif()
 
-if(NOT COMMAND NoGraphicsAPI_compile_slang)
-    include(${CMAKE_CURRENT_SOURCE_DIR}/../examples/NoGraphicsAPI_slang.cmake)
-endif()
 set(task_shader_code ${CMAKE_CURRENT_BINARY_DIR}/shaders/task_shader.task.${NOGRAPHICSAPI_SHADER_EXTENSION})
 set(task_mesh_code ${CMAKE_CURRENT_BINARY_DIR}/shaders/task_mesh.mesh.${NOGRAPHICSAPI_SHADER_EXTENSION})
 set(task_fragment_code ${CMAKE_CURRENT_BINARY_DIR}/shaders/task_mesh.frag.${NOGRAPHICSAPI_SHADER_EXTENSION})
@@ -277,3 +292,50 @@ target_link_libraries(test_shader_abi PRIVATE NoGraphicsAPI::NoGraphicsAPI NoGra
 target_compile_definitions(test_shader_abi PRIVATE NOGRAPHICSAPI_SHADER_ABI_PATH="${shader_abi_code}")
 add_test(NAME test_shader_abi COMMAND test_shader_abi)
 set_tests_properties(test_shader_abi PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60 FAIL_REGULAR_EXPRESSION "Validation Error;NoGraphicsAPI validation:")
+
+# Compile the compatibility backend separately so production selection always prefers native address commands.
+add_library(NoGraphicsAPI_buffer_commands STATIC ${PROJECT_SOURCE_DIR}/${NoGraphicsAPI_backend_source})
+target_compile_features(NoGraphicsAPI_buffer_commands PUBLIC cxx_std_20)
+target_include_directories(NoGraphicsAPI_buffer_commands PUBLIC ${PROJECT_SOURCE_DIR}/include)
+get_target_property(backend_options NoGraphicsAPI COMPILE_OPTIONS)
+target_compile_options(NoGraphicsAPI_buffer_commands PRIVATE ${backend_options})
+get_target_property(backend_libraries NoGraphicsAPI LINK_LIBRARIES)
+target_link_libraries(NoGraphicsAPI_buffer_commands PRIVATE ${backend_libraries})
+target_compile_definitions(NoGraphicsAPI_buffer_commands PRIVATE
+    NOGRAPHICSAPI_TEST_BUFFER_COMMANDS $<TARGET_PROPERTY:NoGraphicsAPI,COMPILE_DEFINITIONS>)
+
+set(buffer_command_tests test_command_addresses test_texture_copy test_root_data test_task_shader test_render_continuation
+    test_command_context test_multithreading test_queue_families test_shader_abi)
+if(APPLE)
+    list(APPEND buffer_command_tests test_metal_backend test_metal_mesh test_metal_barriers test_metal_presentation)
+endif()
+if(TARGET test_metal_resource_concurrency)
+    list(APPEND buffer_command_tests test_metal_resource_concurrency)
+endif()
+foreach(original IN LISTS buffer_command_tests)
+    get_target_property(test_sources ${original} SOURCES)
+    list(FILTER test_sources INCLUDE REGEX "\\.(cpp|mm)$")
+    get_target_property(test_definitions ${original} COMPILE_DEFINITIONS)
+    add_executable(${original}_buffer_commands ${test_sources})
+    add_dependencies(${original}_buffer_commands ${original})
+    target_link_libraries(${original}_buffer_commands PRIVATE NoGraphicsAPI_buffer_commands NoGraphicsAPIUtility::types Threads::Threads)
+    if(test_definitions)
+        target_compile_definitions(${original}_buffer_commands PRIVATE ${test_definitions})
+    endif()
+    get_target_property(test_options ${original} COMPILE_OPTIONS)
+    if(test_options)
+        target_compile_options(${original}_buffer_commands PRIVATE ${test_options})
+    endif()
+    if(original STREQUAL "test_root_data")
+        target_sources(${original}_buffer_commands PRIVATE ${PROJECT_SOURCE_DIR}/utility/src/bump_allocator.cpp)
+    endif()
+    add_test(NAME ${original}_buffer_commands COMMAND ${original}_buffer_commands)
+    set_tests_properties(${original}_buffer_commands PROPERTIES
+        SKIP_RETURN_CODE 77 TIMEOUT 60 FAIL_REGULAR_EXPRESSION "Validation Error;NoGraphicsAPI validation:")
+    if(APPLE)
+        set_tests_properties(${original}_buffer_commands PROPERTIES ENVIRONMENT "MTL_DEBUG_LAYER=1;MTL_SHADER_VALIDATION=0")
+    endif()
+    if(original STREQUAL "test_metal_resource_concurrency")
+        set_tests_properties(${original}_buffer_commands PROPERTIES TIMEOUT 180)
+    endif()
+endforeach()

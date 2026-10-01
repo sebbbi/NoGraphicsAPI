@@ -1,4 +1,6 @@
 #include <NoGraphicsAPI/NoGraphicsAPI.hpp>
+#include <NoGraphicsAPI/shader_shared.h>
+#include "BufferAddressMap.hpp"
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #include <mach/mach_time.h>
@@ -140,19 +142,12 @@ void report_error(const char* operation, NSError* error)
 MTLSize metal_size(uint32x3 size) { return MTLSizeMake(size.x, size.y, size.z); }
 }
 
-struct BufferRecord
-{
-    uint64 base = 0;
-    uint64 size = 0;
-    uint64 buffer = 0;
-};
-
 struct GpuHeapOwner
 {
     Device* device = nullptr;
     id<MTLHeap> heap = nil;
     id<MTLBuffer> buffer = nil;
-    BufferRecord* record = nullptr;
+    detail::BufferRecord* record = nullptr;
 };
 
 struct TextureHeapOwner
@@ -180,6 +175,7 @@ struct TextureDescriptorHeap
     Device* device = nullptr;
     id<MTLTextureViewPool> pool = nil;
     id<MTLBuffer> base = nil;
+    id<MTLTexture>* views = nullptr;
     uint32 capacity = 0;
 };
 
@@ -236,13 +232,18 @@ struct CommandBuffer
     CommandPool* pool = nullptr;
     CommandBuffer* next = nullptr;
     id<MTL4CommandBuffer> commands = nil;
+    id<MTLCommandBuffer> commands3 = nil;
     NativeCommandBuffer* native_buffers = nullptr;
     NativeCommandBuffer* native = nullptr;
     uint32 native_count = 0;
     id<MTL4ArgumentTable> arguments = nil;
-    id<MTL4ComputeCommandEncoder> compute = nil;
-    id<MTL4RenderCommandEncoder> render = nil;
+    id compute = nil;
+    id render = nil;
+    id<MTLBlitCommandEncoder> blit = nil;
     MTL4RenderPassDescriptor* pass = nil;
+    MTLRenderPassDescriptor* pass3 = nil;
+    id<MTLBuffer> bindings[3] = {};
+    uint64 binding_offsets[3] = {};
     TimestampSlot* timestamps = nullptr;
     uint32 timestamp_count = 0;
     id<MTLSharedEvent> retirement = nil;
@@ -272,6 +273,10 @@ enum class QueueKind : uint8 { general, compute, copy };
 struct Queue
 {
     id<MTL4CommandQueue> queue = nil;
+    id<MTLCommandQueue> queue3 = nil;
+    // Metal 3 fences collect producer passes and publish explicit barriers in submission order.
+    id<MTLFence> producers = nil;
+    id<MTLFence> dependencies = nil;
     dispatch_queue_t feedback = nullptr;
     id<MTLSharedEvent> completion = nil;
     uint64 submitted_value = 0;
@@ -283,6 +288,7 @@ struct Queue
 struct CommandPool
 {
     Device* device = nullptr;
+    Queue* queue = nullptr;
     QueueKind kind = QueueKind::general;
     CommandBuffer* first = nullptr;
     CommandBuffer* last = nullptr;
@@ -303,15 +309,13 @@ struct Device
     DeviceCaps caps = {};
     char name[256] = {};
     os_unfair_lock residency_lock = OS_UNFAIR_LOCK_INIT;
-    BufferRecord buffer_records[64] = {};
-    alignas(64) uint64 buffer_snapshots[4096] = {};
-    uint64 buffer_snapshot = 0;
-    uint64 occupied_buffers = 0;
-    uint32 buffer_cursor = 1;
+    detail::BufferAddressMap buffer_map = {};
     CounterPage* counter_pages = nullptr;
     uint32 counter_page_count = 0;
     uint32 timestamp_query_count = 0;
     bool shader_validation = false;
+    bool metal4 = false;
+    bool presenting = false;
 };
 
 namespace
@@ -413,6 +417,8 @@ void destroy_context(Device* device, CommandBuffer* commands)
     }
     [commands->arguments release];
     [commands->pass release];
+    [commands->pass3 release];
+    [commands->commands3 release];
     for (uint32 i = 0; i < device->timestamp_query_count && commands->timestamps && commands->timestamps[i].page;)
     {
         CounterPage* page = commands->timestamps[i].page;
@@ -430,6 +436,11 @@ CommandBuffer* create_context(CommandPool* pool)
 {
     Device* device = pool->device;
     CommandBuffer* result = new CommandBuffer{.device = device, .pool = pool};
+    if (!device->metal4)
+    {
+        result->pass3 = [MTLRenderPassDescriptor new];
+        return result;
+    }
     NSError* error = nil;
     result->native_buffers = new NativeCommandBuffer{.buffer = [device->metal newCommandBuffer], .allocator = [device->metal newCommandAllocator]};
     result->commands = result->native_buffers->buffer;
@@ -461,10 +472,20 @@ id<MTLDepthStencilState> depth_state(CommandPool* pool, const DepthStencilState&
 
 void end_compute(CommandBuffer* commands)
 {
-    if (!commands->compute) return;
-    [commands->compute endEncoding];
-    [commands->compute release];
-    commands->compute = nil;
+    if (commands->compute)
+    {
+        if (!commands->device->metal4) [(id<MTLComputeCommandEncoder>)commands->compute updateFence:commands->pool->queue->producers];
+        [commands->compute endEncoding];
+        [commands->compute release];
+        commands->compute = nil;
+    }
+    if (commands->blit)
+    {
+        [commands->blit updateFence:commands->pool->queue->producers];
+        [commands->blit endEncoding];
+        [commands->blit release];
+        commands->blit = nil;
+    }
 }
 
 id<MTL4CommandBuffer> native_commands(CommandBuffer* commands)
@@ -482,122 +503,59 @@ id<MTL4CommandBuffer> native_commands(CommandBuffer* commands)
     return commands->commands;
 }
 
-id<MTL4ComputeCommandEncoder> compute_encoder(CommandBuffer* commands)
+id compute_encoder(CommandBuffer* commands)
 {
     assert(commands->recording && !commands->render);
     if (!commands->compute)
     {
-        commands->compute = [[native_commands(commands) computeCommandEncoder] retain];
-        [commands->compute setArgumentTable:commands->arguments];
+        end_compute(commands);
+        if (commands->device->metal4)
+        {
+            commands->compute = [[native_commands(commands) computeCommandEncoder] retain];
+            [commands->compute setArgumentTable:commands->arguments];
+        }
+        else
+        {
+            commands->compute = [[commands->commands3 computeCommandEncoderWithDispatchType:MTLDispatchTypeConcurrent] retain];
+            [(id<MTLComputeCommandEncoder>)commands->compute waitForFence:commands->pool->queue->dependencies];
+            for (uint32 i = 0; i < 3; ++i)
+                [(id<MTLComputeCommandEncoder>)commands->compute setBuffer:commands->bindings[i] offset:commands->binding_offsets[i] atIndex:i];
+        }
         if (commands->pso && commands->pso->compute) [commands->compute setComputePipelineState:commands->pso->compute];
     }
     return commands->compute;
 }
 
-void update_buffer_index(Device* device, BufferRecord* record, bool insert)
+id copy_encoder(CommandBuffer* commands)
 {
-    for (;;)
+    if (commands->device->metal4) return compute_encoder(commands);
+    assert(commands->recording && !commands->render);
+    if (!commands->blit)
     {
-        uint64 previous = __atomic_load_n(&device->buffer_snapshot, __ATOMIC_ACQUIRE);
-        const uint32 start = static_cast<uint32>(previous);
-        uint32 count = static_cast<uint32>(previous >> 32);
-        BufferRecord* snapshot[64];
-        for (uint32 i = 0; i < count; ++i)
-            snapshot[i] = reinterpret_cast<BufferRecord*>(__atomic_load_n(&device->buffer_snapshots[(start + i) & 4095], __ATOMIC_RELAXED));
-        if (insert)
-        {
-            assert(count < 64);
-            const uint64 base = __atomic_load_n(&record->base, __ATOMIC_RELAXED);
-            uint32 index = count++;
-            while (index && __atomic_load_n(&snapshot[index - 1]->base, __ATOMIC_RELAXED) > base)
-            {
-                snapshot[index] = snapshot[index - 1];
-                --index;
-            }
-            snapshot[index] = record;
-        }
-        else
-        {
-            uint32 index = 0;
-            while (index < count && snapshot[index] != record) ++index;
-            assert(index < count);
-            for (; index + 1 < count; ++index) snapshot[index] = snapshot[index + 1];
-            --count;
-        }
-        __atomic_thread_fence(__ATOMIC_ACQUIRE);
-        if (__atomic_load_n(&device->buffer_snapshot, __ATOMIC_RELAXED) != previous) continue;
-        const uint32 ticket = __atomic_fetch_add(&device->buffer_cursor, count ? count : 1, __ATOMIC_RELAXED);
-        __atomic_thread_fence(__ATOMIC_RELEASE);
-        for (uint32 i = 0; i < count; ++i)
-            __atomic_store_n(&device->buffer_snapshots[(ticket + i) & 4095], reinterpret_cast<uintptr>(snapshot[i]), __ATOMIC_RELAXED);
-        const uint64 next = (uint64(count) << 32) | ticket;
-        if (__atomic_compare_exchange_n(&device->buffer_snapshot, &previous, next, false, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) return;
+        end_compute(commands);
+        commands->blit = [[commands->commands3 blitCommandEncoder] retain];
+        [commands->blit waitForFence:commands->pool->queue->dependencies];
     }
+    return commands->blit;
 }
 
-void register_buffer(Device* device, GpuHeapOwner* owner, uint64 base, uint64 size)
+void bind_buffer(CommandBuffer* commands, id<MTLBuffer> buffer, uint64 offset, uint32 index)
 {
-    uint64 occupied = __atomic_load_n(&device->occupied_buffers, __ATOMIC_RELAXED);
-    for (;;)
+    commands->bindings[index] = buffer;
+    commands->binding_offsets[index] = offset;
+    if (commands->compute) [(id<MTLComputeCommandEncoder>)commands->compute setBuffer:buffer offset:offset atIndex:index];
+    if (commands->render)
     {
-        assert(occupied != ~uint64{0});
-        const uint32 slot = static_cast<uint32>(__builtin_ctzll(~occupied));
-        if (__atomic_compare_exchange_n(&device->occupied_buffers, &occupied, occupied | (uint64{1} << slot), true,
-                                        __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
-        {
-            owner->record = &device->buffer_records[slot];
-            break;
-        }
+        [(id<MTLRenderCommandEncoder>)commands->render setVertexBuffer:buffer offset:offset atIndex:index];
+        [(id<MTLRenderCommandEncoder>)commands->render setFragmentBuffer:buffer offset:offset atIndex:index];
+        [(id<MTLRenderCommandEncoder>)commands->render setObjectBuffer:buffer offset:offset atIndex:index];
+        [(id<MTLRenderCommandEncoder>)commands->render setMeshBuffer:buffer offset:offset atIndex:index];
     }
-    // Observing recycled metadata must also make its preceding removal publication visible.
-    __atomic_thread_fence(__ATOMIC_RELEASE);
-    __atomic_store_n(&owner->record->base, base, __ATOMIC_RELAXED);
-    __atomic_store_n(&owner->record->size, size, __ATOMIC_RELAXED);
-    __atomic_store_n(&owner->record->buffer, reinterpret_cast<uintptr>(owner->buffer), __ATOMIC_RELAXED);
-    update_buffer_index(device, owner->record, true);
-}
-
-void unregister_buffer(Device* device, GpuHeapOwner* owner)
-{
-    update_buffer_index(device, owner->record, false);
-    __atomic_fetch_and(&device->occupied_buffers, ~(uint64{1} << (owner->record - device->buffer_records)), __ATOMIC_RELEASE);
 }
 
 id<MTLBuffer> resolve_buffer(Device* device, GpuRange range, uint64* offset)
 {
-    const uint64 address = reinterpret_cast<uintptr>(range.gpu);
-    for (;;)
-    {
-        const uint64 snapshot = __atomic_load_n(&device->buffer_snapshot, __ATOMIC_ACQUIRE);
-        const uint32 start = static_cast<uint32>(snapshot);
-        uint32 first = 0;
-        uint32 last = static_cast<uint32>(snapshot >> 32);
-        while (first < last)
-        {
-            const uint32 middle = first + (last - first) / 2;
-            const BufferRecord* record = reinterpret_cast<const BufferRecord*>(
-                __atomic_load_n(&device->buffer_snapshots[(start + middle) & 4095], __ATOMIC_RELAXED));
-            if (__atomic_load_n(&record->base, __ATOMIC_RELAXED) <= address) first = middle + 1;
-            else last = middle;
-        }
-        uint64 base = 0;
-        uint64 size = 0;
-        uint64 buffer = 0;
-        if (first)
-        {
-            const BufferRecord* record = reinterpret_cast<const BufferRecord*>(
-                __atomic_load_n(&device->buffer_snapshots[(start + first - 1) & 4095], __ATOMIC_RELAXED));
-            base = __atomic_load_n(&record->base, __ATOMIC_RELAXED);
-            size = __atomic_load_n(&record->size, __ATOMIC_RELAXED);
-            buffer = __atomic_load_n(&record->buffer, __ATOMIC_RELAXED);
-        }
-        // A stalled reader or writer surviving an entire ring reuse remains the accepted bounded-ring limitation.
-        __atomic_thread_fence(__ATOMIC_ACQUIRE);
-        if (__atomic_load_n(&device->buffer_snapshot, __ATOMIC_RELAXED) != snapshot) continue;
-        assert(first && address >= base && address - base <= size && range.size <= size - (address - base));
-        *offset = address - base;
-        return reinterpret_cast<id<MTLBuffer>>(buffer);
-    }
+    return reinterpret_cast<id<MTLBuffer>>(device->buffer_map.resolve(range, offset));
 }
 }
 
@@ -610,11 +568,15 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         const char* shader_validation = getenv("MTL_SHADER_VALIDATION");
         device->shader_validation = shader_validation && atoi(shader_validation) != 0;
         device->metal = MTLCreateSystemDefaultDevice();
-        if (!device->metal || ![device->metal supportsFamily:MTLGPUFamilyApple7] || ![device->metal supportsFamily:MTLGPUFamilyMetal4])
+        if (!device->metal || ![device->metal supportsFamily:MTLGPUFamilyApple7] || ![device->metal supportsFamily:MTLGPUFamilyMetal3])
         {
             destroy_device(device);
             return {.error = Error::unsupported};
         }
+        if (@available(macOS 26.0, iOS 26.0, *)) device->metal4 = [device->metal supportsFamily:MTLGPUFamilyMetal4];
+#if defined(NOGRAPHICSAPI_TEST_BUFFER_COMMANDS)
+        device->metal4 = false;
+#endif
         NSError* error = nil;
         assert(desc.desired_queue_count);
         device->caps.general_queue_count = desc.desired_queue_count;
@@ -627,36 +589,52 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
             Queue& queue = device->queues[i];
             queue.kind = i < desc.desired_queue_count ? QueueKind::general :
                          i < desc.desired_queue_count + desc.desired_compute_queue_count ? QueueKind::compute : QueueKind::copy;
-            queue.feedback = dispatch_queue_create("NoGraphicsAPI Metal feedback", DISPATCH_QUEUE_SERIAL_WITH_AUTORELEASE_POOL);
-            MTL4CommandQueueDescriptor* descriptor = [MTL4CommandQueueDescriptor new];
-            descriptor.feedbackQueue = queue.feedback;
-            queue.queue = [device->metal newMTL4CommandQueueWithDescriptor:descriptor error:&error];
-            // This SDK's destructor releases its assign-only feedbackQueue; retain ownership in Queue.
-            descriptor.feedbackQueue = nullptr;
-            [descriptor release];
+            if (device->metal4)
+            {
+                queue.feedback = dispatch_queue_create("NoGraphicsAPI Metal feedback", DISPATCH_QUEUE_SERIAL_WITH_AUTORELEASE_POOL);
+                MTL4CommandQueueDescriptor* descriptor = [MTL4CommandQueueDescriptor new];
+                descriptor.feedbackQueue = queue.feedback;
+                queue.queue = [device->metal newMTL4CommandQueueWithDescriptor:descriptor error:&error];
+                // This SDK's destructor releases its assign-only feedbackQueue; retain ownership in Queue.
+                descriptor.feedbackQueue = nullptr;
+                [descriptor release];
+            }
+            else
+            {
+                queue.queue3 = [device->metal newCommandQueueWithMaxCommandBufferCount:4096];
+                queue.producers = [device->metal newFence];
+                queue.dependencies = [device->metal newFence];
+            }
             queue.completion = [device->metal newSharedEvent];
-            if (!queue.queue || !queue.completion)
+            if ((!queue.queue && !queue.queue3) || !queue.completion || (!device->metal4 && (!queue.producers || !queue.dependencies)))
             {
                 report_error("command queue", error);
                 destroy_device(device);
                 return {.error = Error::driver_error};
             }
         }
-        MTL4CompilerDescriptor* compiler = [MTL4CompilerDescriptor new];
-        device->compiler = [device->metal newCompilerWithDescriptor:compiler error:&error];
-        [compiler release];
+        if (device->metal4)
+        {
+            MTL4CompilerDescriptor* compiler = [MTL4CompilerDescriptor new];
+            device->compiler = [device->metal newCompilerWithDescriptor:compiler error:&error];
+            [compiler release];
+        }
         MTLResidencySetDescriptor* residency = [MTLResidencySetDescriptor new];
         residency.initialCapacity = 256;
         device->residency = [device->metal newResidencySetWithDescriptor:residency error:&error];
         [residency release];
-        if (!device->compiler || !device->residency)
+        if ((device->metal4 && !device->compiler) || !device->residency)
         {
             report_error("device", error);
             destroy_device(device);
             return {.error = Error::driver_error};
         }
-        for (uint32 i = 0; i < device->caps.queue_count; ++i) [device->queues[i].queue addResidencySet:device->residency];
-        device->timestamp_query_count = desc.timestamp_query_count;
+        for (uint32 i = 0; i < device->caps.queue_count; ++i)
+        {
+            [device->queues[i].queue addResidencySet:device->residency];
+            [device->queues[i].queue3 addResidencySet:device->residency];
+        }
+        device->timestamp_query_count = device->metal4 ? desc.timestamp_query_count : 0;
         snprintf(device->name, sizeof(device->name), "%s", device->metal.name.UTF8String);
         mach_timebase_info_data_t timebase = {};
         mach_timebase_info(&timebase);
@@ -668,7 +646,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
             .copy_queue_count = desc.desired_copy_queue_count,
             .max_push_data_size = 256,
             .texture_heap_alignment = 16384,
-            .timestamp_period_ns = static_cast<float>(timebase.numer) / static_cast<float>(timebase.denom),
+            .timestamp_period_ns = device->metal4 ? static_cast<float>(timebase.numer) / static_cast<float>(timebase.denom) : 0.0f,
             .sub_texel_precision_bits = 8,
             .texture_compression_bc = device->metal.supportsBCTextureCompression,
             .texture_compression_astc = true,
@@ -681,7 +659,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
             device->layer.device = device->metal;
             device->layer.pixelFormat = pixel_format(desc.swapchain_format == Format::undefined ? Format::bgra8_unorm : desc.swapchain_format);
             device->layer.maximumDrawableCount = desc.desired_swapchain_image_count < 3 ? 2 : 3;
-            [device->queues[0].queue addResidencySet:device->layer.residencySet];
+            if (device->metal4) [device->queues[0].queue addResidencySet:device->layer.residencySet];
         }
         return {.device = device};
     }
@@ -693,7 +671,7 @@ void destroy_device(Device* device) noexcept
     {
         if (!device) return;
         assert(!device->drawable);
-        if (device->layer) [device->queues[0].queue removeResidencySet:device->layer.residencySet];
+        if (device->layer && device->metal4) [device->queues[0].queue removeResidencySet:device->layer.residencySet];
         [device->drawable release];
         [device->layer release];
         for (uint32 i = 0; i < device->caps.queue_count; ++i)
@@ -701,8 +679,12 @@ void destroy_device(Device* device) noexcept
             Queue& queue = device->queues[i];
             assert(queue.completion.signaledValue >= queue.submitted_value);
             if (device->residency) [queue.queue removeResidencySet:device->residency];
+            if (device->residency) [queue.queue3 removeResidencySet:device->residency];
             [queue.completion release];
             [queue.queue release];
+            [queue.queue3 release];
+            [queue.producers release];
+            [queue.dependencies release];
             if (queue.feedback) dispatch_release(queue.feedback);
             free(queue.submission);
         }
@@ -795,8 +777,9 @@ void wait_idle(Device* device) noexcept
 {
     @autoreleasepool
     {
-        for (uint32 i = 0; i < device->caps.queue_count; ++i)
-            [device->queues[i].queue signalEvent:device->queues[i].completion value:++device->queues[i].submitted_value];
+        if (device->metal4)
+            for (uint32 i = 0; i < device->caps.queue_count; ++i)
+                [device->queues[i].queue signalEvent:device->queues[i].completion value:++device->queues[i].submitted_value];
         for (uint32 i = 0; i < device->caps.queue_count; ++i)
             while (![device->queues[i].completion waitUntilSignaledValue:device->queues[i].submitted_value timeoutMS:1000]) {}
     }
@@ -824,7 +807,7 @@ GpuHeap create_gpu_heap(Device* device, uint64 byte_count, MemoryType memory) no
             delete owner;
             return {};
         }
-        register_buffer(device, owner, owner->buffer.gpuAddress, byte_count);
+        owner->record = device->buffer_map.insert(owner->buffer.gpuAddress, byte_count, reinterpret_cast<uintptr>(owner->buffer));
         add_resident(device, device->shader_validation ? (id<MTLAllocation>)owner->buffer : (id<MTLAllocation>)owner->heap);
         return {.range = {.cpu = memory == MemoryType::gpu_only ? nullptr : static_cast<byte*>(owner->buffer.contents),
                           .gpu = reinterpret_cast<byte*>(owner->buffer.gpuAddress), .size = byte_count},
@@ -838,7 +821,7 @@ void destroy_gpu_heap(const GpuHeap& heap) noexcept
     {
         if (!heap.owner) return;
         GpuHeapOwner* owner = const_cast<GpuHeapOwner*>(heap.owner);
-        unregister_buffer(owner->device, owner);
+        owner->device->buffer_map.remove(owner->record);
         remove_resident(owner->device, owner->device->shader_validation ? (id<MTLAllocation>)owner->buffer : (id<MTLAllocation>)owner->heap);
         [owner->buffer release];
         [owner->heap release];
@@ -936,15 +919,32 @@ TextureDescriptorHeap* create_texture_descriptor_heap(Device* device, uint32 cap
     @autoreleasepool
     {
         NSError* error = nil;
-        MTLResourceViewPoolDescriptor* desc = [MTLResourceViewPoolDescriptor new];
-        desc.resourceViewCount = capacity;
         TextureDescriptorHeap* result = new TextureDescriptorHeap{.device = device, .capacity = capacity};
-        result->pool = [device->metal newTextureViewPoolWithDescriptor:desc error:&error];
-        [desc release];
-        if (!result->pool) { report_error("texture descriptor heap", error); delete result; return nullptr; }
-        const MTLResourceID base = result->pool.baseResourceID;
-        result->base = [device->metal newBufferWithBytes:&base length:sizeof(base) options:MTLResourceStorageModeShared];
-        if (!result->base) { report_error("texture pool base", nil); [result->pool release]; delete result; return nullptr; }
+        GPUTextureHeap header = {};
+        if (@available(macOS 26.0, iOS 26.0, *))
+        {
+            MTLResourceViewPoolDescriptor* desc = [MTLResourceViewPoolDescriptor new];
+            desc.resourceViewCount = capacity;
+            result->pool = [device->metal newTextureViewPoolWithDescriptor:desc error:&error];
+            [desc release];
+            if (!result->pool) { report_error("texture descriptor heap", error); delete result; return nullptr; }
+            header.base = result->pool.baseResourceID._impl;
+            assert(header.base);
+        }
+        else result->views = new id<MTLTexture>[capacity]{};
+        result->base = [device->metal newBufferWithLength:sizeof(header) + (result->pool ? 0 : capacity * sizeof(MTLResourceID))
+                                                options:MTLResourceStorageModeShared];
+        if (!result->base)
+        {
+            report_error("texture pool base", nil);
+            [result->pool release];
+            delete[] result->views;
+            delete result;
+            return nullptr;
+        }
+        memset(result->base.contents, 0, result->base.length);
+        if (!result->pool) header.ids = reinterpret_cast<uint64*>(result->base.gpuAddress + sizeof(header));
+        memcpy(result->base.contents, &header, sizeof(header));
         add_resident(device, result->base);
         return result;
     }
@@ -955,6 +955,11 @@ void destroy_texture_descriptor_heap(TextureDescriptorHeap* heap) noexcept
     @autoreleasepool
     {
         if (!heap) return;
+        if (heap->views)
+        {
+            for (uint32 i = 0; i < heap->capacity; ++i) [heap->views[i] release];
+            delete[] heap->views;
+        }
         remove_resident(heap->device, heap->base);
         [heap->base release];
         [heap->pool release];
@@ -968,6 +973,21 @@ void write_texture_descriptor(TextureDescriptorHeap* heap, uint32 index, const T
     @autoreleasepool
     {
         assert(index < heap->capacity && texture->device == heap->device);
+        if (!heap->pool)
+        {
+            MTLPixelFormat format = pixel_format(desc.format == Format::undefined ? texture->desc.format : desc.format);
+            if (desc.aspect == TextureAspect::stencil && texture->desc.format == Format::d32_float_s8_uint) format = MTLPixelFormatX32_Stencil8;
+            MTLTextureType view_type = texture->texture.textureType;
+            if (type == TextureDescriptorType::storage && (view_type == MTLTextureTypeCube || view_type == MTLTextureTypeCubeArray))
+                view_type = MTLTextureType2DArray;
+            id<MTLTexture> view = [texture->texture newTextureViewWithPixelFormat:format textureType:view_type
+                                      levels:NSMakeRange(desc.base_mip, desc.mip_count ? desc.mip_count : texture->desc.mip_levels - desc.base_mip)
+                                      slices:NSMakeRange(desc.base_layer, desc.layer_count ? desc.layer_count : texture->desc.layer_count - desc.base_layer)];
+            [heap->views[index] release];
+            heap->views[index] = view;
+            static_cast<MTLResourceID*>(static_cast<void*>(static_cast<byte*>(heap->base.contents) + sizeof(GPUTextureHeap)))[index] = view.gpuResourceID;
+            return;
+        }
         MTLTextureViewDescriptor* view = [MTLTextureViewDescriptor new];
         view.pixelFormat = pixel_format(desc.format == Format::undefined ? texture->desc.format : desc.format);
         if (desc.aspect == TextureAspect::stencil && texture->desc.format == Format::d32_float_s8_uint)
@@ -990,6 +1010,21 @@ void copy_texture_descriptors(const TextureDescriptorHeap* source, uint32 source
     {
         assert(source->device == destination->device && source_index + count <= source->capacity && destination_index + count <= destination->capacity);
         if (!count || (source == destination && source_index == destination_index)) return;
+        if (!source->pool)
+        {
+            const bool backwards = source == destination && destination_index > source_index;
+            for (uint32 n = 0; n < count; ++n)
+            {
+                const uint32 i = backwards ? count - 1 - n : n;
+                id<MTLTexture> view = [source->views[source_index + i] retain];
+                [destination->views[destination_index + i] release];
+                destination->views[destination_index + i] = view;
+            }
+            memmove(static_cast<byte*>(destination->base.contents) + sizeof(GPUTextureHeap) + destination_index * sizeof(MTLResourceID),
+                    static_cast<const byte*>(source->base.contents) + sizeof(GPUTextureHeap) + source_index * sizeof(MTLResourceID),
+                    count * sizeof(MTLResourceID));
+            return;
+        }
         if (source == destination && destination_index > source_index && destination_index < source_index + count)
         {
             for (uint32 i = count; i != 0; --i)
@@ -1096,6 +1131,21 @@ MTL4LibraryFunctionDescriptor* shader_function(Device* device, const ShaderStage
     return function;
 }
 
+id<MTLFunction> shader_function3(Device* device, const ShaderStage& stage)
+{
+    if (!stage.code.size) return nil;
+    assert(stage.code.data && stage.code.size >= 4 && memcmp(stage.code.data, "MTLB", 4) == 0);
+    NSError* error = nil;
+    dispatch_data_t data = dispatch_data_create(stage.code.data, stage.code.size, nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+    id<MTLLibrary> library = [device->metal newLibraryWithData:data error:&error];
+    dispatch_release(data);
+    if (!library) { report_error("shader library", error); return nil; }
+    id<MTLFunction> function = [library newFunctionWithName:[NSString stringWithUTF8String:stage.entry_point]];
+    [library release];
+    if (!function) report_error("shader function", nil);
+    return function;
+}
+
 MTLBlendFactor blend_factor(BlendFactor factor)
 {
     const MTLBlendFactor factors[] = {
@@ -1124,6 +1174,24 @@ void color_targets(MTL4RenderPipelineColorAttachmentDescriptorArray* attachments
         attachments[i].alphaBlendOperation = static_cast<MTLBlendOperation>(target.blend.alpha.operation);
     }
 }
+
+void color_targets3(MTLRenderPipelineColorAttachmentDescriptorArray* attachments, Span<const ColorTargetDesc> targets)
+{
+    for (uint32 i = 0; i < targets.size; ++i)
+    {
+        const ColorTargetDesc& target = targets.data[i];
+        attachments[i].pixelFormat = pixel_format(target.format);
+        attachments[i].writeMask = static_cast<MTLColorWriteMask>(((target.write_mask & 1) << 3) | ((target.write_mask & 2) << 1) |
+                                                               ((target.write_mask & 4) >> 1) | ((target.write_mask & 8) >> 3));
+        attachments[i].blendingEnabled = target.blend.enabled;
+        attachments[i].sourceRGBBlendFactor = blend_factor(target.blend.color.source);
+        attachments[i].destinationRGBBlendFactor = blend_factor(target.blend.color.destination);
+        attachments[i].rgbBlendOperation = static_cast<MTLBlendOperation>(target.blend.color.operation);
+        attachments[i].sourceAlphaBlendFactor = blend_factor(target.blend.alpha.source);
+        attachments[i].destinationAlphaBlendFactor = blend_factor(target.blend.alpha.destination);
+        attachments[i].alphaBlendOperation = static_cast<MTLBlendOperation>(target.blend.alpha.operation);
+    }
+}
 }
 
 PSO* create_graphics_pso(Device* device, const GraphicsPSODesc& desc) noexcept
@@ -1131,6 +1199,27 @@ PSO* create_graphics_pso(Device* device, const GraphicsPSODesc& desc) noexcept
     assert(desc.vertex.code.size && "Graphics PSOs require a vertex stage");
     @autoreleasepool
     {
+        if (!device->metal4)
+        {
+            MTLRenderPipelineDescriptor* pipeline = [MTLRenderPipelineDescriptor new];
+            id<MTLFunction> vertex = shader_function3(device, desc.vertex);
+            id<MTLFunction> fragment = shader_function3(device, desc.fragment);
+            if (!vertex || (desc.fragment.code.size && !fragment))
+            {
+                [vertex release]; [fragment release]; [pipeline release]; return nullptr;
+            }
+            pipeline.vertexFunction = vertex;
+            pipeline.fragmentFunction = fragment;
+            pipeline.inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle;
+            pipeline.depthAttachmentPixelFormat = pixel_format(desc.depth_format);
+            pipeline.stencilAttachmentPixelFormat = pixel_format(desc.stencil_format);
+            color_targets3(pipeline.colorAttachments, desc.color_targets);
+            NSError* error = nil;
+            id<MTLRenderPipelineState> state = [device->metal newRenderPipelineStateWithDescriptor:pipeline error:&error];
+            [vertex release]; [fragment release]; [pipeline release];
+            if (!state) { report_error("graphics pipeline", error); return nullptr; }
+            return new PSO{.device = device, .render = state, .rasterization = desc.rasterization};
+        }
         MTL4RenderPipelineDescriptor* pipeline = [MTL4RenderPipelineDescriptor new];
         MTL4LibraryFunctionDescriptor* vertex = shader_function(device, desc.vertex);
         MTL4LibraryFunctionDescriptor* fragment = shader_function(device, desc.fragment);
@@ -1158,6 +1247,30 @@ PSO* create_mesh_pso(Device* device, const MeshPSODesc& desc) noexcept
     assert(desc.mesh.code.size && "Mesh PSOs require a mesh stage");
     @autoreleasepool
     {
+        if (!device->metal4)
+        {
+            MTLMeshRenderPipelineDescriptor* pipeline = [MTLMeshRenderPipelineDescriptor new];
+            id<MTLFunction> task = shader_function3(device, desc.task);
+            id<MTLFunction> mesh = shader_function3(device, desc.mesh);
+            id<MTLFunction> fragment = shader_function3(device, desc.fragment);
+            if (!mesh || (desc.task.code.size && !task) || (desc.fragment.code.size && !fragment))
+            {
+                [task release]; [mesh release]; [fragment release]; [pipeline release]; return nullptr;
+            }
+            pipeline.objectFunction = task;
+            pipeline.meshFunction = mesh;
+            pipeline.fragmentFunction = fragment;
+            pipeline.depthAttachmentPixelFormat = pixel_format(desc.depth_format);
+            pipeline.stencilAttachmentPixelFormat = pixel_format(desc.stencil_format);
+            color_targets3(pipeline.colorAttachments, desc.color_targets);
+            NSError* error = nil;
+            id<MTLRenderPipelineState> state = [device->metal newRenderPipelineStateWithMeshDescriptor:pipeline options:MTLPipelineOptionNone
+                                                                                         reflection:nil error:&error];
+            [task release]; [mesh release]; [fragment release]; [pipeline release];
+            if (!state) { report_error("mesh pipeline", error); return nullptr; }
+            return new PSO{.device = device, .render = state, .rasterization = desc.rasterization,
+                           .threads = metal_size(desc.mesh.threadgroup_size), .object_threads = metal_size(desc.task.threadgroup_size), .mesh = true};
+        }
         MTL4MeshRenderPipelineDescriptor* pipeline = [MTL4MeshRenderPipelineDescriptor new];
         MTL4LibraryFunctionDescriptor* task = shader_function(device, desc.task);
         MTL4LibraryFunctionDescriptor* mesh = shader_function(device, desc.mesh);
@@ -1187,6 +1300,16 @@ PSO* create_compute_pso(Device* device, const ShaderStage& stage) noexcept
     assert(stage.code.size && "Compute PSOs require a compute stage");
     @autoreleasepool
     {
+        if (!device->metal4)
+        {
+            id<MTLFunction> function = shader_function3(device, stage);
+            if (!function) return nullptr;
+            NSError* error = nil;
+            id<MTLComputePipelineState> state = [device->metal newComputePipelineStateWithFunction:function error:&error];
+            [function release];
+            if (!state) { report_error("compute pipeline", error); return nullptr; }
+            return new PSO{.device = device, .compute = state, .threads = metal_size(stage.threadgroup_size)};
+        }
         MTL4LibraryFunctionDescriptor* function = shader_function(device, stage);
         if (!function) return nullptr;
         MTL4ComputePipelineDescriptor* desc = [MTL4ComputePipelineDescriptor new];
@@ -1207,8 +1330,8 @@ void destroy_pso(PSO* pso) noexcept
     @autoreleasepool
     {
         if (!pso) return;
-        if (pso->render) remove_resident(pso->device, pso->render);
-        if (pso->compute) remove_resident(pso->device, pso->compute);
+        if (pso->device->metal4 && pso->render) remove_resident(pso->device, pso->render);
+        if (pso->device->metal4 && pso->compute) remove_resident(pso->device, pso->compute);
         [pso->render release];
         [pso->compute release];
         delete pso;
@@ -1220,7 +1343,7 @@ CommandPool* create_command_pool(Device* device, uint32 queue_index) noexcept
     @autoreleasepool
     {
         assert(queue_index < device->caps.queue_count);
-        CommandPool* pool = new CommandPool{.device = device, .kind = device->queues[queue_index].kind};
+        CommandPool* pool = new CommandPool{.device = device, .queue = &device->queues[queue_index], .kind = device->queues[queue_index].kind};
         depth_state(pool, {});
         for (uint32 compare = 0; compare < 8; ++compare)
             for (uint32 write = 0; write < 2; ++write)
@@ -1239,6 +1362,8 @@ void reset_command_pool(CommandPool* pool) noexcept
             if (commands->render) end_render_pass(commands);
             end_compute(commands);
             if (commands->recording) [commands->commands endCommandBuffer];
+            [commands->commands3 release];
+            commands->commands3 = nil;
             commands->recording = false;
             commands->ended = false;
             commands->retirement = nil;
@@ -1287,13 +1412,25 @@ CommandBuffer* begin_commands(CommandPool* pool) noexcept
             pool->last = context;
         }
         assert(!context->recording && !context->ended);
-        context->native = context->native_buffers;
-        context->commands = context->native->buffer;
-        context->native_count = 1;
-        [context->commands beginCommandBufferWithAllocator:context->native->allocator];
-        [context->arguments setAddress:0 atIndex:0];
-        [context->arguments setAddress:0 atIndex:1];
-        [context->arguments setAddress:0 atIndex:2];
+        if (pool->device->metal4)
+        {
+            context->native = context->native_buffers;
+            context->commands = context->native->buffer;
+            context->native_count = 1;
+            [context->commands beginCommandBufferWithAllocator:context->native->allocator];
+            [context->arguments setAddress:0 atIndex:0];
+            [context->arguments setAddress:0 atIndex:1];
+            [context->arguments setAddress:0 atIndex:2];
+        }
+        else
+        {
+            context->commands3 = [[pool->queue->queue3 commandBufferWithUnretainedReferences] retain];
+            for (uint32 i = 0; i < 3; ++i)
+            {
+                context->bindings[i] = nil;
+                context->binding_offsets[i] = 0;
+            }
+        }
         context->timestamp_count = 0;
         context->pso = nullptr;
         context->recording = true;
@@ -1320,6 +1457,41 @@ void submit(Device* device, const SubmitDesc& desc, uint32 queue_index) noexcept
     {
         assert(queue_index < device->caps.queue_count && desc.completion.semaphore && desc.completion.semaphore->device == device);
         Queue& queue = device->queues[queue_index];
+        if (!device->metal4)
+        {
+            id<MTLCommandBuffer> prologue = [queue.queue3 commandBufferWithUnretainedReferences];
+            for (size_t i = 0; i < desc.waits.size; ++i)
+            {
+                const TimelinePoint& wait = desc.waits.data[i];
+                assert(wait.semaphore && wait.semaphore->device == device);
+                [prologue encodeWaitForEvent:wait.semaphore->event value:wait.value];
+            }
+            id<MTLBlitCommandEncoder> entry = [prologue blitCommandEncoder];
+            [entry updateFence:queue.dependencies];
+            [entry updateFence:queue.producers];
+            [entry endEncoding];
+            if (device->shader_validation) os_unfair_lock_lock(&device->residency_lock);
+            [prologue commit];
+            for (size_t i = 0; i < desc.commands.size; ++i)
+            {
+                CommandBuffer* commands = desc.commands.data[i];
+                assert(commands->device == device && commands->pool->queue == &queue && commands->ended && !commands->retirement);
+                commands->retirement = queue.completion;
+                commands->retirement_value = queue.submitted_value + 1;
+                [commands->commands3 commit];
+            }
+            id<MTLCommandBuffer> epilogue = [queue.queue3 commandBufferWithUnretainedReferences];
+            id<MTLBlitCommandEncoder> exit = [epilogue blitCommandEncoder];
+            [exit waitForFence:queue.dependencies];
+            [exit waitForFence:queue.producers];
+            [exit endEncoding];
+            [epilogue encodeSignalEvent:queue.completion value:++queue.submitted_value];
+            [epilogue encodeSignalEvent:desc.completion.semaphore->event value:desc.completion.value];
+            if (queue_index == 0 && device->presenting) [epilogue presentDrawable:device->drawable];
+            [epilogue commit];
+            if (device->shader_validation) os_unfair_lock_unlock(&device->residency_lock);
+            return;
+        }
         size_t count = desc.commands.size;
         for (size_t i = 0; i < desc.commands.size; ++i)
             count += desc.commands.data[i]->native_count - 1;
@@ -1378,10 +1550,15 @@ void submit_and_present(Device* device, const SubmitDesc& desc) noexcept
         bool found = false;
         for (size_t i = 0; i < desc.commands.size; ++i) found |= desc.commands.data[i] == device->acquired;
         assert(found);
-        [device->queues[0].queue waitForDrawable:device->drawable];
+        if (device->metal4) [device->queues[0].queue waitForDrawable:device->drawable];
+        device->presenting = true;
         submit(device, desc, 0);
-        [device->queues[0].queue signalDrawable:device->drawable];
-        [device->drawable present];
+        device->presenting = false;
+        if (device->metal4)
+        {
+            [device->queues[0].queue signalDrawable:device->drawable];
+            [device->drawable present];
+        }
         [device->drawable release];
         device->acquired->acquired = false;
         device->acquired = nullptr;
@@ -1395,7 +1572,8 @@ void set_texture_descriptor_heap(CommandBuffer* commands, TextureDescriptorHeap*
     @autoreleasepool
     {
         assert(commands->recording && heap->device == commands->device);
-        [commands->arguments setAddress:heap->base.gpuAddress atIndex:1];
+        if (commands->device->metal4) [commands->arguments setAddress:heap->base.gpuAddress atIndex:1];
+        else bind_buffer(commands, heap->base, 0, 1);
     }
 }
 
@@ -1404,7 +1582,8 @@ void set_sampler_descriptor_heap(CommandBuffer* commands, SamplerDescriptorHeap*
     @autoreleasepool
     {
         assert(commands->recording && heap->device == commands->device);
-        [commands->arguments setAddress:heap->buffer.gpuAddress atIndex:2];
+        if (commands->device->metal4) [commands->arguments setAddress:heap->buffer.gpuAddress atIndex:2];
+        else bind_buffer(commands, heap->buffer, 0, 2);
     }
 }
 
@@ -1417,7 +1596,7 @@ void copy_memory(CommandBuffer* commands, GpuRange source, GpuRange destination)
         uint64 destination_offset = 0;
         id<MTLBuffer> source_buffer = resolve_buffer(commands->device, source, &source_offset);
         id<MTLBuffer> destination_buffer = resolve_buffer(commands->device, {.gpu = destination.gpu, .size = source.size}, &destination_offset);
-        [compute_encoder(commands) copyFromBuffer:source_buffer sourceOffset:source_offset toBuffer:destination_buffer
+        [copy_encoder(commands) copyFromBuffer:source_buffer sourceOffset:source_offset toBuffer:destination_buffer
                                destinationOffset:destination_offset size:source.size];
     }
 }
@@ -1468,7 +1647,7 @@ void copy_memory_to_texture(CommandBuffer* commands, GpuRange source, Texture* d
         uint64 offset = 0;
         id<MTLBuffer> buffer = resolve_buffer(commands->device, {.gpu = source.gpu, .size = copy.size}, &offset);
         for (uint32 slice = 0; slice < copy.slices; ++slice)
-            [compute_encoder(commands) copyFromBuffer:buffer sourceOffset:offset + slice * copy.slice_pitch sourceBytesPerRow:copy.row_pitch
+            [copy_encoder(commands) copyFromBuffer:buffer sourceOffset:offset + slice * copy.slice_pitch sourceBytesPerRow:copy.row_pitch
                                  sourceBytesPerImage:copy.image_pitch sourceSize:copy.extent toTexture:destination->texture
                                     destinationSlice:desc.base_slice + slice destinationLevel:desc.mip_level destinationOrigin:copy.origin];
     }
@@ -1483,7 +1662,7 @@ void copy_texture_to_memory(CommandBuffer* commands, Texture* source, GpuRange d
         uint64 offset = 0;
         id<MTLBuffer> buffer = resolve_buffer(commands->device, {.gpu = destination.gpu, .size = copy.size}, &offset);
         for (uint32 slice = 0; slice < copy.slices; ++slice)
-            [compute_encoder(commands) copyFromTexture:source->texture sourceSlice:desc.base_slice + slice sourceLevel:desc.mip_level sourceOrigin:copy.origin
+            [copy_encoder(commands) copyFromTexture:source->texture sourceSlice:desc.base_slice + slice sourceLevel:desc.mip_level sourceOrigin:copy.origin
                                            sourceSize:copy.extent toBuffer:buffer destinationOffset:offset + slice * copy.slice_pitch
                                destinationBytesPerRow:copy.row_pitch destinationBytesPerImage:copy.image_pitch];
     }
@@ -1499,6 +1678,15 @@ void barrier(CommandBuffer* commands, Stage before, Access before_access, Stage 
         const MTLStages destination = barrier_stages(after, false);
         // Shared-event completion provides host visibility; a host-only destination blocks no future GPU stages.
         if (!source || !destination) return;
+        if (!commands->device->metal4)
+        {
+            end_compute(commands);
+            id<MTLBlitCommandEncoder> bridge = [commands->commands3 blitCommandEncoder];
+            [bridge waitForFence:commands->pool->queue->producers];
+            [bridge updateFence:commands->pool->queue->dependencies];
+            [bridge endEncoding];
+            return;
+        }
         const uint64 writes = static_cast<uint64>(Access::transfer_write | Access::shader_write | Access::color_write | Access::depth_stencil_write);
         const MTL4VisibilityOptions visibility = (static_cast<uint64>(before_access) & writes) ? MTL4VisibilityOptionDevice : MTL4VisibilityOptionNone;
         [compute_encoder(commands) barrierAfterStages:source beforeQueueStages:destination visibilityOptions:visibility];
@@ -1635,6 +1823,7 @@ void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc, Rende
     {
         assert(commands->recording && !commands->render && commands->pool->kind == QueueKind::general && desc.colors.size <= 8);
         end_compute(commands);
+        MTLRenderPassDescriptor* pass = commands->device->metal4 ? (MTLRenderPassDescriptor*)commands->pass : commands->pass3;
         RenderView* area = desc.colors.size ? desc.colors.data[0].render_view :
                            desc.depth.render_view ? desc.depth.render_view : desc.stencil.render_view;
         for (uint32 i = 0; i < 8; ++i)
@@ -1642,27 +1831,46 @@ void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc, Rende
             if (i < desc.colors.size)
             {
                 const ColorAttachment& color = desc.colors.data[i];
-                render_attachment(commands->pass.colorAttachments[i], color.render_view, color.load, color.store);
-                commands->pass.colorAttachments[i].clearColor = MTLClearColorMake(color.clear.x, color.clear.y, color.clear.z, color.clear.w);
+                render_attachment(pass.colorAttachments[i], color.render_view, color.load, color.store);
+                pass.colorAttachments[i].clearColor = MTLClearColorMake(color.clear.x, color.clear.y, color.clear.z, color.clear.w);
                 if (!area) area = color.render_view;
             }
-            else commands->pass.colorAttachments[i].texture = nil;
+            else pass.colorAttachments[i].texture = nil;
         }
-        render_attachment(commands->pass.depthAttachment, desc.depth.render_view, desc.depth.load, desc.depth.store);
-        commands->pass.depthAttachment.clearDepth = desc.depth.clear;
-        render_attachment(commands->pass.stencilAttachment, desc.stencil.render_view, desc.stencil.load, desc.stencil.store);
-        commands->pass.stencilAttachment.clearStencil = desc.stencil.clear;
+        render_attachment(pass.depthAttachment, desc.depth.render_view, desc.depth.load, desc.depth.store);
+        pass.depthAttachment.clearDepth = desc.depth.clear;
+        render_attachment(pass.stencilAttachment, desc.stencil.render_view, desc.stencil.load, desc.stencil.store);
+        pass.stencilAttachment.clearStencil = desc.stencil.clear;
         assert(area);
         const NSUInteger width = area->texture.width >> area->mip;
         const NSUInteger height = area->texture.height >> area->mip;
-        commands->pass.renderTargetWidth = width ? width : 1;
-        commands->pass.renderTargetHeight = height ? height : 1;
+        pass.renderTargetWidth = width ? width : 1;
+        pass.renderTargetHeight = height ? height : 1;
         commands->render_continuation = flags != RenderingFlags::none;
         MTL4RenderEncoderOptions options = (static_cast<uint32>(flags) & static_cast<uint32>(RenderingFlags::suspending)) != 0 ?
                                           MTL4RenderEncoderOptionSuspending : MTL4RenderEncoderOptionNone;
         if ((static_cast<uint32>(flags) & static_cast<uint32>(RenderingFlags::resuming)) != 0) options |= MTL4RenderEncoderOptionResuming;
-        commands->render = [[native_commands(commands) renderCommandEncoderWithDescriptor:commands->pass options:options] retain];
-        [commands->render setArgumentTable:commands->arguments atStages:render_stages];
+        if (commands->device->metal4)
+        {
+            commands->render = [[native_commands(commands) renderCommandEncoderWithDescriptor:commands->pass options:options] retain];
+            [commands->render setArgumentTable:commands->arguments atStages:render_stages];
+        }
+        else
+        {
+            const bool suspending = (static_cast<uint32>(flags) & static_cast<uint32>(RenderingFlags::suspending)) != 0;
+            const bool resuming = (static_cast<uint32>(flags) & static_cast<uint32>(RenderingFlags::resuming)) != 0;
+            for (uint32 i = 0; i < 8; ++i)
+            {
+                if (resuming) pass.colorAttachments[i].loadAction = MTLLoadActionLoad;
+                if (suspending) pass.colorAttachments[i].storeAction = MTLStoreActionStore;
+            }
+            if (resuming) { pass.depthAttachment.loadAction = MTLLoadActionLoad; pass.stencilAttachment.loadAction = MTLLoadActionLoad; }
+            if (suspending) { pass.depthAttachment.storeAction = MTLStoreActionStore; pass.stencilAttachment.storeAction = MTLStoreActionStore; }
+            commands->render = [[commands->commands3 renderCommandEncoderWithDescriptor:pass] retain];
+            [(id<MTLRenderCommandEncoder>)commands->render waitForFence:commands->pool->queue->dependencies beforeStages:render_stages];
+            if (resuming) [(id<MTLRenderCommandEncoder>)commands->render waitForFence:commands->pool->queue->producers beforeStages:render_stages];
+            for (uint32 i = 0; i < 3; ++i) bind_buffer(commands, commands->bindings[i], commands->binding_offsets[i], i);
+        }
         [commands->render setFrontFacingWinding:MTLWindingCounterClockwise];
         [commands->render setViewport:MTLViewport{0, double(height ? height : 1), double(width ? width : 1), -double(height ? height : 1), 0, 1}];
         [commands->render setScissorRect:MTLScissorRect{0, 0, width ? width : 1, height ? height : 1}];
@@ -1676,17 +1884,20 @@ void end_render_pass(CommandBuffer* commands) noexcept
     @autoreleasepool
     {
         assert(commands->render);
+        MTLRenderPassDescriptor* pass = commands->device->metal4 ? (MTLRenderPassDescriptor*)commands->pass : commands->pass3;
+        if (!commands->device->metal4)
+            [(id<MTLRenderCommandEncoder>)commands->render updateFence:commands->pool->queue->producers afterStages:render_stages];
         [commands->render endEncoding];
         [commands->render release];
         commands->render = nil;
-        if (commands->render_continuation)
+        if (commands->render_continuation && commands->device->metal4)
         {
             [commands->commands endCommandBuffer];
             commands->commands = nil;
         }
-        for (uint32 i = 0; i < 8; ++i) commands->pass.colorAttachments[i].texture = nil;
-        commands->pass.depthAttachment.texture = nil;
-        commands->pass.stencilAttachment.texture = nil;
+        for (uint32 i = 0; i < 8; ++i) pass.colorAttachments[i].texture = nil;
+        pass.depthAttachment.texture = nil;
+        pass.stencilAttachment.texture = nil;
     }
 }
 
@@ -1752,7 +1963,13 @@ void root_data(CommandBuffer* commands, const void* root)
 {
     if (!root) return;
     assert((reinterpret_cast<uintptr>(root) & 15u) == 0);
-    [commands->arguments setAddress:reinterpret_cast<uintptr>(root) atIndex:0];
+    if (commands->device->metal4) [commands->arguments setAddress:reinterpret_cast<uintptr>(root) atIndex:0];
+    else
+    {
+        uint64 offset = 0;
+        id<MTLBuffer> buffer = resolve_buffer(commands->device, {.gpu = const_cast<void*>(root), .size = 1}, &offset);
+        bind_buffer(commands, buffer, offset, 0);
+    }
 }
 }
 
@@ -1775,6 +1992,16 @@ void draw_indexed(CommandBuffer* commands, const void* root, GpuRange indices, I
         assert(commands->render && commands->pso && !commands->pso->mesh);
         root_data(commands, root);
         const uint64 offset = first_index * (type == IndexType::uint16 ? 2u : 4u);
+        if (!commands->device->metal4)
+        {
+            uint64 buffer_offset = 0;
+            id<MTLBuffer> buffer = resolve_buffer(commands->device, indices, &buffer_offset);
+            [(id<MTLRenderCommandEncoder>)commands->render drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:index_count
+                                     indexType:type == IndexType::uint16 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32
+                                   indexBuffer:buffer indexBufferOffset:buffer_offset + offset
+                                 instanceCount:instance_count baseVertex:vertex_offset baseInstance:first_instance];
+            return;
+        }
         [commands->render drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:index_count
                                      indexType:type == IndexType::uint16 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32
                                    indexBuffer:reinterpret_cast<uintptr>(indices.gpu) + offset indexBufferLength:indices.size - offset
@@ -1789,8 +2016,18 @@ void draw_indirect(CommandBuffer* commands, const void* root, GpuRange arguments
         assert(commands->render && commands->pso && !commands->pso->mesh);
         root_data(commands, root);
         if (!stride) stride = sizeof(MTLDrawPrimitivesIndirectArguments);
+        if (!commands->device->metal4)
+        {
+            uint64 offset = 0;
+            id<MTLBuffer> buffer = resolve_buffer(commands->device, arguments, &offset);
+            for (uint32 i = 0; i < draw_count; ++i)
+                [(id<MTLRenderCommandEncoder>)commands->render drawPrimitives:MTLPrimitiveTypeTriangle
+                                                              indirectBuffer:buffer indirectBufferOffset:offset + i * stride];
+            return;
+        }
         for (uint32 i = 0; i < draw_count; ++i)
-            [commands->render drawPrimitives:MTLPrimitiveTypeTriangle indirectBuffer:reinterpret_cast<uintptr>(arguments.gpu) + i * stride];
+            [(id<MTL4RenderCommandEncoder>)commands->render drawPrimitives:MTLPrimitiveTypeTriangle
+                                                          indirectBuffer:reinterpret_cast<uintptr>(arguments.gpu) + i * stride];
     }
 }
 
@@ -1802,6 +2039,19 @@ void draw_indexed_indirect(CommandBuffer* commands, const void* root, GpuRange i
         assert(commands->render && commands->pso && !commands->pso->mesh);
         root_data(commands, root);
         if (!stride) stride = sizeof(MTLDrawIndexedPrimitivesIndirectArguments);
+        if (!commands->device->metal4)
+        {
+            uint64 index_offset = 0;
+            uint64 argument_offset = 0;
+            id<MTLBuffer> index_buffer = resolve_buffer(commands->device, indices, &index_offset);
+            id<MTLBuffer> argument_buffer = resolve_buffer(commands->device, arguments, &argument_offset);
+            for (uint32 i = 0; i < draw_count; ++i)
+                [(id<MTLRenderCommandEncoder>)commands->render drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                         indexType:type == IndexType::uint16 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32
+                                       indexBuffer:index_buffer indexBufferOffset:index_offset
+                                    indirectBuffer:argument_buffer indirectBufferOffset:argument_offset + i * stride];
+            return;
+        }
         for (uint32 i = 0; i < draw_count; ++i)
             [commands->render drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexType:type == IndexType::uint16 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32
                                        indexBuffer:reinterpret_cast<uintptr>(indices.gpu) indexBufferLength:indices.size
@@ -1825,7 +2075,16 @@ void dispatch_indirect(CommandBuffer* commands, const void* root, GpuRange argum
     {
         assert(commands->pso && commands->pso->compute);
         root_data(commands, root);
-        [compute_encoder(commands) dispatchThreadgroupsWithIndirectBuffer:reinterpret_cast<uintptr>(arguments.gpu) threadsPerThreadgroup:commands->pso->threads];
+        if (commands->device->metal4)
+            [(id<MTL4ComputeCommandEncoder>)compute_encoder(commands) dispatchThreadgroupsWithIndirectBuffer:reinterpret_cast<uintptr>(arguments.gpu)
+                                                                                     threadsPerThreadgroup:commands->pso->threads];
+        else
+        {
+            uint64 offset = 0;
+            id<MTLBuffer> buffer = resolve_buffer(commands->device, arguments, &offset);
+            [(id<MTLComputeCommandEncoder>)compute_encoder(commands) dispatchThreadgroupsWithIndirectBuffer:buffer indirectBufferOffset:offset
+                                                                                   threadsPerThreadgroup:commands->pso->threads];
+        }
     }
 }
 
@@ -1848,6 +2107,15 @@ void draw_meshlets_indirect(CommandBuffer* commands, const void* root, GpuRange 
         assert(commands->device->caps.indirect_mesh_draw);
         root_data(commands, root);
         if (!stride) stride = sizeof(MTLDispatchThreadgroupsIndirectArguments);
+        if (!commands->device->metal4)
+        {
+            uint64 offset = 0;
+            id<MTLBuffer> buffer = resolve_buffer(commands->device, arguments, &offset);
+            for (uint32 i = 0; i < draw_count; ++i)
+                [(id<MTLRenderCommandEncoder>)commands->render drawMeshThreadgroupsWithIndirectBuffer:buffer indirectBufferOffset:offset + i * stride
+                                             threadsPerObjectThreadgroup:commands->pso->object_threads threadsPerMeshThreadgroup:commands->pso->threads];
+            return;
+        }
         for (uint32 i = 0; i < draw_count; ++i)
             [commands->render drawMeshThreadgroupsWithIndirectBuffer:reinterpret_cast<uintptr>(arguments.gpu) + i * stride
                                         threadsPerObjectThreadgroup:commands->pso->object_threads threadsPerMeshThreadgroup:commands->pso->threads];

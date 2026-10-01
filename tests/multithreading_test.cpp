@@ -256,7 +256,9 @@ bool test_parallel_recording(gpu::Device* device) noexcept
             gpu::wait_timeline({.semaphore = contexts[index].timeline, .value = 2});
             gpu::read_timestamps(contexts[index].pool);
             const uint64* timestamps = reinterpret_cast<const uint64*>(contexts[index].readback.range.cpu + textures_per_thread * texture_bytes);
-            if (timestamps[0] == ~uint64{0} || timestamps[1] == ~uint64{0} || timestamps[0] > timestamps[1])
+            if (gpu::get_device_caps(device).timestamp_period_ns != 0
+                    ? timestamps[0] == ~uint64{0} || timestamps[1] == ~uint64{0} || timestamps[0] > timestamps[1]
+                    : timestamps[0] != ~uint64{0} || timestamps[1] != ~uint64{0})
             {
                 fprintf(stderr, "Worker %u timestamp readback failed.\n", index);
                 valid = false;
@@ -313,7 +315,8 @@ void submit_copies(void* argument) noexcept
         gpu::wait_timeline({.semaphore = timeline, .value = iteration});
         gpu::read_timestamps(pool);
         context->valid = memcmp(upload.range.cpu, readback.range.cpu, texture_bytes) == 0 && context->valid;
-        context->valid = *reinterpret_cast<const uint64*>(readback.range.cpu + texture_bytes) != ~uint64{0} && context->valid;
+        context->valid = (*reinterpret_cast<const uint64*>(readback.range.cpu + texture_bytes) != ~uint64{0}) ==
+                         (gpu::get_device_caps(context->device).timestamp_period_ns != 0) && context->valid;
         gpu::reset_command_pool(pool);
     }
     gpu::destroy_command_pool(pool);

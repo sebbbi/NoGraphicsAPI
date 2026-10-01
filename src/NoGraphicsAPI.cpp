@@ -14,6 +14,7 @@
 #include <vulkan/vulkan.h>
 
 #include <NoGraphicsAPI/bit.hpp>
+#include "BufferAddressMap.hpp"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -465,6 +466,7 @@ struct DeviceFunctions
     PFN_vkCmdDispatchIndirect2KHR cmd_dispatch_indirect = nullptr;
     PFN_vkCmdDrawMeshTasksEXT cmd_draw_mesh_tasks = nullptr;
     PFN_vkCmdDrawMeshTasksIndirect2EXT cmd_draw_mesh_tasks_indirect = nullptr;
+    PFN_vkCmdDrawMeshTasksIndirectEXT cmd_draw_mesh_tasks_indirect_buffer = nullptr;
     PFN_vkCmdCopyMemoryKHR cmd_copy_memory = nullptr;
     PFN_vkCmdCopyMemoryToImageKHR cmd_copy_memory_to_image = nullptr;
     PFN_vkCmdCopyImageToMemoryKHR cmd_copy_image_to_memory = nullptr;
@@ -554,6 +556,7 @@ struct GpuHeapOwner
 {
     Device* state = nullptr;
     detail::BackingBuffer backing;
+    detail::BufferRecord* record = nullptr;
 };
 
 struct TextureDescriptorHeap
@@ -653,6 +656,7 @@ struct Device
     uint64 texture_heap_alignment = 16;
     uint32 texture_memory_type = VK_MAX_MEMORY_TYPES;
     detail::DeviceFunctions fn;
+    detail::BufferAddressMap* buffer_map = nullptr;
     DeviceCaps caps;
     VkFormatFeatureFlags2 format_features[format_count]{};
     bool texture_compression_etc2 = false;
@@ -1001,6 +1005,7 @@ Device::~Device()
         free(queues[index].wait_submit_infos);
     }
     delete[] queues;
+    delete buffer_map;
     free(swapchain_delete_queue.entries);
     for (uint32 index = 0; index < present_context_count; ++index)
     {
@@ -1198,6 +1203,7 @@ GpuHeap Device::allocate_gpu_heap(VkDeviceSize size, MemoryType memory) noexcept
 
     GpuHeapOwner* heap = new GpuHeapOwner{.state = this};
     create_backing_buffer(heap->backing, size, universal_buffer_usage, required, preferred, avoided);
+    if (buffer_map) heap->record = buffer_map->insert(heap->backing.address, size, reinterpret_cast<uintptr>(heap->backing.buffer));
     return {
         .range = {
             .cpu = static_cast<byte*>(heap->backing.mapped),
@@ -1383,14 +1389,14 @@ struct QueriedFeatures
     VkPhysicalDeviceMeshShaderFeaturesEXT mesh_shader{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
     VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR swapchain_maintenance1{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR};
 
-    explicit QueriedFeatures(bool presentation, bool include_unified_image_layouts)
+    explicit QueriedFeatures(bool presentation, bool include_unified_image_layouts, bool include_address_commands)
     {
         core.pNext = &vulkan11;
         vulkan11.pNext = &vulkan12;
         vulkan12.pNext = &vulkan13;
         vulkan13.pNext = &vulkan14;
         vulkan14.pNext = &descriptor_heap;
-        descriptor_heap.pNext = &address_commands;
+        descriptor_heap.pNext = include_address_commands ? static_cast<void*>(&address_commands) : static_cast<void*>(&untyped_pointers);
         address_commands.pNext = &untyped_pointers;
         untyped_pointers.pNext = include_unified_image_layouts ? static_cast<void*>(&unified_image_layouts) : static_cast<void*>(&mesh_shader);
         unified_image_layouts.pNext = &mesh_shader;
@@ -1408,6 +1414,7 @@ struct Candidate
     VkPhysicalDeviceProperties properties{};
     VkPhysicalDeviceMemoryProperties memory_properties{};
     bool unified_image_layouts = false;
+    bool address_commands = false;
     bool image_cube_array = false;
     bool texture_compression_bc = false;
     bool texture_compression_astc = false;
@@ -1431,7 +1438,6 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
         VK_KHR_UNIFIED_IMAGE_LAYOUTS_EXTENSION_NAME);
     constexpr const char* required_extensions[]{
         VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME,
-        VK_KHR_DEVICE_ADDRESS_COMMANDS_EXTENSION_NAME,
         VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME,
         VK_EXT_MESH_SHADER_EXTENSION_NAME,
     };
@@ -1479,7 +1485,8 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
     }
     if (!cpu_visible_memory) return Error::unsupported;
 
-    QueriedFeatures features(surface != VK_NULL_HANDLE, unified_image_layouts_extension);
+    const bool address_commands_extension = has_name({extensions, extension_count}, VK_KHR_DEVICE_ADDRESS_COMMANDS_EXTENSION_NAME);
+    QueriedFeatures features(surface != VK_NULL_HANDLE, unified_image_layouts_extension, address_commands_extension);
     vkGetPhysicalDeviceFeatures2(physical_device, &features.core);
     const bool required_features =
         features.core.features.shaderInt16 == VK_TRUE &&
@@ -1504,7 +1511,6 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
         features.vulkan13.maintenance4 == VK_TRUE &&
         features.vulkan14.maintenance5 == VK_TRUE &&
         features.descriptor_heap.descriptorHeap == VK_TRUE &&
-        features.address_commands.deviceAddressCommands == VK_TRUE &&
         features.untyped_pointers.shaderUntypedPointers == VK_TRUE &&
         features.mesh_shader.meshShader == VK_TRUE &&
         (features.core.features.textureCompressionBC == VK_TRUE ||
@@ -1513,6 +1519,9 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
     if (!required_features)
         return Error::unsupported;
     result.unified_image_layouts = unified_image_layouts_extension && features.unified_image_layouts.unifiedImageLayouts == VK_TRUE;
+#if !defined(NOGRAPHICSAPI_TEST_BUFFER_COMMANDS)
+    result.address_commands = address_commands_extension && features.address_commands.deviceAddressCommands == VK_TRUE;
+#endif
     result.image_cube_array = features.core.features.imageCubeArray == VK_TRUE;
     result.texture_compression_bc = features.core.features.textureCompressionBC == VK_TRUE;
     result.texture_compression_astc = features.core.features.textureCompressionASTC_LDR == VK_TRUE;
@@ -1774,7 +1783,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
             state->physical_device, static_cast<Format>(value));
     }
 
-    QueriedFeatures enabled_features(presentation, selected.unified_image_layouts);
+    QueriedFeatures enabled_features(presentation, selected.unified_image_layouts, selected.address_commands);
     state->texture_compression_etc2 = selected.texture_compression_etc2;
     enabled_features.core.features.imageCubeArray = selected.image_cube_array;
     enabled_features.core.features.samplerAnisotropy = VK_TRUE;
@@ -1804,7 +1813,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     enabled_features.vulkan13.maintenance4 = VK_TRUE;
     enabled_features.vulkan14.maintenance5 = VK_TRUE;
     enabled_features.descriptor_heap.descriptorHeap = VK_TRUE;
-    enabled_features.address_commands.deviceAddressCommands = VK_TRUE;
+    enabled_features.address_commands.deviceAddressCommands = selected.address_commands;
     enabled_features.untyped_pointers.shaderUntypedPointers = VK_TRUE;
     enabled_features.unified_image_layouts.unifiedImageLayouts = selected.unified_image_layouts ? VK_TRUE : VK_FALSE;
     enabled_features.mesh_shader.taskShader = VK_TRUE;
@@ -1839,7 +1848,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     const char* enabled_device_extensions[7]{};
     uint32 enabled_device_extension_count = 0;
     enabled_device_extensions[enabled_device_extension_count++] = VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME;
-    enabled_device_extensions[enabled_device_extension_count++] = VK_KHR_DEVICE_ADDRESS_COMMANDS_EXTENSION_NAME;
+    if (selected.address_commands) enabled_device_extensions[enabled_device_extension_count++] = VK_KHR_DEVICE_ADDRESS_COMMANDS_EXTENSION_NAME;
     enabled_device_extensions[enabled_device_extension_count++] = VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME;
     if (selected.unified_image_layouts)
     {
@@ -1886,24 +1895,35 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     state->fn.cmd_bind_sampler_heap = load_device_proc<PFN_vkCmdBindSamplerHeapEXT>(state->device, "vkCmdBindSamplerHeapEXT");
     state->fn.cmd_bind_texture_heap = load_device_proc<PFN_vkCmdBindResourceHeapEXT>(state->device, "vkCmdBindResourceHeapEXT");
     state->fn.cmd_push_data = load_device_proc<PFN_vkCmdPushDataEXT>(state->device, "vkCmdPushDataEXT");
-    state->fn.cmd_bind_index_buffer = load_device_proc<PFN_vkCmdBindIndexBuffer3KHR>(state->device, "vkCmdBindIndexBuffer3KHR");
-    state->fn.cmd_draw_indirect = load_device_proc<PFN_vkCmdDrawIndirect2KHR>(state->device, "vkCmdDrawIndirect2KHR");
-    state->fn.cmd_draw_indexed_indirect = load_device_proc<PFN_vkCmdDrawIndexedIndirect2KHR>(state->device, "vkCmdDrawIndexedIndirect2KHR");
-    state->fn.cmd_dispatch_indirect = load_device_proc<PFN_vkCmdDispatchIndirect2KHR>(state->device, "vkCmdDispatchIndirect2KHR");
     state->fn.cmd_draw_mesh_tasks = load_device_proc<PFN_vkCmdDrawMeshTasksEXT>(state->device, "vkCmdDrawMeshTasksEXT");
-    state->fn.cmd_draw_mesh_tasks_indirect = load_device_proc<PFN_vkCmdDrawMeshTasksIndirect2EXT>(state->device, "vkCmdDrawMeshTasksIndirect2EXT");
-    state->fn.cmd_copy_memory = load_device_proc<PFN_vkCmdCopyMemoryKHR>(state->device, "vkCmdCopyMemoryKHR");
-    state->fn.cmd_copy_memory_to_image = load_device_proc<PFN_vkCmdCopyMemoryToImageKHR>(state->device, "vkCmdCopyMemoryToImageKHR");
-    state->fn.cmd_copy_image_to_memory = load_device_proc<PFN_vkCmdCopyImageToMemoryKHR>(state->device, "vkCmdCopyImageToMemoryKHR");
     if (!state->fn.write_sampler_descriptors || !state->fn.write_resource_descriptors ||
         !state->fn.cmd_bind_sampler_heap || !state->fn.cmd_bind_texture_heap ||
-        !state->fn.cmd_push_data || !state->fn.cmd_bind_index_buffer ||
-        !state->fn.cmd_draw_indirect || !state->fn.cmd_draw_indexed_indirect ||
-        !state->fn.cmd_dispatch_indirect || !state->fn.cmd_draw_mesh_tasks ||
-        !state->fn.cmd_draw_mesh_tasks_indirect || !state->fn.cmd_copy_memory ||
-        !state->fn.cmd_copy_memory_to_image || !state->fn.cmd_copy_image_to_memory)
+        !state->fn.cmd_push_data || !state->fn.cmd_draw_mesh_tasks)
     {
         return fail_device_creation(state, Error::driver_error);
+    }
+    if (selected.address_commands)
+    {
+        state->fn.cmd_bind_index_buffer = load_device_proc<PFN_vkCmdBindIndexBuffer3KHR>(state->device, "vkCmdBindIndexBuffer3KHR");
+        state->fn.cmd_draw_indirect = load_device_proc<PFN_vkCmdDrawIndirect2KHR>(state->device, "vkCmdDrawIndirect2KHR");
+        state->fn.cmd_draw_indexed_indirect = load_device_proc<PFN_vkCmdDrawIndexedIndirect2KHR>(state->device, "vkCmdDrawIndexedIndirect2KHR");
+        state->fn.cmd_dispatch_indirect = load_device_proc<PFN_vkCmdDispatchIndirect2KHR>(state->device, "vkCmdDispatchIndirect2KHR");
+        state->fn.cmd_draw_mesh_tasks_indirect = load_device_proc<PFN_vkCmdDrawMeshTasksIndirect2EXT>(state->device, "vkCmdDrawMeshTasksIndirect2EXT");
+        state->fn.cmd_copy_memory = load_device_proc<PFN_vkCmdCopyMemoryKHR>(state->device, "vkCmdCopyMemoryKHR");
+        state->fn.cmd_copy_memory_to_image = load_device_proc<PFN_vkCmdCopyMemoryToImageKHR>(state->device, "vkCmdCopyMemoryToImageKHR");
+        state->fn.cmd_copy_image_to_memory = load_device_proc<PFN_vkCmdCopyImageToMemoryKHR>(state->device, "vkCmdCopyImageToMemoryKHR");
+        if (!state->fn.cmd_bind_index_buffer || !state->fn.cmd_draw_indirect || !state->fn.cmd_draw_indexed_indirect ||
+            !state->fn.cmd_dispatch_indirect || !state->fn.cmd_draw_mesh_tasks_indirect || !state->fn.cmd_copy_memory ||
+            !state->fn.cmd_copy_memory_to_image || !state->fn.cmd_copy_image_to_memory)
+        {
+            return fail_device_creation(state, Error::driver_error);
+        }
+    }
+    else
+    {
+        state->fn.cmd_draw_mesh_tasks_indirect_buffer = load_device_proc<PFN_vkCmdDrawMeshTasksIndirectEXT>(state->device, "vkCmdDrawMeshTasksIndirectEXT");
+        if (!state->fn.cmd_draw_mesh_tasks_indirect_buffer) return fail_device_creation(state, Error::driver_error);
+        state->buffer_map = new detail::BufferAddressMap{};
     }
 
     if (presentation)
@@ -2033,6 +2053,7 @@ void destroy_gpu_heap(const GpuHeap& heap) noexcept
 {
     if (!heap.owner) return;
     assert(heap.owner->state);
+    if (heap.owner->record) heap.owner->state->buffer_map->remove(heap.owner->record);
     const VkDevice device = heap.owner->state->device;
     const detail::BackingBuffer& backing = heap.owner->backing;
     if (backing.mapped) vkUnmapMemory(device, backing.memory);
@@ -3428,6 +3449,40 @@ VkDeviceMemoryImageCopyKHR make_texture_copy_region(const Texture& texture, cons
 
 namespace
 {
+VkBufferImageCopy2 buffer_texture_copy_region(const VkDeviceMemoryImageCopyKHR& region, uint64 offset) noexcept
+{
+    return {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2,
+        .bufferOffset = offset,
+        .bufferRowLength = region.addressRowLength,
+        .bufferImageHeight = region.addressImageHeight,
+        .imageSubresource = region.imageSubresource,
+        .imageOffset = region.imageOffset,
+        .imageExtent = region.imageExtent,
+    };
+}
+
+void bind_indices(CommandBuffer* commands, GpuRange indices, IndexType type) noexcept
+{
+    if (commands->state->buffer_map)
+    {
+        uint64 offset;
+        const VkBuffer buffer = reinterpret_cast<VkBuffer>(commands->state->buffer_map->resolve(indices, &offset));
+        vkCmdBindIndexBuffer2(commands->command_buffer, buffer, offset, indices.size, static_cast<VkIndexType>(type));
+        return;
+    }
+    const VkBindIndexBuffer3InfoKHR info{
+        .sType = VK_STRUCTURE_TYPE_BIND_INDEX_BUFFER_3_INFO_KHR,
+        .addressRange = {
+            .address = static_cast<VkDeviceAddress>(reinterpret_cast<uintptr>(indices.gpu)),
+            .size = indices.size,
+        },
+        .addressFlags = address_flags,
+        .indexType = static_cast<VkIndexType>(type),
+    };
+    commands->state->fn.cmd_bind_index_buffer(commands->command_buffer, &info);
+}
+
 void emit_root_pointer(CommandBuffer* commands, const void* root) noexcept
 {
     if (!root) return;
@@ -3601,16 +3656,7 @@ void draw_indexed(CommandBuffer* commands, const void* root, GpuRange indices, I
 {
     assert(commands && commands->state);
     emit_root_pointer(commands, root);
-    const VkBindIndexBuffer3InfoKHR bind_info{
-        .sType = VK_STRUCTURE_TYPE_BIND_INDEX_BUFFER_3_INFO_KHR,
-        .addressRange = {
-            .address = static_cast<VkDeviceAddress>(reinterpret_cast<uintptr>(indices.gpu)),
-            .size = indices.size,
-        },
-        .addressFlags = address_flags,
-        .indexType = static_cast<VkIndexType>(type),
-    };
-    commands->state->fn.cmd_bind_index_buffer(commands->command_buffer, &bind_info);
+    bind_indices(commands, indices, type);
     vkCmdDrawIndexed(commands->command_buffer, index_count, instance_count, first_index, vertex_offset, first_instance);
 }
 
@@ -3618,6 +3664,13 @@ void draw_indirect(CommandBuffer* commands, const void* root, GpuRange arguments
 {
     assert(commands && commands->state);
     emit_root_pointer(commands, root);
+    if (commands->state->buffer_map)
+    {
+        uint64 offset;
+        const VkBuffer buffer = reinterpret_cast<VkBuffer>(commands->state->buffer_map->resolve(arguments, &offset));
+        vkCmdDrawIndirect(commands->command_buffer, buffer, offset, draw_count, stride == 0 ? sizeof(VkDrawIndirectCommand) : stride);
+        return;
+    }
     const VkDrawIndirect2InfoKHR info{
         .sType = VK_STRUCTURE_TYPE_DRAW_INDIRECT_2_INFO_KHR,
         .addressRange = {
@@ -3636,16 +3689,14 @@ void draw_indexed_indirect(CommandBuffer* commands, const void* root, GpuRange i
 {
     assert(commands && commands->state);
     emit_root_pointer(commands, root);
-    const VkBindIndexBuffer3InfoKHR bind_info{
-        .sType = VK_STRUCTURE_TYPE_BIND_INDEX_BUFFER_3_INFO_KHR,
-        .addressRange = {
-            .address = static_cast<VkDeviceAddress>(reinterpret_cast<uintptr>(indices.gpu)),
-            .size = indices.size,
-        },
-        .addressFlags = address_flags,
-        .indexType = static_cast<VkIndexType>(type),
-    };
-    commands->state->fn.cmd_bind_index_buffer(commands->command_buffer, &bind_info);
+    bind_indices(commands, indices, type);
+    if (commands->state->buffer_map)
+    {
+        uint64 offset;
+        const VkBuffer buffer = reinterpret_cast<VkBuffer>(commands->state->buffer_map->resolve(arguments, &offset));
+        vkCmdDrawIndexedIndirect(commands->command_buffer, buffer, offset, draw_count, stride == 0 ? sizeof(VkDrawIndexedIndirectCommand) : stride);
+        return;
+    }
     const VkDrawIndirect2InfoKHR info{
         .sType = VK_STRUCTURE_TYPE_DRAW_INDIRECT_2_INFO_KHR,
         .addressRange = {
@@ -3670,6 +3721,13 @@ void dispatch_indirect(CommandBuffer* commands, const void* root, GpuRange argum
 {
     assert(commands && commands->state);
     emit_root_pointer(commands, root);
+    if (commands->state->buffer_map)
+    {
+        uint64 offset;
+        const VkBuffer buffer = reinterpret_cast<VkBuffer>(commands->state->buffer_map->resolve(arguments, &offset));
+        vkCmdDispatchIndirect(commands->command_buffer, buffer, offset);
+        return;
+    }
     const VkDispatchIndirect2InfoKHR info{
         .sType = VK_STRUCTURE_TYPE_DISPATCH_INDIRECT_2_INFO_KHR,
         .addressRange = {
@@ -3693,6 +3751,14 @@ void draw_meshlets_indirect(CommandBuffer* commands, const void* root, GpuRange 
     assert(commands && commands->state);
     assert(commands->state->caps.indirect_mesh_draw);
     emit_root_pointer(commands, root);
+    if (commands->state->buffer_map)
+    {
+        uint64 offset;
+        const VkBuffer buffer = reinterpret_cast<VkBuffer>(commands->state->buffer_map->resolve(arguments, &offset));
+        commands->state->fn.cmd_draw_mesh_tasks_indirect_buffer(
+            commands->command_buffer, buffer, offset, draw_count, stride == 0 ? sizeof(VkDrawMeshTasksIndirectCommandEXT) : stride);
+        return;
+    }
     const VkDrawIndirect2InfoKHR info{
         .sType = VK_STRUCTURE_TYPE_DRAW_INDIRECT_2_INFO_KHR,
         .addressRange = {
@@ -3709,6 +3775,28 @@ void draw_meshlets_indirect(CommandBuffer* commands, const void* root, GpuRange 
 void copy_memory(CommandBuffer* commands, GpuRange source, GpuRange destination) noexcept
 {
     assert(commands && commands->state);
+    if (commands->state->buffer_map)
+    {
+        uint64 source_offset;
+        uint64 destination_offset;
+        const VkBuffer source_buffer = reinterpret_cast<VkBuffer>(commands->state->buffer_map->resolve(source, &source_offset));
+        const VkBuffer destination_buffer = reinterpret_cast<VkBuffer>(commands->state->buffer_map->resolve(destination, &destination_offset));
+        const VkBufferCopy2 region{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_COPY_2,
+            .srcOffset = source_offset,
+            .dstOffset = destination_offset,
+            .size = source.size,
+        };
+        const VkCopyBufferInfo2 info{
+            .sType = VK_STRUCTURE_TYPE_COPY_BUFFER_INFO_2,
+            .srcBuffer = source_buffer,
+            .dstBuffer = destination_buffer,
+            .regionCount = 1,
+            .pRegions = &region,
+        };
+        vkCmdCopyBuffer2(commands->command_buffer, &info);
+        return;
+    }
     const VkDeviceMemoryCopyKHR region{
         .sType = VK_STRUCTURE_TYPE_DEVICE_MEMORY_COPY_KHR,
         .srcRange = {
@@ -3734,6 +3822,22 @@ void copy_memory_to_texture(CommandBuffer* commands, GpuRange source, Texture* d
 {
     assert(commands && commands->state && destination);
     const VkDeviceMemoryImageCopyKHR region = make_texture_copy_region(*destination, copy, source);
+    if (commands->state->buffer_map)
+    {
+        uint64 offset;
+        const VkBuffer buffer = reinterpret_cast<VkBuffer>(commands->state->buffer_map->resolve(source, &offset));
+        const VkBufferImageCopy2 buffer_region = buffer_texture_copy_region(region, offset);
+        const VkCopyBufferToImageInfo2 info{
+            .sType = VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2,
+            .srcBuffer = buffer,
+            .dstImage = destination->image,
+            .dstImageLayout = VK_IMAGE_LAYOUT_GENERAL,
+            .regionCount = 1,
+            .pRegions = &buffer_region,
+        };
+        vkCmdCopyBufferToImage2(commands->command_buffer, &info);
+        return;
+    }
     const VkCopyDeviceMemoryImageInfoKHR info{
         .sType = VK_STRUCTURE_TYPE_COPY_DEVICE_MEMORY_IMAGE_INFO_KHR,
         .image = destination->image,
@@ -3747,6 +3851,22 @@ void copy_texture_to_memory(CommandBuffer* commands, Texture* source, GpuRange d
 {
     assert(commands && commands->state && source);
     const VkDeviceMemoryImageCopyKHR region = make_texture_copy_region(*source, copy, destination);
+    if (commands->state->buffer_map)
+    {
+        uint64 offset;
+        const VkBuffer buffer = reinterpret_cast<VkBuffer>(commands->state->buffer_map->resolve(destination, &offset));
+        const VkBufferImageCopy2 buffer_region = buffer_texture_copy_region(region, offset);
+        const VkCopyImageToBufferInfo2 info{
+            .sType = VK_STRUCTURE_TYPE_COPY_IMAGE_TO_BUFFER_INFO_2,
+            .srcImage = source->image,
+            .srcImageLayout = VK_IMAGE_LAYOUT_GENERAL,
+            .dstBuffer = buffer,
+            .regionCount = 1,
+            .pRegions = &buffer_region,
+        };
+        vkCmdCopyImageToBuffer2(commands->command_buffer, &info);
+        return;
+    }
     const VkCopyDeviceMemoryImageInfoKHR info{
         .sType = VK_STRUCTURE_TYPE_COPY_DEVICE_MEMORY_IMAGE_INFO_KHR,
         .image = source->image,

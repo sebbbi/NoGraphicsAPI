@@ -1,14 +1,14 @@
 # NoGraphicsAPI
 
-NoGraphicsAPI is a C++20 graphics library designed for the latest **Metal 4** devices and **Vulkan 1.4** devices with
-**`VK_EXT_descriptor_heap`**, **`VK_KHR_device_address_commands`**, and **`VK_EXT_mesh_shader`**.
+NoGraphicsAPI is a C++20 graphics library for **Metal 3/4** devices and **Vulkan 1.4** devices with
+**`VK_EXT_descriptor_heap`** and **`VK_EXT_mesh_shader`**. Metal 4 and Vulkan device-address commands are preferred when available.
 It implements the ideas in Sebastian Aaltonen's [*No Graphics API*](https://www.sebastianaaltonen.com/blog/no-graphics-api)
 with GPU pointers, descriptor heaps, and shared Slang shaders.
 
 The goal is to make GPU programming feel more like working with ordinary memory and data structures:
 GPU pointers for data, heap indices for textures, and one GPU pointer to the arguments of each draw or dispatch.
 
-Metal 4 and Vulkan are supported native backends. CMake selects Metal on macOS/iOS and Vulkan on Windows/Linux.
+Metal and Vulkan are supported native backends. CMake selects Metal on macOS/iOS and Vulkan on Windows/Linux.
 Both use the same C++ API and Slang sources. Windows and macOS include windowed examples; Linux currently supports headless use.
 
 ## What changes from classic rendering?
@@ -82,16 +82,18 @@ the [shader guide](docs/slang.md) for complete examples.
 
 ## Native implementations
 
-Metal 4 supplies native GPU addresses, draw/dispatch commands that accept those addresses, and
-`MTLTextureViewPool` for indexed textures. Vulkan supplies the equivalent model through device-address
-commands and descriptor heaps. See [Metal implementation](docs/metal-support.md) and
+Metal exposes native GPU addresses. Metal 4 draw/dispatch commands accept those addresses directly;
+Metal 3 maps command pointers to buffers and offsets. Both use `MTLTextureViewPool` for indexed textures
+on OS 26+; older OS versions use texture resource-ID tables. Vulkan uses device-address commands when available
+and the same buffer mapping otherwise. See [Metal implementation](docs/metal-support.md) and
 [Vulkan implementation](docs/vulkan-support.md) for how these map to NoGraphicsAPI.
 
 ## Hardware requirements
 
-### Metal 4
+### Metal
 
-Requires macOS, iOS or iPadOS 26+ and Apple GPU family 7 or newer with Metal 4.
+Requires macOS 15+ or iOS/iPadOS 18+ and Apple GPU family 7 or newer.
+Metal 4 is selected on supported devices running OS 26+; otherwise the backend uses Metal 3.
 
 | Platform | Supported devices |
 | --- | --- |
@@ -114,10 +116,10 @@ The Vulkan backend targets little-endian x86-64; utility math requires AVX2 and 
 Vulkan 1.4 alone is insufficient. Required extensions include:
 
 - [`VK_EXT_descriptor_heap`][descriptor-heap] — application-owned descriptor heaps.
-- [`VK_KHR_device_address_commands`][address-commands] — commands operating on GPU addresses.
 - [`VK_EXT_mesh_shader`][mesh-shader] — task and mesh shaders.
 - [`VK_KHR_shader_untyped_pointers`](https://docs.vulkan.org/refpages/latest/refpages/source/VK_KHR_shader_untyped_pointers.html) — descriptor-heap shader support.
 
+[`VK_KHR_device_address_commands`][address-commands] is optional: without it, command addresses resolve to backing buffers and offsets.
 [`VK_KHR_unified_image_layouts`][unified-layouts] is optional and makes the backend's common image layout efficient.
 See the [Vulkan implementation](docs/vulkan-support.md) for the complete feature contract.
 
@@ -227,7 +229,7 @@ The executables are under `build-msvc/examples/<example>/Release` when using the
 
 - [Comparison with *No Graphics API*](docs/no-graphics-api-comparison.md)
 - [Vulkan implementation](docs/vulkan-support.md)
-- [Metal 4 implementation](docs/metal-support.md)
+- [Metal implementation](docs/metal-support.md)
 - [Slang shaders and root ABI](docs/slang.md)
 - [Public API](include/NoGraphicsAPI/NoGraphicsAPI.hpp)
 - [Metal validation and limitations](docs/metal-validation.md)
