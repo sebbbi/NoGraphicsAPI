@@ -2,29 +2,33 @@
 
 These are locally reproduced observations, not vendor-confirmed root causes.
 
-## NVIDIA 596.99: stale address-based texture readback
+## NVIDIA 617.14: stale address-based texture readback
 
-Observed on an RTX 4090 with NVIDIA 596.99, with both sequential and parallel command recording.
-An upload through `vkCmdCopyMemoryToImageKHR` followed by `vkCmdCopyImageToMemoryKHR` returned stale
-data despite a transfer-write to transfer-read barrier. The issue also reproduced without validation.
+The failure observed on NVIDIA 596.99 persists on an RTX 4090 with NVIDIA 617.14, retested on 2026-10-07.
+An upload through `vkCmdCopyMemoryToImageKHR` followed by `vkCmdCopyImageToMemoryKHR` returns incorrect
+data despite a transfer-write to transfer-read barrier. Removing the intermediate timeline wait from
+`test_texture_copy` fails for 3D, array, cube, and BC7 textures in both Release and Debug.
+The buffer-command controls pass.
 
-A timeline wait between separate upload and readback submissions works. A full Vulkan memory
-dependency also worked in isolation; native `vkCmdCopyImageToBuffer2` readback worked in the comparison.
-The parallel texture and pitch-roundtrip tests use an explicit timeline wait. No driver-specific barrier widening is applied
-by the graphics API.
+A parallel-recording control using two command buffers in one submission, with a transfer barrier and
+no intermediate timeline wait, passed 50 runs in each Debug/Release address-command and buffer-command variant.
+A timeline wait between separate upload and readback submissions works. The parallel texture and
+pitch-roundtrip tests retain this workaround. No driver-specific barrier widening is applied by the graphics API.
 
-## NVIDIA 596.99: core Vulkan 1.3 concurrent copies lose the device
+## NVIDIA 617.14: core Vulkan 1.3 concurrent copies lose the device
 
-On Windows with an RTX 4090, buffer copies submitted to separate general, compute, and copy queues from
-three CPU threads intermittently return `VK_ERROR_DEVICE_LOST`.
+The failure observed on NVIDIA 596.99 persists on Windows with an RTX 4090 and NVIDIA 617.14.
+Buffer copies submitted to separate general, compute, and copy queues from three CPU threads
+intermittently return `VK_ERROR_DEVICE_LOST`.
 
 The failure reproduces independently of NoGraphicsAPI using standard Vulkan 1.3, with no instance or
 device extensions enabled (`--buffers --no-validation`). The standalone repro does not link or call
 NoGraphicsAPI; it uses ordinary `vkCmdCopyBuffer2`, synchronization2 barriers, and timeline semaphores.
 There are no shaders, PushData calls, descriptor heaps, or timestamp queries.
 
-It also fails with core and synchronization validation enabled, without a preceding validation error.
-That mode adds only the debug/validation instance extensions, not device extensions.
+The 2026-10-07 retest reproduced core-copy device loss without validation in both Release and Debug.
+Address copies also failed with and without synchronization validation. Core-copy validation runs and
+sequential address-copy runs passed 50 repetitions each; these controls do not establish a workaround.
 
 This points to an NVIDIA driver issue independent of the library implementation, not a confirmed
 NoGraphicsAPI defect. The root cause is not vendor-confirmed, and no workaround is established.

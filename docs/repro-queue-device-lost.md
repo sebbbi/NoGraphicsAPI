@@ -1,7 +1,8 @@
 # Core Vulkan 1.3 concurrent queue device-loss repro
 
-On Windows with an RTX 4090 and NVIDIA 596.99, this standalone repro intermittently loses the device using
+On Windows with an RTX 4090 and NVIDIA 617.14, this standalone repro intermittently loses the device using
 standard Vulkan 1.3 with no instance or device extensions enabled (`--buffers --no-validation`).
+The failure previously observed on NVIDIA 596.99 persists in the 2026-10-07 retest.
 
 The [source](../tests/repro_queue_device_lost.cpp) does not link or call NoGraphicsAPI. It includes only
 the library's integer typedefs and links to Vulkan and the OS threading library. This manual target is
@@ -52,35 +53,31 @@ checked independently of asserts.
 
 Do not externally force a validation layer when testing `--no-validation`.
 
-## Observed on 2026-09-17
+## Retested on 2026-10-07
 
-Windows, RTX 4090, NVIDIA 596.99, Vulkan validation layer 1.4.357. The failure is intermittent.
+Windows, RTX 4090, NVIDIA 617.14, Vulkan 1.4.351, Vulkan validation layer 1.4.357.
+Each configuration ran up to 50 fresh process launches, stopping at its first failure, with 256 iterations
+per worker. Validation configurations include core and synchronization validation.
 
 | Configuration | Observation |
 | --- | --- |
-| Release, core copies, validation + sync validation | Device lost on repetition 37; no preceding validation error |
-| Release, core copies, no extensions or validation | Device lost on repetition 5 in the final check |
-| Debug, core copies, validation + sync validation | 40 repetitions passed |
-| Debug, core copies, no validation | A timeline wait timed out after five seconds on repetition 9 |
-| Release, address copies, sequential workers | 40 repetitions passed |
-| Release, address copies, explicit CPU store fence | Device loss still reproduced |
+| Release, core copies, validation | 50 launches passed |
+| Release, core copies, no extensions or validation | Device lost on launch 28; stale readback and all-ones timeline counter |
+| Debug, core copies, validation | 50 launches passed |
+| Debug, core copies, no extensions or validation | `vkQueueSubmit2` returned `VK_ERROR_DEVICE_LOST` on launch 4 |
+| Release, address copies, validation | Device lost on launch 40; stale readback and all-ones timeline counter |
+| Release, address copies, no validation | Device lost on launch 14; stale readback and all-ones timeline counter |
+| Release, address copies, sequential workers, validation | 50 launches passed |
+| Release, address copies, explicit CPU store fence, validation | `vkQueueSubmit2` returned `VK_ERROR_DEVICE_LOST` on launch 39 |
 
-Each repetition is a fresh process launch, not a frame. One captured failure occurred on the compute
-queue's first iteration, after a successful timeline wait:
+The stale-readback failures retained `cdcdcdcd`, reported timeline counter `18446744073709551615`,
+and returned `VK_ERROR_DEVICE_LOST` from `vkQueueWaitIdle`. These can accompany device loss;
+they are not proof of a separate timeline-ordering bug. Local logs are in `build-msvc/driver-retest-61714`.
 
-```text
-Family 2, iteration 1, word 0: expected 02000100, received cdcdcdcd.
-Family 2: counter result 0, value 18446744073709551615, queue idle result -4; readback after idle cdcdcdcd.
-```
+With the existing texture-readback workarounds, clean Release and Debug builds each passed all 40 CTest
+tests once. Repeating the enabled `test_queue_family_threads` test still produced buffer-readback
+failures in Release; one passing suite does not rule out this intermittent issue.
 
-Other runs return `VK_ERROR_DEVICE_LOST` directly from `vkQueueSubmit2`. The all-ones timeline value and
-invalid readback can accompany device loss; they are not proof of a separate timeline-ordering bug.
-
-As a validation check, temporarily removing the first transfer barrier immediately produced
-`READ_AFTER_WRITE` with core copies. That deliberate error is not present in the source.
-
-The NoGraphicsAPI implementation, device extensions, PushData, and timestamp resolution are not required
-to trigger this failure. It points to an NVIDIA driver issue independent of the library implementation,
-but the root cause is not vendor-confirmed. Clean validation does not prove the repro is free of all API
-misuse, and passing controls do not establish a workaround. No library behavior has been changed to hide
-the failure. No common root cause with bad_sdf's CPU-side driver crash has been established.
+The failure does not require NoGraphicsAPI, device extensions, PushData, or timestamp resolution.
+The root cause is not vendor-confirmed, and the passing validation and sequential controls do not establish
+a workaround. No library behavior has been changed to hide the failure.

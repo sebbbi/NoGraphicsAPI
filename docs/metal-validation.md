@@ -1,7 +1,6 @@
 # Metal validation
 
-Tested on Apple M3 Max, macOS 26.6.2, Xcode 27 and stock Slang 2026.18.2. The integrating bad_sdf
-application also runs on iPhone 15 Pro. M1/M2 hardware execution remains unverified.
+Tested on Apple M3 Max, macOS 26.6.2, Xcode 27 and stock Slang 2026.18.2. M1/M2 hardware execution remains unverified.
 These results cover Metal 4. Metal 3 native compilation and runtime validation remain unverified.
 
 ## Running the checks
