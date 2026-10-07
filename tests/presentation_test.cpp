@@ -29,6 +29,8 @@ void pump_messages() noexcept
 int main(int argc, char** argv)
 {
     const bool queue_families = argc == 2 && strcmp(argv[1], "--queue-families") == 0;
+    const bool scrgb = argc == 2 && strcmp(argv[1], "--scrgb") == 0;
+    const bool switch_color_space = argc == 2 && strcmp(argv[1], "--switch-color-space") == 0;
     const WNDCLASSEXA window_class{
         .cbSize = sizeof(WNDCLASSEXA),
         .lpfnWndProc = DefWindowProcA,
@@ -51,7 +53,8 @@ int main(int argc, char** argv)
 
     const gpu::DeviceInit device_init = gpu::create_device({
         .window = window,
-        .swapchain_format = gpu::Format::bgra8_srgb,
+        .swapchain_format = scrgb ? gpu::Format::rgba16_float : gpu::Format::bgra8_srgb,
+        .swapchain_color_space = scrgb ? gpu::ColorSpace::extended_srgb_linear : gpu::ColorSpace::srgb,
         .desired_queue_count = 2,
         .desired_compute_queue_count = queue_families ? 1u : 0u,
         .desired_copy_queue_count = queue_families ? 1u : 0u,
@@ -76,6 +79,8 @@ int main(int argc, char** argv)
     gpu::TimelinePoint completion{.semaphore = gpu::create_timeline_semaphore(device)};
     uint32 width = 256;
     uint32 height = 192;
+    bool hdr_output = scrgb;
+    bool skipped = false;
 
     for (uint32 frame_index = 0; frame_index != 8; ++frame_index)
     {
@@ -84,6 +89,30 @@ int main(int argc, char** argv)
         gpu::reset_command_pool(last_pool);
         gpu::reset_command_pool(independent_pool);
         for (uint32 index = 0; index != 3; ++index) timestamp_cpu[index] = ~uint64{0};
+
+        if (switch_color_space)
+        {
+            gpu::wait_idle(device);
+            if (frame_index == 1 || frame_index == 5 || frame_index == 6)
+            {
+                const bool requested_hdr = frame_index != 6;
+                const gpu::Error error = gpu::set_swapchain_format(device,
+                    requested_hdr ? gpu::Format::rgba16_float : gpu::Format::bgra8_srgb,
+                    requested_hdr ? gpu::ColorSpace::extended_srgb_linear : gpu::ColorSpace::srgb);
+                if (frame_index == 1 && error == gpu::Error::unsupported)
+                {
+                    skipped = true;
+                    break;
+                }
+                CHECK(error == gpu::Error::none);
+                if (error != gpu::Error::none) break;
+                hdr_output = requested_hdr;
+            }
+            // Rejection must preserve the active mode and leave the next acquire usable.
+            CHECK(gpu::set_swapchain_format(device, gpu::Format::d32_float, gpu::ColorSpace::srgb) == gpu::Error::unsupported);
+            CHECK(gpu::set_swapchain_format(device, hdr_output ? gpu::Format::rgba16_float : gpu::Format::bgra8_srgb,
+                                           hdr_output ? gpu::ColorSpace::extended_srgb_linear : gpu::ColorSpace::srgb) == gpu::Error::none);
+        }
 
         if (frame_index == 2)
         {
@@ -98,6 +127,12 @@ int main(int argc, char** argv)
             pump_messages();
             const gpu::uint32x2 empty_extent = gpu::get_drawable_extent(device);
             CHECK(empty_extent.x == 0 && empty_extent.y == 0);
+            if (switch_color_space)
+            {
+                CHECK(gpu::set_swapchain_format(device, gpu::Format::bgra8_srgb, gpu::ColorSpace::srgb) == gpu::Error::none);
+                hdr_output = false;
+                CHECK(gpu::set_swapchain_format(device, gpu::Format::d32_float, gpu::ColorSpace::srgb) == gpu::Error::unsupported);
+            }
             gpu::CommandBuffer* empty_commands = gpu::begin_commands(present_pool);
             const gpu::SwapchainFrame empty_frame = gpu::acquire(empty_commands);
             CHECK(!empty_frame.render_view && empty_frame.extent.x == 0 && empty_frame.extent.y == 0);
@@ -132,7 +167,7 @@ int main(int argc, char** argv)
         const gpu::ColorAttachment colors[]{{
             .render_view = frame.render_view,
             .load = gpu::LoadOp::clear,
-            .clear = {.x = float(frame_index) / 8.0f, .y = 0.25f, .z = 0.5f, .w = 1.0f},
+            .clear = {.x = float(frame_index) / 8.0f, .y = hdr_output ? 2.5f : 0.25f, .z = hdr_output ? 12.5f : 0.5f, .w = 1.0f},
         }};
         const gpu::RenderingDesc rendering{.colors = colors};
         const bool split_pass = (frame_index & 1u) != 0;
@@ -187,7 +222,12 @@ int main(int argc, char** argv)
     gpu::destroy_device(device);
     CHECK(DestroyWindow(window));
     CHECK(UnregisterClassA(window_class.lpszClassName, window_class.hInstance));
+    if (skipped && !failures)
+    {
+        puts("The surface does not support FP16 scRGB; presentation color-space switch test skipped.");
+        return 77;
+    }
     if (!failures)
-        puts("Presentation, suspended rendering, timestamp readback, resize, zero drawable, and independent submission checks passed.");
+        puts("Presentation, color-space selection, suspended rendering, timestamp readback, resize, zero drawable, and independent submission checks passed.");
     return failures ? 1 : 0;
 }

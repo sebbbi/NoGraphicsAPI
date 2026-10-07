@@ -34,14 +34,19 @@ UploadQueue::UploadQueue(Device* device, uint64 capacity, uint32 queue_index, ui
         state_.texture_granularity = caps.copy_texture_granularity;
     }
     state_.heap = create_gpu_heap(device, capacity, MemoryType::cpu_visible);
+    if (!state_.heap.owner) { destroy(); return; }
     state_.completion.semaphore = create_timeline_semaphore(device);
+    if (!state_.completion.semaphore) { destroy(); return; }
     state_.batches = new Batch[max_pending_batches]{};
     state_.max_pending_batches = max_pending_batches;
     for (uint32 index = 0; index < max_pending_batches; ++index)
     {
         Batch& batch = state_.batches[index];
         batch.pool = create_command_pool(device, queue_index);
-        end_commands(begin_commands(batch.pool));
+        if (!batch.pool) { destroy(); return; }
+        CommandBuffer* commands = begin_commands(batch.pool);
+        if (!commands) { destroy(); return; }
+        end_commands(commands);
         reset_command_pool(batch.pool);
     }
 }

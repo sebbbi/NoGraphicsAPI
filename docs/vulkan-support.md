@@ -155,6 +155,18 @@ Texture upload and readback go through buffer-backed `GpuRange` values with
 `copy_memory_to_texture()` and `copy_texture_to_memory()`. The application retires texture-heap ranges
 with its submission timeline.
 
+`TextureDesc::aliasable` allows resident images and views to share a placement, with only one alias
+in use at a time. Reserve enough bytes and alignment for every image and use aliasable descriptions
+for both sizing and creation. Creation uses `VK_IMAGE_CREATE_ALIAS_BIT` and defers initialization.
+Descriptors and views can remain resident while the application selects the active alias.
+
+Before first use and each subsequent handoff, `activate_texture_alias()` records a global memory
+dependency followed by a whole-image discard transition from `UNDEFINED` to `GENERAL`. Record it
+outside rendering, after the previous alias's uses on the same queue; synchronize other queues with
+timeline waits. Clear or overwrite before reading: differently formatted aliases do not preserve
+each other's contents. The application manages overlapping ranges; the backend has no alias registry.
+See Vulkan's [memory aliasing rules](https://docs.vulkan.org/spec/latest/chapters/resources.html#resources-memory-aliasing).
+
 ## Root ABI
 
 Each draw, mesh draw, and dispatch accepts a GPU root pointer. The backend pushes that eight-byte
@@ -288,6 +300,17 @@ Windowed device creation/destruction, drawable queries, acquire, and presentatio
 message-pump thread; other work follows the threading rules above. Binary WSI semaphores remain private, while
 `VK_KHR_swapchain_maintenance1` present fences support safe reuse and swapchain replacement without
 draining unrelated queue work.
+
+`DeviceDesc::swapchain_color_space` defaults to `ColorSpace::srgb`. Windowed devices enable
+`VK_EXT_swapchain_colorspace` when advertised, including devices starting in SDR. Extended output
+requires that extension and an advertised format/color-space pair; use `Format::rgba16_float` with
+`ColorSpace::extended_srgb_linear` for FP16 scRGB output. Unsupported requests fail device creation.
+
+`set_swapchain_format()` changes the pair while retaining the device and application resources.
+Call it on the presentation thread after `wait_idle()`, with no acquired frame. Unsupported pairs
+leave the previous mode usable; a zero-size drawable defers recreation until its extent is nonzero.
+Resize preserves the selected pair. The application owns display/HDR-state detection and must supply
+pixels in the selected color space; the backend does not change OS display settings or tone-map output.
 
 ## Validation
 

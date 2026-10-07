@@ -28,6 +28,8 @@ public:
     // max_pending_batches must be nonzero; normally match the number of frames in flight.
     explicit UploadQueue(Device* device, uint64 capacity = 64ull * 1024 * 1024, uint32 queue_index = 0, uint32 max_pending_batches = 2) noexcept;
     ~UploadQueue() noexcept;
+    // Check after construction before enqueueing uploads. Failed initialization releases partial resources and leaves an empty queue.
+    [[nodiscard]] bool valid() const noexcept { return state_.device != nullptr; }
     // Flushes and waits for uploads. Finish external submissions using returned timeline points before destruction or move assignment.
     void destroy() noexcept;
 

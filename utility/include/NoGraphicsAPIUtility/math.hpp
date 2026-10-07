@@ -1141,6 +1141,18 @@ namespace math {
 		return static_cast<uint16>(sign | rounded);
 	}
 
+	constexpr float half_bits_to_float(uint16 value) noexcept {
+		const uint32 sign = static_cast<uint32>(value & 0x8000u) << 16u;
+		const uint32 exponent = (value >> 10u) & 0x1fu;
+		const uint32 mantissa = value & 0x03ffu;
+		if (exponent == 0u) {
+			const float magnitude = static_cast<float>(mantissa) * 0x1p-24f;
+			return sign ? -magnitude : magnitude;
+		}
+		const uint32 bits = sign | ((exponent == 31u ? 255u : exponent + 112u) << 23u) | (mantissa << 13u);
+		return __builtin_bit_cast(float, bits);
+	}
+
 	constexpr uint32 pack_half_2x16(float2 value) noexcept {
 		return static_cast<uint32>(float_to_half_bits(value.x)) | (static_cast<uint32>(float_to_half_bits(value.y)) << 16u);
 	}

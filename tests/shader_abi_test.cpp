@@ -12,6 +12,9 @@ static_assert(sizeof(ShaderAbiData) == 80 && sizeof(ShaderAbiRoot) == 96);
 static_assert(offsetof(ShaderAbiRoot, vector) == 4 && offsetof(ShaderAbiRoot, color) == 16);
 static_assert(offsetof(ShaderAbiRoot, output) == 32 && offsetof(ShaderAbiRoot, matrix) == 40 && offsetof(ShaderAbiRoot, sampled) == 80);
 
+// Vulkan guarantees 4,000 sampler descriptors plus its reserved heap range.
+constexpr uint32 sampler_count = 4000;
+
 static bool test_shader_abi(gpu::Device* device)
 {
     gpu::Span<byte> code = load_test_shader(NOGRAPHICSAPI_SHADER_ABI_PATH);
@@ -26,7 +29,7 @@ static bool test_shader_abi(gpu::Device* device)
     const gpu::TextureHeap texture_heap = gpu::create_texture_heap(device, stride * shader_abi_thread_count);
     gpu::Texture* textures[shader_abi_thread_count]{};
     gpu::TextureDescriptorHeap* views = gpu::create_texture_descriptor_heap(device, shader_abi_thread_count);
-    gpu::SamplerDescriptorHeap* samplers = gpu::create_sampler_descriptor_heap(device, 4096);
+    gpu::SamplerDescriptorHeap* samplers = gpu::create_sampler_descriptor_heap(device, sampler_count);
     const gpu::GpuHeap upload = gpu::create_gpu_heap(device, 128);
     const gpu::GpuHeap output = gpu::create_gpu_heap(device, 1024, gpu::MemoryType::gpu_only);
     const gpu::GpuHeap readback = gpu::create_gpu_heap(device, 1024, gpu::MemoryType::readback);
@@ -37,8 +40,9 @@ static bool test_shader_abi(gpu::Device* device)
         textures[i] = gpu::create_texture(commands, desc, texture_heap, stride * i);
         if (!textures[i]) return false;
         gpu::write_texture_descriptor(views, i, textures[i], gpu::TextureDescriptorType::sampled);
-        gpu::write_sampler_descriptor(samplers, 4092 + i, {.min_filter = gpu::Filter::nearest, .mag_filter = gpu::Filter::nearest,
-            .address_u = (i & 1) ? gpu::AddressMode::repeat : gpu::AddressMode::clamp_to_edge});
+        gpu::write_sampler_descriptor(samplers, sampler_count - shader_abi_thread_count + i,
+            {.min_filter = gpu::Filter::nearest, .mag_filter = gpu::Filter::nearest,
+             .address_u = (i & 1) ? gpu::AddressMode::repeat : gpu::AddressMode::clamp_to_edge});
         for (uint32 component = 0; component != 8; ++component) upload.range.cpu[i * 8 + component] = byte(17 * i + component + 1);
     }
     gpu::TimelineSemaphore* timeline = gpu::create_timeline_semaphore(device);
@@ -50,7 +54,7 @@ static bool test_shader_abi(gpu::Device* device)
         .output = reinterpret_cast<ShaderAbiData*>(output.range.gpu),
         .matrix = {.rows = {{.x = 12.0f, .y = 13.0f, .z = 14.0f}, {.x = 15.0f, .y = 16.0f, .z = 17.0f}, {.x = 18.0f, .y = 19.0f, .z = 20.0f}}},
         .sampled = reinterpret_cast<float4*>(output.range.gpu + 512),
-        .sampler_base = 4092,
+        .sampler_base = sampler_count - shader_abi_thread_count,
     };
     for (uint32 i = 0; i != shader_abi_thread_count; ++i)
         gpu::copy_memory_to_texture(commands, {.gpu = upload.range.gpu + i * 8, .size = 8}, textures[i]);
@@ -98,6 +102,7 @@ int main()
     const bool valid = test_shader_abi(initialized.device);
     gpu::wait_idle(initialized.device);
     gpu::destroy_device(initialized.device);
-    printf("%s: shared shader root layout, matrices, GPU pointers, divergent texture slots and sampler indices 4092..4095\n", valid ? "PASS" : "FAIL");
+    printf("%s: shared shader root layout, matrices, GPU pointers, divergent texture slots and sampler indices %u..%u\n",
+        valid ? "PASS" : "FAIL", sampler_count - shader_abi_thread_count, sampler_count - 1);
     return valid ? 0 : 1;
 }

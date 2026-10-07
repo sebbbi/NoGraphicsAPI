@@ -19,6 +19,8 @@ namespace gpu
 {
 namespace
 {
+thread_local ErrorCallback error_callback = nullptr;
+
 constexpr MTLRenderStages render_stages = MTLRenderStageVertex | MTLRenderStageFragment | MTLRenderStageObject | MTLRenderStageMesh;
 
 uint64 align_up(uint64 value, uint64 alignment) { return (value + alignment - 1) / alignment * alignment; }
@@ -137,9 +139,20 @@ MTLTextureDescriptor* texture_descriptor(const TextureDesc& desc)
 void report_error(const char* operation, NSError* error)
 {
     fprintf(stderr, "NoGraphicsAPI Metal: %s: %s\n", operation, error ? error.localizedDescription.UTF8String : "creation failed");
+    if (error_callback)
+    {
+        char message[1024];
+        snprintf(message, sizeof(message), "Metal %s: %s", operation, error ? error.localizedDescription.UTF8String : "creation failed");
+        error_callback(message, false);
+    }
 }
 
 MTLSize metal_size(uint32x3 size) { return MTLSizeMake(size.x, size.y, size.z); }
+}
+
+void set_error_callback(ErrorCallback callback) noexcept
+{
+    error_callback = callback;
 }
 
 struct GpuHeapOwner
@@ -449,6 +462,12 @@ CommandBuffer* create_context(CommandPool* pool)
     arguments.initializeBindings = YES;
     result->arguments = [device->metal newArgumentTableWithDescriptor:arguments error:&error];
     [arguments release];
+    if (!result->commands || !result->native_buffers->allocator || !result->arguments)
+    {
+        report_error("command context", error);
+        destroy_context(device, result);
+        return nullptr;
+    }
     result->pass = [MTL4RenderPassDescriptor new];
     if (device->timestamp_query_count)
     {
@@ -458,12 +477,6 @@ CommandBuffer* create_context(CommandPool* pool)
             destroy_context(device, result);
             return nullptr;
         }
-    }
-    if (!result->commands || !result->native_buffers->allocator || !result->arguments)
-    {
-        report_error("command context", error);
-        destroy_context(device, result);
-        return nullptr;
     }
     return result;
 }
@@ -561,6 +574,11 @@ id<MTLBuffer> resolve_buffer(Device* device, GpuRange range, uint64* offset)
 
 DeviceInit create_device(const DeviceDesc& desc) noexcept
 {
+    if (desc.swapchain_color_space != ColorSpace::srgb)
+    {
+        report_error("unsupported swapchain color space", nil);
+        return {.error = Error::unsupported};
+    }
     @autoreleasepool
     {
         Device* device = new Device{};
@@ -570,6 +588,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         device->metal = MTLCreateSystemDefaultDevice();
         if (!device->metal || ![device->metal supportsFamily:MTLGPUFamilyApple7] || ![device->metal supportsFamily:MTLGPUFamilyMetal3])
         {
+            report_error("Apple7 and Metal3 GPU support is required", nil);
             destroy_device(device);
             return {.error = Error::unsupported};
         }
@@ -618,14 +637,20 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
             MTL4CompilerDescriptor* compiler = [MTL4CompilerDescriptor new];
             device->compiler = [device->metal newCompilerWithDescriptor:compiler error:&error];
             [compiler release];
+            if (!device->compiler)
+            {
+                report_error("pipeline compiler", error);
+                destroy_device(device);
+                return {.error = Error::driver_error};
+            }
         }
         MTLResidencySetDescriptor* residency = [MTLResidencySetDescriptor new];
         residency.initialCapacity = 256;
         device->residency = [device->metal newResidencySetWithDescriptor:residency error:&error];
         [residency release];
-        if ((device->metal4 && !device->compiler) || !device->residency)
+        if (!device->residency)
         {
-            report_error("device", error);
+            report_error("residency set", error);
             destroy_device(device);
             return {.error = Error::driver_error};
         }
@@ -726,6 +751,22 @@ bool supports_texture_format(const Device* device, Format format, TextureUsage u
     return true;
 }
 
+Error set_swapchain_format(Device* device, Format format, ColorSpace color_space) noexcept
+{
+    assert(device && !device->drawable && !device->acquired);
+    @autoreleasepool
+    {
+        if (!device->layer || color_space != ColorSpace::srgb)
+            return Error::unsupported;
+        if (device->layer.pixelFormat == pixel_format(format))
+            return Error::none;
+        if (format != Format::bgra8_unorm && format != Format::bgra8_srgb)
+            return Error::unsupported;
+        device->layer.pixelFormat = pixel_format(format);
+        return Error::none;
+    }
+}
+
 uint32x2 get_drawable_extent(Device* device) noexcept
 {
     @autoreleasepool
@@ -793,6 +834,7 @@ GpuHeap create_gpu_heap(Device* device, uint64 byte_count, MemoryType memory) no
         if (memory == MemoryType::cpu_visible) options |= MTLResourceCPUCacheModeWriteCombined;
         options |= MTLResourceHazardTrackingModeUntracked;
         const MTLSizeAndAlign requirements = [device->metal heapBufferSizeAndAlignWithLength:byte_count options:options];
+        if (!requirements.size || !requirements.align) { report_error("GPU heap memory requirements", nil); return {}; }
         MTLHeapDescriptor* desc = [MTLHeapDescriptor new];
         desc.type = MTLHeapTypePlacement;
         desc.size = align_up(requirements.size, requirements.align);
@@ -861,10 +903,15 @@ SizeAlign get_texture_size_align(Device* device, const TextureDesc& desc) noexce
 {
     @autoreleasepool
     {
-        if (!supports_texture_format(device, desc.format, desc.usage)) return {};
+        if (!supports_texture_format(device, desc.format, desc.usage))
+        {
+            report_error("unsupported texture format or usage", nil);
+            return {};
+        }
         MTLTextureDescriptor* descriptor = texture_descriptor(desc);
         const MTLSizeAndAlign result = [device->metal heapTextureSizeAndAlignWithDescriptor:descriptor];
         [descriptor release];
+        if (!result.size || !result.align) { report_error("texture memory requirements", nil); return {}; }
         assert(device->caps.texture_heap_alignment % result.align == 0);
         return {.size = result.size, .align = result.align};
     }
@@ -894,6 +941,13 @@ void destroy_texture(Texture* texture) noexcept
         [texture->texture release];
         delete texture;
     }
+}
+
+void activate_texture_alias(CommandBuffer* commands, Texture* texture) noexcept
+{
+    assert(commands && texture && commands->device == texture->device && texture->desc.aliasable);
+    barrier(commands, Stage::all_commands, Access::transfer_write | Access::shader_write | Access::color_write | Access::depth_stencil_write,
+        Stage::all_commands, Access::none);
 }
 
 RenderView* create_render_view(Texture* texture, const RenderViewDesc& desc) noexcept
@@ -999,6 +1053,7 @@ void write_texture_descriptor(TextureDescriptorHeap* heap, uint32 index, const T
         view.sliceRange = NSMakeRange(desc.base_layer, desc.layer_count ? desc.layer_count : texture->desc.layer_count - desc.base_layer);
         const MTLResourceID resource = [heap->pool setTextureView:texture->texture descriptor:view atIndex:index];
         assert(resource._impl == heap->pool.baseResourceID._impl + index);
+        (void)resource;
         [view release];
     }
 }
@@ -1086,6 +1141,7 @@ void write_sampler_descriptor(SamplerDescriptorHeap* heap, uint32 index, const S
         sampler.supportArgumentBuffers = YES;
         id<MTLSamplerState> state = [heap->device->metal newSamplerStateWithDescriptor:sampler];
         [sampler release];
+        assert(state);
         [heap->samplers[index] release];
         heap->samplers[index] = state;
         static_cast<MTLResourceID*>(heap->buffer.contents)[index] = state.gpuResourceID;
@@ -1344,10 +1400,20 @@ CommandPool* create_command_pool(Device* device, uint32 queue_index) noexcept
     {
         assert(queue_index < device->caps.queue_count);
         CommandPool* pool = new CommandPool{.device = device, .queue = &device->queues[queue_index], .kind = device->queues[queue_index].kind};
-        depth_state(pool, {});
+        if (!depth_state(pool, {}))
+        {
+            report_error("command pool depth state", nil);
+            destroy_command_pool(pool);
+            return nullptr;
+        }
         for (uint32 compare = 0; compare < 8; ++compare)
             for (uint32 write = 0; write < 2; ++write)
-                depth_state(pool, {.depth_test = true, .depth_write = write != 0, .depth_compare = static_cast<CompareOp>(compare)});
+                if (!depth_state(pool, {.depth_test = true, .depth_write = write != 0, .depth_compare = static_cast<CompareOp>(compare)}))
+                {
+                    report_error("command pool depth state", nil);
+                    destroy_command_pool(pool);
+                    return nullptr;
+                }
         return pool;
     }
 }

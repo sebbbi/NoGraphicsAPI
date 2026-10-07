@@ -299,6 +299,22 @@ namespace {
 		CHECK(math::float_to_half_bits(-INFINITY) == 0xfc00u);
 		const uint16 nan = math::float_to_half_bits(NAN);
 		CHECK((nan & 0x7c00u) == 0x7c00u && (nan & 0x03ffu) != 0u);
+		static_assert(math::half_bits_to_float(0x3c00u) == 1.0f);
+		CHECK(__builtin_bit_cast(uint32, math::half_bits_to_float(0x0000u)) == 0x00000000u);
+		CHECK(__builtin_bit_cast(uint32, math::half_bits_to_float(0x8000u)) == 0x80000000u);
+		CHECK(math::half_bits_to_float(0x0001u) == 0x1p-24f);
+		CHECK(math::half_bits_to_float(0x03ffu) == 1023.0f * 0x1p-24f);
+		CHECK(math::half_bits_to_float(0x0400u) == 0x1p-14f);
+		CHECK(math::half_bits_to_float(0x7bffu) == 65504.0f);
+		CHECK(math::half_bits_to_float(0xc000u) == -2.0f);
+		CHECK(math::half_bits_to_float(0x7c00u) == INFINITY);
+		CHECK(math::half_bits_to_float(0xfc00u) == -INFINITY);
+		CHECK(isnan(math::half_bits_to_float(0x7e00u)));
+		CHECK(isnan(math::half_bits_to_float(0xfc01u)));
+		for (uint32 bits = 0; bits <= 0xffffu; ++bits) {
+			if ((bits & 0x7c00u) == 0x7c00u && (bits & 0x03ffu) != 0u) continue;
+			CHECK(math::float_to_half_bits(math::half_bits_to_float(static_cast<uint16>(bits))) == bits);
+		}
 		return true;
 	}
 

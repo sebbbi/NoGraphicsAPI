@@ -10,7 +10,7 @@ data despite a transfer-write to transfer-read barrier. The issue also reproduce
 
 A timeline wait between separate upload and readback submissions works. A full Vulkan memory
 dependency also worked in isolation; native `vkCmdCopyImageToBuffer2` readback worked in the comparison.
-The parallel texture test uses an explicit timeline wait. No driver-specific barrier widening is applied
+The parallel texture and pitch-roundtrip tests use an explicit timeline wait. No driver-specific barrier widening is applied
 by the graphics API.
 
 ## NVIDIA 596.99: core Vulkan 1.3 concurrent copies lose the device

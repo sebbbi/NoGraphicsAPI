@@ -26,6 +26,11 @@ static bool check(Device* device, TimelineSemaphore* timeline, uint64& value, Te
         .extent = {.x = compressed ? 8u : 3u, .y = compressed ? 8u : 2u, .z = volume ? 2u : 1u},
         .row_pitch_bytes = row_pitch, .slice_pitch_bytes = slice_pitch};
     copy_memory_to_texture(commands, gpu_range(upload), texture, copy);
+    // NVIDIA 596.99 needs a timeline wait before address-based image readback; see docs/known-driver-issues.md.
+    end_commands(commands);
+    submit(device, {.commands = {commands}, .completion = {.semaphore = timeline, .value = ++value}});
+    wait_timeline({.semaphore = timeline, .value = value});
+    commands = begin_commands(pool);
     barrier(commands, Stage::transfer, Access::transfer_write, Stage::transfer, Access::transfer_read);
     copy_texture_to_memory(commands, texture, gpu_range(readback), copy);
     end_commands(commands);

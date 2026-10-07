@@ -39,6 +39,12 @@ This is a low-level library: the application still owns allocation policy, resou
 GPU synchronization. The optional NoGraphicsAPIUtility library supplies shared shader types, math,
 allocators, upload queues, and deferred deletion without making them part of the graphics API.
 
+Initialization and resource creation failures return an error or an empty handle.
+Ordinary frame operations, including draws, dispatches, and descriptor writes, return no error codes; native results are checked with debug assertions.
+Install `set_error_callback` on the initialization thread for backend diagnostics, including the Vulkan operation, result and requested allocation size.
+The callback is synchronous, thread-local, and disabled by default. Clear it before ordinary frame execution when diagnostics are intended only for startup.
+Check `UploadQueue::valid()` after construction; failed initialization releases its partial resources.
+
 ### What a draw's data looks like
 
 Declare the arguments once in a shared C++/Slang header:

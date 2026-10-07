@@ -13,6 +13,12 @@ put typed GPU pointers in shared CPU/shader structures. Shaders dereference them
 vertex fetch, without buffer descriptors or per-resource binding calls. CPU-visible heaps use shared
 storage; GPU-only heaps use private storage. Textures occupy application-managed placement heaps.
 
+`TextureDesc::aliasable` permits resident textures to share a placement while their GPU uses are
+disjoint. `activate_texture_alias()` issues an all-command barrier with device visibility before
+the incoming alias is cleared or overwritten; prior contents are discarded by contract. Views and
+descriptors stay resident. Cross-queue use requires timeline waits. This uses ordinary placement
+heap aliasing, without `makeAliasable()` or sparse-resource visibility operations.
+
 Metal 4 also accepts GPU addresses in its command API:
 
 | NoGraphicsAPI operation | Metal 4 implementation |
@@ -72,6 +78,11 @@ counts; NoGraphicsAPI does not emulate an indirect command.
 
 Metal 4 does not imply BC texture compression support. Query the required texture formats before
 choosing assets; ASTC is available throughout the baseline.
+
+Presentation currently supports only `ColorSpace::srgb`. `create_device()` and `set_swapchain_format()`
+return `Error::unsupported` for `ColorSpace::extended_srgb_linear`; EDR layer configuration is not implemented.
+After `wait_idle()`, with no acquired frame, the setter accepts the current format or switches between
+`Format::bgra8_unorm` and `Format::bgra8_srgb` without replacing application resources.
 
 ## Synchronization
 

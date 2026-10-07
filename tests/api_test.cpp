@@ -161,7 +161,8 @@ static_assert(gpu::detail::is_same_v<__underlying_type(gpu::Error), uint8> &&
 static_assert(static_cast<uint8>(gpu::Error::none) == 0 &&
               static_cast<uint8>(gpu::Error::unsupported) == 1 &&
               static_cast<uint8>(gpu::Error::device_lost) == 2 &&
-              static_cast<uint8>(gpu::Error::driver_error) == 3);
+              static_cast<uint8>(gpu::Error::driver_error) == 3 &&
+              static_cast<uint8>(gpu::Error::out_of_memory) == 4);
 static_assert(static_cast<uint32>(gpu::TextureUsage::sampled | gpu::TextureUsage::storage) == 3);
 static_assert(static_cast<uint64>(gpu::Stage::vertex | gpu::Stage::fragment) == 68);
 static_assert(static_cast<uint64>(gpu::Stage::task) == (1ull << 3u));
@@ -312,7 +313,7 @@ static_assert(sizeof(gpu::TextureFormatInfo) == 16 &&
               offsetof(gpu::TextureFormatInfo, bytes_per_block) == 8 &&
               offsetof(gpu::TextureFormatInfo, stencil) == 13);
 static_assert(sizeof(gpu::SwapchainFrame) == 16 && offsetof(gpu::SwapchainFrame, extent) == 8);
-static_assert(sizeof(gpu::TextureDesc) == 32 && offsetof(gpu::TextureDesc, extent) == 4);
+static_assert(sizeof(gpu::TextureDesc) == 36 && offsetof(gpu::TextureDesc, extent) == 4 && offsetof(gpu::TextureDesc, aliasable) == 32);
 static_assert(sizeof(gpu::TextureCopyDesc) == 56 && offsetof(gpu::TextureCopyDesc, offset) == 12 &&
               offsetof(gpu::TextureCopyDesc, extent) == 24);
 static_assert(sizeof(gpu::Viewport) == 24 && alignof(gpu::Viewport) == 4 &&
