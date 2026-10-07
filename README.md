@@ -133,22 +133,24 @@ and [NVIDIA 616.64 WHQL](https://us.download.nvidia.com/Windows/616.64/616.64-wi
 
 | Architecture | Driver snapshot | Products | CPU-visible heap | Required extensions |
 | --- | --- | --- | --- | --- |
-| AMD RDNA 2 (dGPU) | Windows / Adrenalin 26.9.1 | [RX 6000][rdna2-rebar] | PCIe ReBAR or<br>🔴 [256 MiB fixed BAR][rdna2-fixed] | 🔴 Unsupported |
+| AMD RDNA 2 (dGPU) | Windows / Adrenalin 26.9.1 | [RX 6000][rdna2-rebar] | ReBAR | 🔴 Unsupported |
 | AMD RDNA 2 (iGPU) | Windows / Adrenalin 26.9.1 | [600M](https://vulkan.gpuinfo.org/displayreport.php?id=47714) | UMA | 🔴 Unsupported |
 | AMD RDNA 2 (iGPU) | Linux / Mesa RADV 26.2+ | [Steam Deck](https://vulkan.gpuinfo.org/displayreport.php?id=51189) | UMA | Supported |
-| AMD RDNA 3 (dGPU) | Windows / Adrenalin 26.9.1 | [RX 7000](https://vulkan.gpuinfo.org/displayreport.php?id=51443) | PCIe ReBAR | Supported |
+| AMD RDNA 3 (dGPU) | Windows / Adrenalin 26.9.1 | [RX 7000](https://vulkan.gpuinfo.org/displayreport.php?id=51443) | ReBAR | Supported |
 | AMD RDNA 3 (iGPU) | Windows / Adrenalin 26.9.1 | [700M](https://vulkan.gpuinfo.org/displayreport.php?id=49646) | UMA | Supported |
-| AMD RDNA 4 (dGPU) | Windows / Adrenalin 26.9.1 | [RX 9000](https://vulkan.gpuinfo.org/displayreport.php?id=51293) | PCIe ReBAR | Supported |
-| NVIDIA Turing | Windows / NVIDIA 616.64 | [GTX 16 series][gtx16] | 🔴 [256 MiB fixed BAR][turing-rebar] | Supported |
-| NVIDIA Turing | Windows / NVIDIA 616.64 | [RTX 20 series][turing] | 🔴 [256 MiB fixed BAR][turing-rebar] | Supported |
-| NVIDIA Ampere | Windows / NVIDIA 616.64 | [RTX 30 series](https://vulkan.gpuinfo.org/displayreport.php?id=51549) | PCIe ReBAR | Supported |
-| NVIDIA Ada Lovelace | Windows / NVIDIA 616.64 | [RTX 40 series](https://vulkan.gpuinfo.org/displayreport.php?id=51469) | PCIe ReBAR | Supported |
-| NVIDIA Blackwell | Windows / NVIDIA 616.64 | [RTX 50 series](https://vulkan.gpuinfo.org/displayreport.php?id=51573) | PCIe ReBAR | Supported |
+| AMD RDNA 4 (dGPU) | Windows / Adrenalin 26.9.1 | [RX 9000](https://vulkan.gpuinfo.org/displayreport.php?id=51293) | ReBAR | Supported |
+| NVIDIA Turing | Windows / NVIDIA 616.64 | [GTX 16 series][gtx16] | [256MB][turing-rebar] | Supported |
+| NVIDIA Turing | Windows / NVIDIA 616.64 | [RTX 20 series][turing] | [256MB][turing-rebar] | Supported |
+| NVIDIA Ampere | Windows / NVIDIA 616.64 | [RTX 30 series](https://vulkan.gpuinfo.org/displayreport.php?id=51549) | ReBAR | Supported |
+| NVIDIA Ada Lovelace | Windows / NVIDIA 616.64 | [RTX 40 series](https://vulkan.gpuinfo.org/displayreport.php?id=51469) | ReBAR | Supported |
+| NVIDIA Blackwell | Windows / NVIDIA 616.64 | [RTX 50 series](https://vulkan.gpuinfo.org/displayreport.php?id=51573) | ReBAR | Supported |
 
-🔴 marks missing extensions or a capacity-limited fixed BAR. Mapped heaps require coherent CPU-visible
-GPU memory. Enable ReBAR where available on discrete GPUs; integrated GPUs use UMA. A fixed BAR can
-still work, but limits mapped-heap capacity. Separate GPU-only allocations can use the remaining VRAM.
-UMA heap sizes depend on system configuration.
+🔴 marks missing required extensions. Mapped heaps require coherent CPU-visible GPU memory.
+Enable PCIe ReBAR where available on discrete GPUs; integrated GPUs use UMA, with heap sizes depending on system configuration.
+
+GPUs without PCIe ReBAR support provide up to 256 MB of CPU-visible data heap memory. NoGraphicsAPI can be used on these GPUs,
+but applications must minimize CPU-visible data. GPU-only heaps have no ReBAR-related size limit; use copy commands to copy data
+into GPU-only heaps. Texture heaps are unaffected by PCIe ReBAR.
 
 The checked Windows RDNA 2 reports lack descriptor-heap support.
 [Pascal / GTX 10](https://vulkan.gpuinfo.org/displayreport.php?id=51084) lacks the required extensions.
@@ -245,7 +247,6 @@ See [third-party notices](THIRD_PARTY_NOTICES.md) for bundled assets and depende
 [address-commands]: https://docs.vulkan.org/refpages/latest/refpages/source/VK_KHR_device_address_commands.html
 [unified-layouts]: https://www.khronos.org/blog/so-long-image-layouts-simplifying-vulkan-synchronisation
 [rdna2-rebar]: https://vulkan.gpuinfo.org/displayreport.php?id=42800
-[rdna2-fixed]: https://vulkan.gpuinfo.org/displayreport.php?id=48951
 [gtx16]: https://vulkan.gpuinfo.org/displayreport.php?id=51563
 [turing]: https://vulkan.gpuinfo.org/displayreport.php?id=51475
 [turing-rebar]: https://www.nvidia.com/en-us/geforce/graphics-cards/compare/?section=compare-specs
