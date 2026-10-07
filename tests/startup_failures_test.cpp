@@ -23,10 +23,61 @@ NativeResources live{};
 thread_local const char* failure_operation = nullptr;
 thread_local VkResult failure_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
 thread_local uint32 failure_skip = 0;
+thread_local gpu::Span<const char* const> advertised_device_extensions{};
+thread_local gpu::Span<const char* const> advertised_instance_extensions{};
+thread_local bool reject_first_device_only = false;
+thread_local bool hide_address_commands = false;
+thread_local uint32 device_extension_queries = 0;
 uint32 command_allocations = 0, command_frees = 0;
 uint32 failures = 0, reports = 0;
 bool reported_fatal = false;
-char diagnostic[1024]{};
+char diagnostic[2048]{};
+
+VkResult enumerate_extensions(gpu::Span<const char* const> names, uint32* count, VkExtensionProperties* values) noexcept
+{
+    if (!values) { *count = uint32(names.size); return VK_SUCCESS; }
+    const uint32 written = *count < names.size ? *count : uint32(names.size);
+    for (uint32 index = 0; index < written; ++index)
+    {
+        values[index] = {};
+        snprintf(values[index].extensionName, sizeof(values[index].extensionName), "%s", names.data[index]);
+    }
+    *count = written;
+    return written == names.size ? VK_SUCCESS : VK_INCOMPLETE;
+}
+
+VkResult VKAPI_CALL test_vkEnumerateDeviceExtensionProperties(VkPhysicalDevice physical, const char* layer, uint32* count, VkExtensionProperties* values)
+{
+    if (advertised_device_extensions.data && (!reject_first_device_only || device_extension_queries++ == 0))
+        return enumerate_extensions(advertised_device_extensions, count, values);
+    const VkResult result = vkEnumerateDeviceExtensionProperties(physical, layer, count, values);
+    if (hide_address_commands && values && result == VK_SUCCESS)
+    {
+        uint32 written = 0;
+        for (uint32 index = 0; index < *count; ++index)
+            if (strcmp(values[index].extensionName, VK_KHR_DEVICE_ADDRESS_COMMANDS_EXTENSION_NAME)) values[written++] = values[index];
+        *count = written;
+    }
+    return result;
+}
+
+VkResult VKAPI_CALL test_vkEnumerateInstanceExtensionProperties(const char* layer, uint32* count, VkExtensionProperties* values)
+{
+    return advertised_instance_extensions.data ? enumerate_extensions(advertised_instance_extensions, count, values)
+        : vkEnumerateInstanceExtensionProperties(layer, count, values);
+}
+
+VkResult VKAPI_CALL test_vkEnumeratePhysicalDevices(VkInstance instance, uint32* count, VkPhysicalDevice* values)
+{
+    const uint32 capacity = *count;
+    const VkResult result = vkEnumeratePhysicalDevices(instance, count, values);
+    if (reject_first_device_only && result == VK_SUCCESS && values && *count && capacity > *count)
+    {
+        for (uint32 index = *count; index != 0; --index) values[index] = values[index - 1];
+        ++*count;
+    }
+    return result;
+}
 
 bool inject(const char* operation) noexcept
 {
@@ -116,6 +167,9 @@ void VKAPI_CALL test_vkFreeCommandBuffers(VkDevice device, VkCommandPool pool, u
 
 // Inject only the test translation unit's native calls; normal calls still use the real driver.
 #define vkCreateInstance test_vkCreateInstance
+#define vkEnumerateDeviceExtensionProperties test_vkEnumerateDeviceExtensionProperties
+#define vkEnumerateInstanceExtensionProperties test_vkEnumerateInstanceExtensionProperties
+#define vkEnumeratePhysicalDevices test_vkEnumeratePhysicalDevices
 #define vkCreateDevice test_vkCreateDevice
 #define vkCreateBuffer test_vkCreateBuffer
 #define vkAllocateMemory test_vkAllocateMemory
@@ -185,6 +239,67 @@ void reported(const char* operation, const NativeResources& before, bool bytes =
     check(strstr(diagnostic, operation) && strstr(diagnostic, result), "diagnostic identifies the failing native operation and result");
     if (bytes) check(strstr(diagnostic, "MiB requested") != nullptr, "allocation diagnostics include the requested memory size");
     unchanged(before);
+}
+
+void extension_failures(gpu::Device* device) noexcept
+{
+    const NativeResources before = live;
+    const char* missing_heap[]{VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME, VK_EXT_MESH_SHADER_EXTENSION_NAME};
+    advertised_device_extensions = missing_heap;
+    arm(nullptr);
+    gpu::DeviceInit init = gpu::create_device();
+    check(!init.device && init.error == gpu::Error::unsupported, "missing required device extension rejects the device");
+    check(reports == 1 && !reported_fatal && strstr(diagnostic, VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME), "missing extension is reported once");
+    check(!strstr(diagnostic, VK_EXT_MESH_SHADER_EXTENSION_NAME) && !strstr(diagnostic, VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME)
+        && !strstr(diagnostic, VK_KHR_DEVICE_ADDRESS_COMMANDS_EXTENSION_NAME), "available and optional extensions are omitted from the diagnostic");
+    VkPhysicalDeviceProperties properties{};
+    vkGetPhysicalDeviceProperties(device->physical_device, &properties);
+    check(strstr(diagnostic, properties.deviceName) != nullptr, "missing device extensions identify the GPU");
+    unchanged(before);
+
+    const char* missing_heap_and_mesh[]{VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME};
+    advertised_device_extensions = missing_heap_and_mesh;
+    arm(nullptr);
+    init = gpu::create_device();
+    check(!init.device && init.error == gpu::Error::unsupported && reports == 1, "multiple missing extensions produce one failure diagnostic");
+    check(strstr(diagnostic, VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME) && strstr(diagnostic, VK_EXT_MESH_SHADER_EXTENSION_NAME)
+        && !strstr(diagnostic, VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME), "all missing required extensions are listed");
+    unchanged(before);
+
+    advertised_device_extensions = missing_heap;
+    reject_first_device_only = true;
+    device_extension_queries = 0;
+    arm(nullptr);
+    init = gpu::create_device();
+    check(init.device && init.error == gpu::Error::none && device_extension_queries >= 2 && reports == 0,
+        "a rejected GPU does not report startup errors when another compatible candidate is selected");
+    if (init.device) { gpu::wait_idle(init.device); gpu::destroy_device(init.device); }
+    reject_first_device_only = false;
+    advertised_device_extensions = {};
+    unchanged(before);
+
+    hide_address_commands = true;
+    arm(nullptr);
+    init = gpu::create_device();
+    check(init.device && init.error == gpu::Error::none && reports == 0,
+        "missing optional device address commands succeeds without an extension diagnostic");
+    if (init.device) { gpu::wait_idle(init.device); gpu::destroy_device(init.device); }
+    hide_address_commands = false;
+    unchanged(before);
+
+#if defined(_WIN32)
+    const char* missing_surface[]{VK_KHR_WIN32_SURFACE_EXTENSION_NAME, VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME};
+    advertised_instance_extensions = missing_surface;
+    arm(nullptr);
+    init = gpu::create_device({.window = reinterpret_cast<void*>(uintptr(1))});
+    check(!init.device && init.error == gpu::Error::unsupported && reports == 1, "missing instance extensions fail before creating a window surface");
+    check(strstr(diagnostic, VK_KHR_SURFACE_EXTENSION_NAME) && strstr(diagnostic, VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME)
+        && strstr(diagnostic, VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME), "instance diagnostic includes missing required extensions and alternatives");
+    check(!strstr(diagnostic, VK_KHR_WIN32_SURFACE_EXTENSION_NAME) && !strstr(diagnostic, VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME)
+        && !strstr(diagnostic, VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME), "instance diagnostic omits available and unused optional extensions");
+    advertised_instance_extensions = {};
+    unchanged(before);
+#endif
 }
 
 void heap_failures(gpu::Device* device) noexcept
@@ -442,6 +557,7 @@ int main()
     check(init.device && init.error == gpu::Error::none, "device creation succeeds after instance failure");
     if (!init.device) return 1;
     gpu::Device* device = init.device;
+    extension_failures(device);
     const NativeResources before_device = live;
     arm("vkCreateDevice");
     init = gpu::create_device();

@@ -1498,7 +1498,22 @@ struct Candidate
     bool khr_swapchain_maintenance1 = false;
     VkPhysicalDeviceDescriptorHeapPropertiesEXT heap_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_PROPERTIES_EXT};
     VkPhysicalDeviceVulkan12Properties vulkan12_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES};
+    const char* missing_extensions[5]{};
+    uint32 missing_extension_count = 0;
 };
+
+void append_capability_diagnostic(Span<char> message, const char* subject, Span<const char* const> missing_extensions) noexcept
+{
+    size_t length = strlen(message.data);
+    snprintf(message.data + length, message.size - length, "\n%s: %s", subject, missing_extensions.size
+        ? "missing required Vulkan extensions:"
+        : "required Vulkan 1.4, memory, shader, or presentation capabilities are unavailable.");
+    for (size_t index = 0; index < missing_extensions.size; ++index)
+    {
+        length = strlen(message.data);
+        snprintf(message.data + length, message.size - length, "\n  %s", missing_extensions.data[index]);
+    }
+}
 
 Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, bool khr_surface_maintenance1, bool ext_surface_maintenance1,
                         const DeviceDesc& desc, Candidate& output) noexcept
@@ -1515,22 +1530,24 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
         VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME,
         VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME,
         VK_EXT_MESH_SHADER_EXTENSION_NAME,
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
     };
-    for (const char* name : required_extensions)
+    for (uint32 index = 0; index < (surface ? 4u : 3u); ++index)
     {
-        if (!has_name({extensions, extension_count}, name))
-            return Error::unsupported;
+        if (!has_name({extensions, extension_count}, required_extensions[index]))
+            output.missing_extensions[output.missing_extension_count++] = required_extensions[index];
     }
     const bool khr_swapchain_maintenance1 = khr_surface_maintenance1 &&
                                             has_name({extensions, extension_count}, VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
     const bool ext_swapchain_maintenance1 = ext_surface_maintenance1 &&
                                             has_name({extensions, extension_count}, VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
-    if (surface &&
-        (!has_name({extensions, extension_count}, VK_KHR_SWAPCHAIN_EXTENSION_NAME) ||
-         (!khr_swapchain_maintenance1 && !ext_swapchain_maintenance1)))
+    if (surface && !khr_swapchain_maintenance1 && !ext_swapchain_maintenance1)
     {
-        return Error::unsupported;
+        output.missing_extensions[output.missing_extension_count++] = khr_surface_maintenance1 && ext_surface_maintenance1
+            ? "VK_KHR_swapchain_maintenance1 or VK_EXT_swapchain_maintenance1"
+            : khr_surface_maintenance1 ? VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME : VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
     }
+    if (output.missing_extension_count) return Error::unsupported;
 
     Candidate result{
         .physical_device = physical_device,
@@ -1724,24 +1741,36 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
 #if defined(_WIN32)
     state->swapchain_color_space_enabled = presentation &&
         has_name({instance_extensions, instance_extension_count}, VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
-    if (presentation && desc.swapchain_color_space != ColorSpace::srgb && !state->swapchain_color_space_enabled)
-        return fail_device_creation(state, Error::unsupported);
     const bool khr_surface_maintenance1 = presentation && has_name(
         {instance_extensions, instance_extension_count},
         VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
     const bool ext_surface_maintenance1 = presentation && has_name(
         {instance_extensions, instance_extension_count},
         VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
-    if (presentation &&
-        (!has_name({instance_extensions, instance_extension_count},
-                   VK_KHR_SURFACE_EXTENSION_NAME) ||
-         !has_name({instance_extensions, instance_extension_count},
-                   VK_KHR_WIN32_SURFACE_EXTENSION_NAME) ||
-         !has_name({instance_extensions, instance_extension_count},
-                   VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME) ||
-         (!khr_surface_maintenance1 && !ext_surface_maintenance1)))
+    if (presentation)
     {
-        return fail_device_creation(state, Error::unsupported);
+        const char* missing_extensions[5]{};
+        uint32 missing_extension_count = 0;
+        constexpr const char* required_extensions[]{
+            VK_KHR_SURFACE_EXTENSION_NAME,
+            VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
+            VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME,
+        };
+        for (const char* name : required_extensions)
+        {
+            if (!has_name({instance_extensions, instance_extension_count}, name))
+                missing_extensions[missing_extension_count++] = name;
+        }
+        if (!khr_surface_maintenance1 && !ext_surface_maintenance1)
+            missing_extensions[missing_extension_count++] = "VK_KHR_surface_maintenance1 or VK_EXT_surface_maintenance1";
+        if (desc.swapchain_color_space != ColorSpace::srgb && !state->swapchain_color_space_enabled)
+            missing_extensions[missing_extension_count++] = VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME;
+        if (missing_extension_count)
+        {
+            char message[1024] = "Cannot initialize Vulkan presentation.";
+            append_capability_diagnostic(message, "Vulkan instance", {missing_extensions, missing_extension_count});
+            return fail_device_creation(state, Error::unsupported, message);
+        }
     }
 #else
     constexpr bool khr_surface_maintenance1 = false;
@@ -1843,13 +1872,23 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
 
     Candidate selected{};
     bool has_selected = false;
+    char candidate_diagnostics[2048] = "No compatible GPU found.";
     for (uint32 index = 0; index < physical_device_count; ++index)
     {
         const VkPhysicalDevice physical_device = physical_devices[index];
         Candidate candidate{};
         error = inspect_candidate(physical_device, state->surface, khr_surface_maintenance1, ext_surface_maintenance1, desc, candidate);
         if (error == Error::unsupported)
+        {
+            if (error_callback)
+            {
+                VkPhysicalDeviceProperties properties{};
+                vkGetPhysicalDeviceProperties(physical_device, &properties);
+                append_capability_diagnostic(candidate_diagnostics, properties.deviceName,
+                    {candidate.missing_extensions, candidate.missing_extension_count});
+            }
             continue;
+        }
         if (error != Error::none)
             return fail_device_creation(state, error);
         if (!has_selected || candidate.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
@@ -1861,9 +1900,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
             break;
     }
     if (!has_selected)
-        return fail_device_creation(state, Error::unsupported,
-            "No compatible GPU found. Vulkan 1.4, VK_EXT_descriptor_heap, VK_EXT_mesh_shader, "
-            "VK_KHR_shader_untyped_pointers, and the required memory, shader, and presentation features are needed.");
+        return fail_device_creation(state, Error::unsupported, candidate_diagnostics);
 
     state->physical_device = selected.physical_device;
     state->physical_properties = selected.properties;
