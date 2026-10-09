@@ -84,6 +84,11 @@ return `Error::unsupported` for `ColorSpace::extended_srgb_linear`; EDR layer co
 After `wait_idle()`, with no acquired frame, the setter accepts the current format or switches between
 `Format::bgra8_unorm` and `Format::bgra8_srgb` without replacing application resources.
 
+On macOS, Metal 4 rendering hands presentation to a classic Metal command buffer after a GPU shared-event wait.
+This exposes the presentation hook used by Steam's Metal overlay; drawables allow texture views for overlay composition.
+`wait_idle()` drains that presentation queue as well as rendering. iOS retains direct Metal 4 presentation.
+Use three drawables to keep scanout from starving a two-frame renderer on Apple displays.
+
 ## Synchronization
 
 On Metal 4, resource-free barriers map to Metal producer barriers. Fragment, depth and color destinations wait
