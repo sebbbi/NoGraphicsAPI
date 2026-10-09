@@ -11,4 +11,9 @@ struct QueueFamilyRoot
     uint32* destination;
     uint32 source_texture;
     uint32 destination_texture;
+    uint32 root_alignment_padding0[2];
 };
+
+#if !defined(__SLANG__)
+static_assert(sizeof(QueueFamilyRoot) == 32);
+#endif

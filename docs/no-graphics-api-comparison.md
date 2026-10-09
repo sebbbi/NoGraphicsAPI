@@ -42,7 +42,7 @@ Each draw or dispatch takes a GPU pointer to an application-owned root. Pointer 
 storage, and descriptor fields hold indices. The root and referenced resources survive GPU completion.
 Mapped frame storage and `BumpAllocator::allocate<T>()` provide transient roots without per-command driver allocation.
 
-Roots use shared C layout and row-major matrices. Vulkan pushes their 64-bit address, Metal 4 updates
+Roots use a shared aligned layout and row-major matrices; pointed-to data keeps C POD layout. Vulkan pushes the root address, Metal 4 updates
 its argument table, and Metal 3 binds the backing buffer and offset. GPU work can write root contents before
 later commands consume them. All graphics stages share one root; separate stage roots and GPU-generated binding commands are not exposed.
 

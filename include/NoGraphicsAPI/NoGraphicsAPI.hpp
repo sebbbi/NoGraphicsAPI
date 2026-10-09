@@ -810,7 +810,8 @@ void set_depth_stencil(CommandBuffer* commands, const DepthStencilState& state) 
 
 void bind_pso(CommandBuffer* commands, const PSO* pso) noexcept;
 
-// root is a 16-byte-aligned GPU address, or nullptr for shaders without root data. Retain its storage through GPU completion.
+// root uses the shared constant-buffer layout and a 16-byte-aligned GPU address, or nullptr for rootless shaders.
+// Retain its storage through GPU completion.
 // Finish CPU writes before submission; wait for prior GPU users before overwriting. Synchronize GPU writes before consuming the root.
 // Storage is application-owned; these commands do not copy root bytes or allocate memory. Metal 3 roots must belong to a GPU heap.
 void draw(CommandBuffer* commands, const void* root, uint32 vertex_count, uint32 instance_count = 1, uint32 first_vertex = 0,

@@ -19,4 +19,9 @@ struct DeferredLightingRoot
     float2 depth_linearize;
     float2 gbuffer_pixel_scale;
     uint32 gbuffer_texture_base;
+    uint32 root_alignment_padding0[3];
 };
+
+#if !defined(__SLANG__)
+static_assert(sizeof(DeferredLightingRoot) == 96);
+#endif

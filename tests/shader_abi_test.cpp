@@ -8,9 +8,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-static_assert(sizeof(ShaderAbiData) == 80 && sizeof(ShaderAbiRoot) == 96);
-static_assert(offsetof(ShaderAbiRoot, vector) == 4 && offsetof(ShaderAbiRoot, color) == 16);
-static_assert(offsetof(ShaderAbiRoot, output) == 32 && offsetof(ShaderAbiRoot, matrix) == 40 && offsetof(ShaderAbiRoot, sampled) == 80);
+static_assert(sizeof(ShaderAbiData) == 80 && sizeof(ShaderAbiRoot) == 128);
+static_assert(offsetof(ShaderAbiRoot, vector) == 16 && offsetof(ShaderAbiRoot, color) == 32);
+static_assert(offsetof(ShaderAbiRoot, output) == 48 && offsetof(ShaderAbiRoot, matrix) == 64 && offsetof(ShaderAbiRoot, sampled) == 112);
 
 // Vulkan guarantees 4,000 sampler descriptors plus its reserved heap range.
 constexpr uint32 sampler_count = 4000;
@@ -30,7 +30,7 @@ static bool test_shader_abi(gpu::Device* device)
     gpu::Texture* textures[shader_abi_thread_count]{};
     gpu::TextureDescriptorHeap* views = gpu::create_texture_descriptor_heap(device, shader_abi_thread_count);
     gpu::SamplerDescriptorHeap* samplers = gpu::create_sampler_descriptor_heap(device, sampler_count);
-    const gpu::GpuHeap upload = gpu::create_gpu_heap(device, 128);
+    const gpu::GpuHeap upload = gpu::create_gpu_heap(device, 256);
     const gpu::GpuHeap output = gpu::create_gpu_heap(device, 1024, gpu::MemoryType::gpu_only);
     const gpu::GpuHeap readback = gpu::create_gpu_heap(device, 1024, gpu::MemoryType::readback);
     gpu::CommandPool* pool = gpu::create_command_pool(device);
@@ -74,10 +74,13 @@ static bool test_shader_abi(gpu::Device* device)
     const float4* sampled = reinterpret_cast<const float4*>(readback.range.cpu + 512);
     for (uint32 i = 0; i != shader_abi_thread_count; ++i)
     {
-        valid &= values[i].scalar == root.scalar && memcmp(&values[i].vector, &root.vector, sizeof(root.vector)) == 0;
-        valid &= memcmp(&values[i].color, &root.color, sizeof(root.color)) == 0 && memcmp(&values[i].matrix, &root.matrix, sizeof(root.matrix)) == 0;
+        valid &= values[i].scalar == root.scalar && memcmp(&values[i].vector, &root.vector, sizeof(values[i].vector)) == 0;
+        valid &= memcmp(&values[i].color, &root.color, sizeof(root.color)) == 0;
         for (uint32 row = 0; row != 3; ++row)
+        {
+            valid &= memcmp(&values[i].matrix[row], &root.matrix[row], sizeof(float3)) == 0;
             valid &= values[i].transformed[row] == root.matrix[row][0] * 2 + root.matrix[row][1] * 3 + root.matrix[row][2] * 5;
+        }
         for (uint32 component = 0; component != 4; ++component)
             valid &= fabsf(sampled[i][component] - float(upload.range.cpu[i * 8 + ((i & 1) ? 0 : 4) + component]) / 255.0f) < 0.00001f;
     }

@@ -8,3 +8,7 @@ struct RootData
     uint32 seed;
     uint32 values[60];
 };
+
+#if !defined(__SLANG__)
+static_assert(sizeof(RootData) == 256);
+#endif

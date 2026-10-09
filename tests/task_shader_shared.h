@@ -9,3 +9,7 @@ struct TaskShaderRoot
     uint32 visible_mask;
     float4 color;
 };
+
+#if !defined(__SLANG__)
+static_assert(sizeof(TaskShaderRoot) == 32);
+#endif

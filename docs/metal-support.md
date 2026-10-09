@@ -64,7 +64,8 @@ See [root allocation, lifetime and synchronization](slang.md#root-and-pointer-la
 | 1 | `GPUTextureHeap`: texture-view-pool base ID or texture-ID table pointer |
 | 2 | Sampler resource IDs |
 
-`GPU_ROOT` preserves the shared C layout instead of Metal's ordinary constant-buffer vector alignment.
+`GPU_ROOT` reads the application's buffer through Metal's `constant` address space. Root fields follow the
+[shared constant-buffer layout](slang.md#root-and-pointer-layout); pointed-to data retains C POD layout.
 The same Slang sources compile to metallib and SPIR-V. The backend mirrors viewport Y, so vertex and
 mesh clip positions need no platform wrapper. See the [shader guide](slang.md) for layout and compilation.
 Rebuild existing Metal shaders for the shared 16-byte texture-heap header.

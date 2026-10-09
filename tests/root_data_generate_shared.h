@@ -9,3 +9,7 @@ struct RootDataGenerate
     uint32 first_index;
     uint32 seed;
 };
+
+#if !defined(__SLANG__)
+static_assert(sizeof(RootDataGenerate) == 32);
+#endif

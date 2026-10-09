@@ -56,6 +56,7 @@ struct RootArguments
     Material* material;
     float4x4 transform;
     uint32 texture_index;
+    uint32 padding[3];
 };
 ```
 
@@ -82,6 +83,7 @@ Texture2D<float4> texture = gpu_texture<Texture2D<float4>>(root.texture_index);
 ```
 
 Draws and dispatches take GPU root pointers directly, including roots written by earlier GPU work. All graphics stages share the same root.
+Roots follow the [shared constant-buffer layout](docs/slang.md#root-and-pointer-layout); pointed-to data keeps C POD layout.
 Keep each root allocation alive and stable until its GPU use completes.
 See the [design comparison](docs/no-graphics-api-comparison.md) for the remaining differences and
 the [shader guide](docs/slang.md) for complete examples.
