@@ -59,6 +59,16 @@ NoGraphicsAPI_disable_exceptions(test_api)
 target_link_libraries(test_api PRIVATE NoGraphicsAPI::NoGraphicsAPI)
 add_test(NAME test_api COMMAND test_api)
 
+set(barrier_batch_code ${CMAKE_CURRENT_BINARY_DIR}/shaders/barrier_batch.comp.${NOGRAPHICSAPI_SHADER_EXTENSION})
+NoGraphicsAPI_compile_slang(${barrier_batch_code} ${CMAKE_CURRENT_SOURCE_DIR}/barrier_batch.slang computeMain compute
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/barrier_batch_shared.h)
+add_executable(test_barrier_batch barrier_batch_test.cpp ${barrier_batch_code})
+NoGraphicsAPI_disable_exceptions(test_barrier_batch)
+target_link_libraries(test_barrier_batch PRIVATE NoGraphicsAPI::NoGraphicsAPI NoGraphicsAPIUtility::types)
+target_compile_definitions(test_barrier_batch PRIVATE NOGRAPHICSAPI_BARRIER_BATCH_PATH="${barrier_batch_code}")
+add_test(NAME test_barrier_batch COMMAND test_barrier_batch)
+set_tests_properties(test_barrier_batch PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60 FAIL_REGULAR_EXPRESSION "Validation Error;NoGraphicsAPI validation:")
+
 add_executable(test_command_context command_context_test.cpp)
 NoGraphicsAPI_disable_exceptions(test_command_context)
 target_link_libraries(test_command_context PRIVATE NoGraphicsAPI::NoGraphicsAPI)
@@ -339,7 +349,7 @@ if(NOT APPLE)
     target_compile_definitions(NoGraphicsAPI_buffer_commands PRIVATE
         NOGRAPHICSAPI_TEST_BUFFER_COMMANDS $<TARGET_PROPERTY:NoGraphicsAPI,COMPILE_DEFINITIONS>)
 
-    set(buffer_command_tests test_command_addresses test_texture_copy test_texture_alias test_root_data test_task_shader test_render_continuation
+    set(buffer_command_tests test_barrier_batch test_command_addresses test_texture_copy test_texture_alias test_root_data test_task_shader test_render_continuation
         test_command_context test_timeline_retirement test_multithreading test_queue_families test_shader_abi)
     foreach(original IN LISTS buffer_command_tests)
         get_target_property(test_sources ${original} SOURCES)
@@ -374,7 +384,7 @@ if(NOT APPLE)
     target_compile_definitions(NoGraphicsAPI_descriptor_buffer PRIVATE
         NOGRAPHICSAPI_TEST_BUFFER_COMMANDS NOGRAPHICSAPI_TEST_DESCRIPTOR_BUFFER NOGRAPHICSAPI_TEST_LEGACY_PRESENTATION $<TARGET_PROPERTY:NoGraphicsAPI,COMPILE_DEFINITIONS>)
 
-    set(descriptor_buffer_tests test_command_addresses test_texture_copy test_texture_alias test_root_data test_task_shader test_render_continuation
+    set(descriptor_buffer_tests test_barrier_batch test_command_addresses test_texture_copy test_texture_alias test_root_data test_task_shader test_render_continuation
         test_command_context test_timeline_retirement test_multithreading test_queue_families test_shader_abi)
     list(APPEND descriptor_buffer_tests test_texture_views)
     if(WIN32)

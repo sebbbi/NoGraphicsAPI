@@ -659,6 +659,8 @@ struct CommandBuffer
     uint64** timestamp_destinations = nullptr;
     uint64* timestamp_results = nullptr;
     uint32 timestamp_count = 0;
+    VkMemoryBarrier2 pending_barrier{};
+    VkImageMemoryBarrier2 acquire_barrier{};
     Swapchain* swapchain = nullptr;
     bool submitted = false;
     bool has_epilogue = false;
@@ -1460,21 +1462,19 @@ void record_image_barriers(VkCommandBuffer command_buffer, Span<const VkImageMem
     vkCmdPipelineBarrier2(command_buffer, &dependency);
 }
 
-void record_barrier(CommandBuffer* commands, Stage before, Access before_access, Stage after, Access after_access) noexcept
+void flush_barriers(CommandBuffer* commands) noexcept
 {
-    const VkMemoryBarrier2 memory_barrier{
-        .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
-        .srcStageMask = to_vk(before),
-        .srcAccessMask = to_vk(before_access, commands->state->descriptor_heap),
-        .dstStageMask = to_vk(after),
-        .dstAccessMask = to_vk(after_access, commands->state->descriptor_heap),
-    };
+    if (!commands->pending_barrier.sType && !commands->acquire_barrier.image) return;
     const VkDependencyInfo dependency{
         .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-        .memoryBarrierCount = 1,
-        .pMemoryBarriers = &memory_barrier,
+        .memoryBarrierCount = commands->pending_barrier.sType ? 1u : 0u,
+        .pMemoryBarriers = &commands->pending_barrier,
+        .imageMemoryBarrierCount = commands->acquire_barrier.image ? 1u : 0u,
+        .pImageMemoryBarriers = &commands->acquire_barrier,
     };
     vkCmdPipelineBarrier2(commands->command_buffer, &dependency);
+    commands->pending_barrier = {};
+    commands->acquire_barrier = {};
 }
 
 void make_heap_bind_info(GpuRange heap, VkDeviceSize reserved_alignment, VkDeviceSize reserved_size, VkBindHeapInfoEXT& output) noexcept
@@ -2393,6 +2393,7 @@ void write_timestamp(CommandBuffer* commands, uint64* cpu_destination, Stage sta
     if (!commands->timestamp_pool) return;
     assert(commands->timestamp_count < commands->state->timestamp_query_count);
     assert(cpu_destination);
+    flush_barriers(commands);
     commands->timestamp_destinations[commands->timestamp_count] = cpu_destination;
     vkCmdWriteTimestamp2(commands->command_buffer, to_vk(stage), commands->timestamp_pool, commands->timestamp_count++);
 }
@@ -2862,7 +2863,7 @@ SwapchainFrame acquire(CommandBuffer* commands) noexcept
                 .layerCount = 1,
             },
         };
-        record_image_barriers(commands->command_buffer, {&barrier, 1});
+        commands->acquire_barrier = barrier;
         commands->swapchain = swapchain;
         swapchain->transition_commands = commands;
         return {
@@ -3037,6 +3038,8 @@ void destroy_texture(Texture* texture) noexcept
 void initialize_texture(CommandBuffer* commands, Texture* texture) noexcept
 {
     assert(commands && texture && commands->state == texture->state);
+    // Metadata initialization can access aliased storage and must follow the caller's memory dependency.
+    flush_barriers(commands);
     const VkImageMemoryBarrier2 image_barrier{
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
         // Join the caller's dependency without making unrelated image writes available again.
@@ -3766,6 +3769,8 @@ CommandBuffer* begin_commands(CommandPool* pool) noexcept
     };
     assert_vk(vkBeginCommandBuffer(commands->command_buffer, &begin_info));
     commands->timestamp_count = 0;
+    commands->pending_barrier = {};
+    commands->acquire_barrier = {};
     commands->submitted = false;
     commands->has_epilogue = false;
     commands->texture_descriptors = nullptr;
@@ -3778,6 +3783,7 @@ CommandBuffer* begin_commands(CommandPool* pool) noexcept
 void end_commands(CommandBuffer* commands) noexcept
 {
     assert(commands);
+    flush_barriers(commands);
     VkCommandBuffer command_buffer = commands->command_buffer;
     if (commands->swapchain)
     {
@@ -4140,6 +4146,7 @@ void bind_indices(CommandBuffer* commands, GpuRange indices, IndexType type) noe
 
 void emit_root_pointer(CommandBuffer* commands, const void* root) noexcept
 {
+    flush_barriers(commands);
     if (!root) return;
     assert((reinterpret_cast<uintptr>(root) & 15u) == 0);
     if (!commands->state->descriptor_heap)
@@ -4274,6 +4281,7 @@ void set_depth_stencil(CommandBuffer* commands, const DepthStencilState& state) 
 void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc, RenderingFlags flags) noexcept
 {
     assert(commands && (desc.colors.size == 0 || desc.colors.data) && desc.colors.size <= max_color_attachments);
+    flush_barriers(commands);
     const RenderView* area_view = desc.colors.size ? desc.colors.data[0].render_view
                                                   : (desc.depth.render_view ? desc.depth.render_view : desc.stencil.render_view);
     assert(area_view && "begin_render_pass requires an attachment to determine the render area");
@@ -4343,6 +4351,7 @@ void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc, Rende
 void end_render_pass(CommandBuffer* commands) noexcept
 {
     assert(commands);
+    flush_barriers(commands);
     vkCmdEndRendering(commands->command_buffer);
 }
 
@@ -4477,6 +4486,7 @@ void draw_meshlets_indirect(CommandBuffer* commands, const void* root, GpuRange 
 void copy_memory(CommandBuffer* commands, GpuRange source, GpuRange destination) noexcept
 {
     assert(commands && commands->state);
+    flush_barriers(commands);
     if (commands->state->buffer_map)
     {
         uint64 source_offset;
@@ -4523,6 +4533,7 @@ void copy_memory(CommandBuffer* commands, GpuRange source, GpuRange destination)
 void copy_memory_to_texture(CommandBuffer* commands, GpuRange source, Texture* destination, const TextureCopyDesc& copy) noexcept
 {
     assert(commands && commands->state && destination);
+    flush_barriers(commands);
     const VkDeviceMemoryImageCopyKHR region = make_texture_copy_region(*destination, copy, source);
     if (commands->state->buffer_map)
     {
@@ -4552,6 +4563,7 @@ void copy_memory_to_texture(CommandBuffer* commands, GpuRange source, Texture* d
 void copy_texture_to_memory(CommandBuffer* commands, Texture* source, GpuRange destination, const TextureCopyDesc& copy) noexcept
 {
     assert(commands && commands->state && source);
+    flush_barriers(commands);
     const VkDeviceMemoryImageCopyKHR region = make_texture_copy_region(*source, copy, destination);
     if (commands->state->buffer_map)
     {
@@ -4581,7 +4593,13 @@ void copy_texture_to_memory(CommandBuffer* commands, Texture* source, GpuRange d
 void barrier(CommandBuffer* commands, Stage before, Access before_access, Stage after, Access after_access) noexcept
 {
     assert(commands);
-    record_barrier(commands, before, before_access, after, after_access);
+    // Separate barriers in one Vulkan call do not chain; merge scopes to preserve consecutive dependencies.
+    VkMemoryBarrier2& pending = commands->pending_barrier;
+    pending.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+    pending.srcStageMask |= to_vk(before);
+    pending.srcAccessMask |= to_vk(before_access, commands->state->descriptor_heap);
+    pending.dstStageMask |= to_vk(after);
+    pending.dstAccessMask |= to_vk(after_access, commands->state->descriptor_heap);
 }
 
 } // namespace gpu

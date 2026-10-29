@@ -215,8 +215,12 @@ SPIRV-Tools 2026.3+ are required; see [the shader contract](slang.md).
 
 ## Resource-free barriers and unified image layout
 
-`barrier()` maps stage and access masks to one global `VkMemoryBarrier2` in
-`vkCmdPipelineBarrier2`. It has no texture or buffer parameter. The application describes the real
+`barrier()` combines consecutive global dependencies into one `VkMemoryBarrier2`, using the union of their stage/access masks.
+This preserves dependency chains; separate entries in one Vulkan call would be independent. The combined dependency emits before
+the next draw, dispatch, copy, render-pass boundary, timestamp or command-buffer end. Bindings do not split the batch, repeated masks
+add no work, and each command buffer needs only one pending dependency. The acquire transition joins the next batch.
+Texture metadata initialization flushes preceding dependencies before its transition because it can access aliased storage.
+The call has no texture or buffer parameter. The application describes the real
 producer/consumer hazard, while resource identity and image-layout bookkeeping disappear from the
 public API.
 
