@@ -22,6 +22,9 @@ namespace
 thread_local ErrorCallback error_callback = nullptr;
 
 constexpr MTLRenderStages render_stages = MTLRenderStageVertex | MTLRenderStageFragment | MTLRenderStageObject | MTLRenderStageMesh;
+constexpr MTLStages compute_stages = MTLStageDispatch | MTLStageBlit;
+constexpr MTLStages barrier_destinations[] = {MTLStageVertex, MTLStageFragment, MTLStageTile, MTLStageObject,
+                                            MTLStageMesh, MTLStageDispatch, MTLStageBlit, MTLStageAccelerationStructure};
 
 uint64 align_up(uint64 value, uint64 alignment) { return (value + alignment - 1) / alignment * alignment; }
 bool has_usage(TextureUsage usage, TextureUsage bit) { return (static_cast<uint32>(usage) & static_cast<uint32>(bit)) != 0; }
@@ -238,6 +241,12 @@ struct NativeCommandBuffer
     NativeCommandBuffer* next = nullptr;
 };
 
+struct PendingBarriers
+{
+    MTLStages execution[8]{};
+    MTLStages memory[8]{};
+};
+
 struct CommandBuffer
 {
     Device* device = nullptr;
@@ -250,6 +259,10 @@ struct CommandBuffer
     id<MTL4ArgumentTable> arguments = nil;
     id<MTL4ComputeCommandEncoder> compute = nil;
     id<MTL4RenderCommandEncoder> render = nil;
+    PendingBarriers barriers{};
+    MTLStages compute_waits[2]{};
+    MTLStages compute_visibility[2]{};
+    bool barriers_pending = false;
     MTL4RenderPassDescriptor* pass = nil;
     TimestampSlot* timestamps = nullptr;
     uint32 timestamp_count = 0;
@@ -491,12 +504,49 @@ id<MTL4CommandBuffer> native_commands(CommandBuffer* commands)
     return commands->commands;
 }
 
+void compute_queue_wait(CommandBuffer* commands, MTLStages source, MTLStages destination, MTL4VisibilityOptions visibility)
+{
+    for (uint32 i = 0; i < 2; ++i)
+    {
+        const MTLStages stage = i ? MTLStageBlit : MTLStageDispatch;
+        if (!(destination & stage)) continue;
+        const MTLStages missing = source & ~(visibility ? commands->compute_visibility[i] : commands->compute_waits[i]);
+        if (missing) [commands->compute barrierAfterQueueStages:missing beforeStages:stage visibilityOptions:visibility];
+        commands->compute_waits[i] |= source;
+        if (visibility) commands->compute_visibility[i] |= source;
+    }
+}
+
+void flush_barriers(CommandBuffer* commands, id<MTL4CommandEncoder> encoder)
+{
+    if (!commands->barriers_pending) return;
+    for (uint32 i = 0; i < 8; ++i)
+    {
+        for (uint32 memory = 0; memory < 2; ++memory)
+        {
+            const MTLStages source = memory ? commands->barriers.memory[i] : commands->barriers.execution[i];
+            if (!source) continue;
+            const MTLStages destination = barrier_destinations[i];
+            const MTL4VisibilityOptions visibility = memory ? MTL4VisibilityOptionDevice : MTL4VisibilityOptionNone;
+            if (commands->compute) compute_queue_wait(commands, source, destination, visibility);
+            else [encoder barrierAfterQueueStages:source beforeStages:destination visibilityOptions:visibility];
+            // The shared barrier also covers later encoders and subsequent submissions on this queue.
+            [encoder barrierAfterStages:source beforeQueueStages:destination visibilityOptions:visibility];
+        }
+    }
+    commands->barriers = {};
+    commands->barriers_pending = false;
+}
+
 id<MTL4ComputeCommandEncoder> compute_encoder(CommandBuffer* commands)
 {
     assert(commands->recording && !commands->render);
     if (!commands->compute)
     {
         commands->compute = [[native_commands(commands) computeCommandEncoder] retain];
+        memset(commands->compute_waits, 0, sizeof(commands->compute_waits));
+        memset(commands->compute_visibility, 0, sizeof(commands->compute_visibility));
+        flush_barriers(commands, commands->compute);
         [commands->compute setArgumentTable:commands->arguments];
         if (commands->pso && commands->pso->compute) [commands->compute setComputePipelineState:commands->pso->compute];
     }
@@ -1285,6 +1335,8 @@ CommandBuffer* begin_commands(CommandPool* pool) noexcept
         [context->arguments setAddress:0 atIndex:1];
         [context->arguments setAddress:0 atIndex:2];
         context->timestamp_count = 0;
+        context->barriers = {};
+        context->barriers_pending = false;
         context->pso = nullptr;
         context->recording = true;
         context->render_continuation = false;
@@ -1297,6 +1349,8 @@ void end_commands(CommandBuffer* commands) noexcept
     @autoreleasepool
     {
         assert(commands->recording && !commands->render);
+        // A command buffer containing only a barrier still has to publish its queue dependency.
+        if (commands->barriers_pending) compute_encoder(commands);
         end_compute(commands);
         [commands->commands endCommandBuffer];
         commands->recording = false;
@@ -1509,8 +1563,29 @@ void barrier(CommandBuffer* commands, Stage before, Access before_access, Stage 
         if (!source || !destination) return;
         const uint64 writes = static_cast<uint64>(Access::transfer_write | Access::shader_write | Access::color_write | Access::depth_stencil_write);
         const MTL4VisibilityOptions visibility = (static_cast<uint64>(before_access) & writes) ? MTL4VisibilityOptionDevice : MTL4VisibilityOptionNone;
-        [compute_encoder(commands) barrierAfterStages:source beforeQueueStages:destination visibilityOptions:visibility];
-        end_compute(commands);
+        if (commands->compute)
+        {
+            // Queue barriers cover other encoders; the encoder barrier covers subsequent work in this pass.
+            [commands->compute barrierAfterStages:source beforeQueueStages:destination visibilityOptions:visibility];
+            compute_queue_wait(commands, source, destination, visibility);
+            if ((source & compute_stages) && (destination & compute_stages))
+                [commands->compute barrierAfterEncoderStages:source & compute_stages beforeEncoderStages:destination & compute_stages
+                                           visibilityOptions:visibility];
+        }
+        else
+        {
+            for (uint32 i = 0; i < 8; ++i)
+            {
+                if (!(destination & barrier_destinations[i])) continue;
+                if (visibility)
+                {
+                    commands->barriers.memory[i] |= source;
+                    commands->barriers.execution[i] &= ~source;
+                }
+                else commands->barriers.execution[i] |= source & ~commands->barriers.memory[i];
+            }
+            commands->barriers_pending = true;
+        }
     }
 }
 
@@ -1671,6 +1746,7 @@ void begin_render_pass(CommandBuffer* commands, const RenderingDesc& desc, Rende
                                           MTL4RenderEncoderOptionSuspending : MTL4RenderEncoderOptionNone;
         if ((static_cast<uint32>(flags) & static_cast<uint32>(RenderingFlags::resuming)) != 0) options |= MTL4RenderEncoderOptionResuming;
         commands->render = [[native_commands(commands) renderCommandEncoderWithDescriptor:commands->pass options:options] retain];
+        flush_barriers(commands, commands->render);
         [commands->render setArgumentTable:commands->arguments atStages:render_stages];
         [commands->render setFrontFacingWinding:MTLWindingCounterClockwise];
         [commands->render setViewport:MTLViewport{0, double(height ? height : 1), double(width ? width : 1), -double(height ? height : 1), 0, 1}];
@@ -1744,7 +1820,6 @@ void bind_pso(CommandBuffer* commands, const PSO* pso) noexcept
         {
             assert(!commands->render);
             if (commands->compute) [commands->compute setComputePipelineState:pso->compute];
-            else compute_encoder(commands);
         }
         else
         {

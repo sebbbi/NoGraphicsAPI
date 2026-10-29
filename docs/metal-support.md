@@ -96,12 +96,14 @@ Use three drawables to keep scanout from starving a two-frame renderer on Apple 
 
 ## Synchronization
 
-Compute encoders are implicit: binding a compute PSO opens one, and dispatches reuse it until a barrier,
-render pass, timestamp or command-buffer end closes it. Independent dispatches can overlap;
+Compute encoders open on the first dispatch or copy and remain open across barriers until a
+render pass, timestamp or command-buffer end closes them. Independent dispatches can overlap;
 dependent accesses need explicit barriers. Additional compute queues are supported, with timeline waits between queues.
 Compute bindings survive internal encoder splits, but are cleared at explicit render-pass boundaries.
 
-On Metal 4, resource-free barriers map to Metal producer barriers. Fragment, depth and color destinations wait
+Barriers combine intra-encoder dependencies with queue scopes covering earlier and later encoders, including subsequent submissions.
+Between passes, barriers accumulate by destination stage and visibility until the next real encoder starts;
+only a trailing barrier with no encoder requires its own encoder. Fragment, depth and color destinations wait
 at fragment/tile stages, allowing independent vertex, object and mesh work to overlap previous passes.
 Compute and copy work use their own scopes. Write dependencies request device visibility;
 execution-only dependencies do not flush caches.

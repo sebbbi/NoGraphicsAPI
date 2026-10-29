@@ -227,6 +227,15 @@ if(APPLE)
     set_tests_properties(test_metal_barriers test_metal_barriers_timestamps PROPERTIES
         SKIP_RETURN_CODE 77 TIMEOUT 60 FAIL_REGULAR_EXPRESSION "Validation Error;NoGraphicsAPI validation:")
 
+    add_executable(test_metal_encoder_batching metal_encoder_batching_test.mm ${metal_barrier_compute})
+    NoGraphicsAPI_disable_exceptions(test_metal_encoder_batching)
+    target_link_libraries(test_metal_encoder_batching PRIVATE NoGraphicsAPI::NoGraphicsAPI)
+    target_compile_definitions(test_metal_encoder_batching PRIVATE NOGRAPHICSAPI_METAL_BARRIER_COMPUTE="${metal_barrier_compute}")
+    add_test(NAME test_metal_encoder_batching COMMAND test_metal_encoder_batching)
+    set_tests_properties(test_metal_encoder_batching PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60
+        FAIL_REGULAR_EXPRESSION "Validation Error;NoGraphicsAPI validation:"
+        ENVIRONMENT "MTL_DEBUG_LAYER=1;MTL_SHADER_VALIDATION=0")
+
     add_test(NAME test_metal_autorelease COMMAND test_command_context)
     set_tests_properties(test_metal_autorelease PROPERTIES
         SKIP_RETURN_CODE 77 TIMEOUT 60 FAIL_REGULAR_EXPRESSION "MISSING POOLS:"

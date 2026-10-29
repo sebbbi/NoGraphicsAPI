@@ -2,6 +2,11 @@
 using namespace metal;
 #include "metal_barrier_shared.h"
 
+kernel void chainMain(constant MetalBarrierRoot& root [[buffer(0)]])
+{
+    root.output[0] = root.input[0] + root.value;
+}
+
 kernel void computeMain(constant MetalBarrierRoot& root [[buffer(0)]])
 {
     if (root.overwrite) root.input[0] = root.value;
