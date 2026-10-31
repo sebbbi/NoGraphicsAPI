@@ -97,6 +97,9 @@ struct SubmitDesc
     Span<CommandBuffer* const> commands = {};
     Span<const TimelinePoint> waits = {}; // GPU waits cover all command stages.
     TimelinePoint completion = {}; // Required for every submission.
+    // Called on the submitting thread after queue submission, before presentation. Do not submit recursively on this queue.
+    void (*submitted)(void*) noexcept = nullptr;
+    void* submitted_context = nullptr;
 };
 
 enum class Format : uint8
@@ -423,7 +426,7 @@ enum class Stage : uint64
     color_output = 1ull << 7u,
     compute = 1ull << 8u,
     transfer = 1ull << 9u,
-    host = 1ull << 10u, // Barrier destination only, paired with host_read.
+    host = 1ull << 10u,
     all_commands = 1ull << 11u, // All GPU command stages; excludes host.
 };
 
@@ -447,6 +450,7 @@ enum class Access : uint64
     index_read = 1ull << 9u,
     host_read = 1ull << 10u,
     descriptor_read = 1ull << 11u,
+    host_write = 1ull << 12u,
 };
 
 constexpr Access operator|(Access lhs, Access rhs) noexcept
@@ -733,6 +737,10 @@ void destroy_device(Device* device) noexcept;
 void destroy_timeline_semaphore(TimelineSemaphore* semaphore) noexcept;
 [[nodiscard]] uint64 timeline_completed_value(const TimelineSemaphore* semaphore) noexcept;
 void wait_timeline(TimelinePoint point) noexcept;
+// Host-only signaling; externally order increasing values. Do not race GPU signals on the same semaphore.
+void signal_timeline(TimelinePoint point) noexcept;
+// Order/drain CPU stores to mapped memory. Device visibility still requires the appropriate GPU memory dependency.
+void flush_host_writes() noexcept;
 void wait_idle(Device* device) noexcept;
 
 // Acquire outside a render pass. Later buffers in the same presentation submission may also access the returned image.

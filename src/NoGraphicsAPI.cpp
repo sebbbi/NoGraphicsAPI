@@ -10,6 +10,7 @@
 #endif
 #define VK_USE_PLATFORM_WIN32_KHR
 #include <windows.h>
+#include <intrin.h>
 #endif
 
 #include <vulkan/vulkan.h>
@@ -464,6 +465,7 @@ VkAccessFlags2 to_vk(Access accesses, bool descriptor_heap)
     if (has_flag(accesses, Access::indirect_read)) result |= VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
     if (has_flag(accesses, Access::index_read)) result |= VK_ACCESS_2_INDEX_READ_BIT;
     if (has_flag(accesses, Access::host_read)) result |= VK_ACCESS_2_HOST_READ_BIT;
+    if (has_flag(accesses, Access::host_write)) result |= VK_ACCESS_2_HOST_WRITE_BIT;
     if (has_flag(accesses, Access::descriptor_read)) result |= descriptor_heap
         ? VK_ACCESS_2_SAMPLER_HEAP_READ_BIT_EXT | VK_ACCESS_2_RESOURCE_HEAP_READ_BIT_EXT : VK_ACCESS_2_DESCRIPTOR_BUFFER_READ_BIT_EXT;
     return result;
@@ -2369,6 +2371,24 @@ uint64 timeline_completed_value(const TimelineSemaphore* semaphore) noexcept
     return query_timeline_value(*semaphore);
 }
 
+void flush_host_writes() noexcept
+{
+#if defined(_WIN32) && defined(_M_X64)
+    _mm_sfence();
+#else
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+#endif
+}
+
+void signal_timeline(TimelinePoint point) noexcept
+{
+    assert(point.semaphore);
+    flush_host_writes();
+    const VkSemaphoreSignalInfo signal{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO,
+        .semaphore = point.semaphore->semaphore, .value = point.value};
+    assert_vk(vkSignalSemaphore(point.semaphore->state->device, &signal));
+}
+
 void wait_timeline(TimelinePoint point) noexcept
 {
     TimelineSemaphore* semaphore = point.semaphore;
@@ -3936,6 +3956,7 @@ void submit_commands(Device* device, const SubmitDesc& desc, uint32 queue_index,
     };
     assert_vk(vkQueueSubmit2(queue->queue, 1, &submit_info, fence));
     for (size_t index = 0; index < desc.commands.size; ++index) desc.commands.data[index]->submitted = true;
+    if (desc.submitted) desc.submitted(desc.submitted_context);
 }
 
 } // namespace
