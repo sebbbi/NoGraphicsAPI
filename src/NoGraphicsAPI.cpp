@@ -10,7 +10,6 @@
 #endif
 #define VK_USE_PLATFORM_WIN32_KHR
 #include <windows.h>
-#include <intrin.h>
 #endif
 
 #include <vulkan/vulkan.h>
@@ -2371,19 +2370,9 @@ uint64 timeline_completed_value(const TimelineSemaphore* semaphore) noexcept
     return query_timeline_value(*semaphore);
 }
 
-void flush_host_writes() noexcept
-{
-#if defined(_WIN32) && defined(_M_X64)
-    _mm_sfence();
-#else
-    __atomic_thread_fence(__ATOMIC_SEQ_CST);
-#endif
-}
-
 void signal_timeline(TimelinePoint point) noexcept
 {
     assert(point.semaphore);
-    flush_host_writes();
     const VkSemaphoreSignalInfo signal{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO,
         .semaphore = point.semaphore->semaphore, .value = point.value};
     assert_vk(vkSignalSemaphore(point.semaphore->state->device, &signal));

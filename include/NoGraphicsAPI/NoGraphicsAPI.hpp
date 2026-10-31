@@ -738,9 +738,8 @@ void destroy_timeline_semaphore(TimelineSemaphore* semaphore) noexcept;
 [[nodiscard]] uint64 timeline_completed_value(const TimelineSemaphore* semaphore) noexcept;
 void wait_timeline(TimelinePoint point) noexcept;
 // Host-only signaling; externally order increasing values. Do not race GPU signals on the same semaphore.
+// Order weakly ordered CPU stores before signaling.
 void signal_timeline(TimelinePoint point) noexcept;
-// Order/drain CPU stores to mapped memory. Device visibility still requires the appropriate GPU memory dependency.
-void flush_host_writes() noexcept;
 void wait_idle(Device* device) noexcept;
 
 // Acquire outside a render pass. Later buffers in the same presentation submission may also access the returned image.

@@ -798,11 +798,6 @@ void signal_timeline(TimelinePoint point) noexcept
     }
 }
 
-void flush_host_writes() noexcept
-{
-    __atomic_thread_fence(__ATOMIC_SEQ_CST);
-}
-
 void wait_timeline(TimelinePoint point) noexcept
 {
     @autoreleasepool
