@@ -450,7 +450,7 @@ enum class Access : uint64
     index_read = 1ull << 9u,
     host_read = 1ull << 10u,
     descriptor_read = 1ull << 11u,
-    host_write = 1ull << 12u,
+    host_write = 1ull << 12u, // Only for host writes after submit. Submission already supplies the host-to-device dependency for earlier writes.
 };
 
 constexpr Access operator|(Access lhs, Access rhs) noexcept
