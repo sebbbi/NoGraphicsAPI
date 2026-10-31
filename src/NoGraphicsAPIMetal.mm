@@ -1402,7 +1402,6 @@ void submit(Device* device, const SubmitDesc& desc, uint32 queue_index) noexcept
         if (device->shader_validation) os_unfair_lock_unlock(&device->residency_lock);
         [queue.queue signalEvent:queue.completion value:++queue.submitted_value];
         [queue.queue signalEvent:desc.completion.semaphore->event value:desc.completion.value];
-        if (desc.submitted) desc.submitted(desc.submitted_context);
     }
 }
 

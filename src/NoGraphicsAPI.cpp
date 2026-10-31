@@ -3945,7 +3945,6 @@ void submit_commands(Device* device, const SubmitDesc& desc, uint32 queue_index,
     };
     assert_vk(vkQueueSubmit2(queue->queue, 1, &submit_info, fence));
     for (size_t index = 0; index < desc.commands.size; ++index) desc.commands.data[index]->submitted = true;
-    if (desc.submitted) desc.submitted(desc.submitted_context);
 }
 
 } // namespace

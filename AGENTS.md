@@ -16,6 +16,7 @@
 - Perform error checks as early as possible. Check application initialization, resource loading, and Vulkan object creation immediately. Avoid error checking after initialization; normal code should not fail.
 - Treat the library as a low-level, thin wrapper, not as a validation layer. Validate only inputs and state whose misuse could make the wrapper itself crash.
   Document those preconditions and enforce programmer errors with asserts.
+- Do not expose callbacks for GPU submission or completion. Applications sequence work through explicit calls and timeline waits.
 - Data and parameters passed directly from the user to Vulkan are the user's responsibility. Do not duplicate Vulkan validation or maintain shadow state
   solely to validate them; users should enable the Vulkan validation layer during development.
 - NoGraphicsAPI resource destruction is immediate. In applications, examples, and tests, destroy resources only after no recorded or executing GPU frame

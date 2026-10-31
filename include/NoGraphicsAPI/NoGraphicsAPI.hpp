@@ -97,9 +97,6 @@ struct SubmitDesc
     Span<CommandBuffer* const> commands = {};
     Span<const TimelinePoint> waits = {}; // GPU waits cover all command stages.
     TimelinePoint completion = {}; // Required for every submission.
-    // Called on the submitting thread after queue submission, before presentation. Do not submit recursively on this queue.
-    void (*submitted)(void*) noexcept = nullptr;
-    void* submitted_context = nullptr;
 };
 
 enum class Format : uint8
