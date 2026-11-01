@@ -679,7 +679,8 @@ namespace math {
 #	undef NOGRAPHICSAPI_COMPONENT_MATH
 
 	constexpr float abs(float value) noexcept {
-		return __builtin_bit_cast(float, __builtin_bit_cast(uint32, value) & 0x7fffffffu);
+		const uint32 bits = __builtin_bit_cast(uint32, value) & 0x7fffffffu;
+		return __builtin_bit_cast(float, bits);
 	}
 	constexpr int32 abs(int32 value) noexcept {
 		return value < 0 ? -value : value;
