@@ -487,6 +487,7 @@ struct DeviceDesc
     void* window = nullptr; // HWND on Windows; CAMetalLayer* on macOS/iOS. Null creates a headless device.
     Format swapchain_format = Format::undefined;
     ColorSpace swapchain_color_space = ColorSpace::srgb;
+    bool vsync = true; // Vulkan FIFO when on, immediate when off. iOS requires on.
     uint32 desired_swapchain_image_count = 2; // Vulkan: 1..8 presentation contexts. Metal clamps to 2..3 drawables.
     bool steam_overlay_compatibility = false; // macOS only: allow drawable texture views and use classic Metal presentation.
     // Counts are capped to each family's capacity. A nonzero request requires that kind of queue to be available.
@@ -729,6 +730,8 @@ void destroy_device(Device* device) noexcept;
 // Call after wait_idle, outside an acquired frame. Unsupported pairs leave the current mode unchanged.
 // A zero-size drawable defers swapchain recreation until acquire sees a nonzero extent.
 [[nodiscard]] Error set_swapchain_format(Device* device, Format format, ColorSpace color_space) noexcept;
+// Call after wait_idle, outside an acquired frame. Unsupported modes leave the current mode unchanged.
+[[nodiscard]] Error set_swapchain_vsync(Device* device, bool enabled) noexcept;
 
 [[nodiscard]] TimelineSemaphore* create_timeline_semaphore(Device* device, uint64 initial_value = 0) noexcept;
 void destroy_timeline_semaphore(TimelineSemaphore* semaphore) noexcept;

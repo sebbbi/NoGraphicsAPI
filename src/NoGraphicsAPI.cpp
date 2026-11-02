@@ -43,11 +43,7 @@ constexpr uint32 max_queue_families = 64;
 constexpr uint32 queue_type_count = 3; // General, compute-only, copy-only.
 constexpr uint32 max_color_attachments = 8;
 constexpr uint32 max_swapchain_images = 8;
-#if defined(NOGRAPHICSAPI_TEST_IMMEDIATE_PRESENT)
-constexpr VkPresentModeKHR swapchain_present_mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
-#else
-constexpr VkPresentModeKHR swapchain_present_mode = VK_PRESENT_MODE_FIFO_KHR;
-#endif
+constexpr uint32 max_present_modes = 16;
 constexpr uint32 gpu_allocation_alignment = 16;
 constexpr uint32 max_surface_formats = 64;
 constexpr uint32 format_count = static_cast<uint32>(Format::undefined);
@@ -1425,6 +1421,7 @@ struct Swapchain
     uint32 height = 0;
     Format format = Format::bgra8_srgb;
     VkColorSpaceKHR color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
     VkSurfaceTransformFlagBitsKHR transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
     VkCompositeAlphaFlagBitsKHR composite_alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     detail::PresentContext* present_context = nullptr;
@@ -2317,6 +2314,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         state->swapchain = new Swapchain;
         state->swapchain->state = state;
         state->swapchain->format = desc.swapchain_format;
+        state->swapchain->present_mode = desc.vsync ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_IMMEDIATE_KHR;
         state->swapchain->color_space = desc.swapchain_color_space == ColorSpace::extended_srgb_linear
             ? VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT : VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
         error = recreate_swapchain(*state->swapchain);
@@ -2557,9 +2555,20 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept
 {
     Device& device = *swapchain.state;
     assert(!swapchain.acquired && !device.acquired_swapchain);
+    if (swapchain.present_mode != VK_PRESENT_MODE_FIFO_KHR)
+    {
+        VkPresentModeKHR modes[max_present_modes]{};
+        uint32 count = max_present_modes;
+        const Error error = error_from_vk(vkGetPhysicalDeviceSurfacePresentModesKHR(device.physical_device, device.surface, &count, modes),
+            "vkGetPhysicalDeviceSurfacePresentModesKHR");
+        if (error != Error::none) return error;
+        bool supported = false;
+        for (uint32 i = 0; i < count; ++i) supported |= modes[i] == swapchain.present_mode;
+        if (!supported) return Error::unsupported;
+    }
     const VkSurfacePresentModeKHR present_mode_info{
         .sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_KHR,
-        .presentMode = swapchain_present_mode,
+        .presentMode = swapchain.present_mode,
     };
     const VkPhysicalDeviceSurfaceInfo2KHR surface_info{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR,
@@ -2634,7 +2643,7 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept
     const VkSwapchainPresentModesCreateInfoKHR present_modes_info{
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODES_CREATE_INFO_KHR,
         .presentModeCount = 1,
-        .pPresentModes = &swapchain_present_mode,
+        .pPresentModes = &swapchain.present_mode,
     };
     const VkSwapchainCreateInfoKHR create_info{
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
@@ -2651,7 +2660,7 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept
         .pQueueFamilyIndices = device.queue_families,
         .preTransform = capabilities.currentTransform,
         .compositeAlpha = composite_alpha,
-        .presentMode = swapchain_present_mode,
+        .presentMode = swapchain.present_mode,
         .clipped = VK_TRUE,
         .oldSwapchain = old_handle,
     };
@@ -2773,6 +2782,24 @@ Error set_swapchain_format(Device* device, Format format, ColorSpace color_space
         // vkCreateSwapchainKHR retires oldSwapchain even when creation fails.
         if (!swapchain.handle)
             require_error(recreate_swapchain(swapchain), "Swapchain recreation");
+    }
+    return error;
+}
+
+Error set_swapchain_vsync(Device* device, bool enabled) noexcept
+{
+    assert(device && !device->acquired_swapchain);
+    if (!device->swapchain) return Error::unsupported;
+    Swapchain& swapchain = *device->swapchain;
+    const VkPresentModeKHR requested = enabled ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_IMMEDIATE_KHR;
+    if (swapchain.present_mode == requested) return Error::none;
+    const VkPresentModeKHR previous = swapchain.present_mode;
+    swapchain.present_mode = requested;
+    const Error error = recreate_swapchain(swapchain);
+    if (error != Error::none)
+    {
+        swapchain.present_mode = previous;
+        if (!swapchain.handle) require_error(recreate_swapchain(swapchain), "Swapchain recreation");
     }
     return error;
 }

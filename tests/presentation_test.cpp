@@ -31,6 +31,7 @@ int main(int argc, char** argv)
     const bool queue_families = argc == 2 && strcmp(argv[1], "--queue-families") == 0;
     const bool scrgb = argc == 2 && strcmp(argv[1], "--scrgb") == 0;
     const bool switch_color_space = argc == 2 && strcmp(argv[1], "--switch-color-space") == 0;
+    const bool switch_vsync = argc == 2 && strcmp(argv[1], "--switch-vsync") == 0;
     const WNDCLASSEXA window_class{
         .cbSize = sizeof(WNDCLASSEXA),
         .lpfnWndProc = DefWindowProcA,
@@ -55,6 +56,7 @@ int main(int argc, char** argv)
         .window = window,
         .swapchain_format = scrgb ? gpu::Format::rgba16_float : gpu::Format::bgra8_srgb,
         .swapchain_color_space = scrgb ? gpu::ColorSpace::extended_srgb_linear : gpu::ColorSpace::srgb,
+        .vsync = !switch_vsync,
         .desired_queue_count = 2,
         .desired_compute_queue_count = queue_families ? 1u : 0u,
         .desired_copy_queue_count = queue_families ? 1u : 0u,
@@ -90,6 +92,12 @@ int main(int argc, char** argv)
         gpu::reset_command_pool(independent_pool);
         for (uint32 index = 0; index != 3; ++index) timestamp_cpu[index] = ~uint64{0};
 
+        if (switch_vsync || switch_color_space)
+        {
+            gpu::wait_idle(device);
+            CHECK(gpu::set_swapchain_vsync(device, (frame_index & 1u) != 0) == gpu::Error::none);
+            CHECK(gpu::set_swapchain_vsync(device, (frame_index & 1u) != 0) == gpu::Error::none);
+        }
         if (switch_color_space)
         {
             gpu::wait_idle(device);
@@ -127,6 +135,11 @@ int main(int argc, char** argv)
             pump_messages();
             const gpu::uint32x2 empty_extent = gpu::get_drawable_extent(device);
             CHECK(empty_extent.x == 0 && empty_extent.y == 0);
+            if (switch_vsync)
+            {
+                gpu::wait_idle(device);
+                CHECK(gpu::set_swapchain_vsync(device, true) == gpu::Error::none);
+            }
             if (switch_color_space)
             {
                 CHECK(gpu::set_swapchain_format(device, gpu::Format::bgra8_srgb, gpu::ColorSpace::srgb) == gpu::Error::none);

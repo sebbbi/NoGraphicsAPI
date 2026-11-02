@@ -161,7 +161,8 @@ if(WIN32)
     add_test(NAME test_presentation_scrgb COMMAND test_presentation --scrgb)
     add_test(NAME test_presentation_color_space_switch COMMAND test_presentation --switch-color-space)
     add_test(NAME test_presentation_queue_families COMMAND test_presentation --queue-families)
-    set_tests_properties(test_presentation test_presentation_scrgb test_presentation_color_space_switch test_presentation_queue_families PROPERTIES
+    add_test(NAME test_presentation_vsync COMMAND test_presentation --switch-vsync)
+    set_tests_properties(test_presentation test_presentation_scrgb test_presentation_color_space_switch test_presentation_queue_families test_presentation_vsync PROPERTIES
         SKIP_RETURN_CODE 77 TIMEOUT 60 FAIL_REGULAR_EXPRESSION "NoGraphicsAPI validation:")
 endif()
 
@@ -424,8 +425,9 @@ if(NOT APPLE)
         target_link_libraries(test_presentation_legacy PRIVATE NoGraphicsAPI_legacy_presentation)
         add_test(NAME test_presentation_legacy COMMAND test_presentation_legacy)
         add_test(NAME test_presentation_legacy_color_space_switch COMMAND test_presentation_legacy --switch-color-space)
+        add_test(NAME test_presentation_legacy_vsync COMMAND test_presentation_legacy --switch-vsync)
         add_test(NAME test_presentation_descriptor_buffer_color_space_switch COMMAND test_presentation_descriptor_buffer --switch-color-space)
-        set_tests_properties(test_presentation_legacy test_presentation_legacy_color_space_switch
+        set_tests_properties(test_presentation_legacy test_presentation_legacy_color_space_switch test_presentation_legacy_vsync
             test_presentation_descriptor_buffer_color_space_switch PROPERTIES
             SKIP_RETURN_CODE 77 TIMEOUT 60 FAIL_REGULAR_EXPRESSION "Validation Error;NoGraphicsAPI validation:")
     endif()

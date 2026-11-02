@@ -561,6 +561,9 @@ id<MTLBuffer> resolve_buffer(Device* device, GpuRange range, uint64* offset)
 
 DeviceInit create_device(const DeviceDesc& desc) noexcept
 {
+#if !TARGET_OS_OSX
+    if (desc.window && !desc.vsync) return {.error = Error::unsupported};
+#endif
     if (desc.swapchain_color_space != ColorSpace::srgb)
     {
         report_error("unsupported swapchain color space", nil);
@@ -656,6 +659,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
             [device->queues[0].queue addResidencySet:device->layer.residencySet];
             device->layer.framebufferOnly = YES;
 #if TARGET_OS_OSX
+            device->layer.displaySyncEnabled = desc.vsync;
             if (desc.steam_overlay_compatibility)
             {
                 device->layer.framebufferOnly = NO;
@@ -749,6 +753,18 @@ Error set_swapchain_format(Device* device, Format format, ColorSpace color_space
         device->layer.pixelFormat = pixel_format(format);
         return Error::none;
     }
+}
+
+Error set_swapchain_vsync(Device* device, bool enabled) noexcept
+{
+    assert(device && !device->drawable && !device->acquired);
+    if (!device->layer) return Error::unsupported;
+#if TARGET_OS_OSX
+    device->layer.displaySyncEnabled = enabled;
+    return Error::none;
+#else
+    return enabled ? Error::none : Error::unsupported;
+#endif
 }
 
 uint32x2 get_drawable_extent(Device* device) noexcept
