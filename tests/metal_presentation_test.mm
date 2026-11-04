@@ -1,6 +1,7 @@
 #include <NoGraphicsAPI/NoGraphicsAPI.hpp>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
+#import <CoreGraphics/CoreGraphics.h>
 #include <TargetConditionals.h>
 #include <stdio.h>
 #include <string.h>
@@ -20,6 +21,17 @@ int main(int argc, char** argv)
         // Initialization must override a conflicting caller-provided layer setting.
         layer.framebufferOnly = desc.steam_overlay_compatibility ? YES : NO;
         desc.window = layer;
+        desc.swapchain_format = gpu::Format::rgba16_float;
+        desc.swapchain_color_space = gpu::ColorSpace::extended_srgb_linear;
+        const gpu::DeviceInit edr = gpu::create_device(desc);
+        if (edr.error == gpu::Error::unsupported) { [layer release]; return 77; }
+        if (!edr.device || layer.pixelFormat != MTLPixelFormatRGBA16Float || !layer.wantsExtendedDynamicRangeContent
+            || !CFEqual(CGColorSpaceGetName(layer.colorspace), kCGColorSpaceExtendedLinearSRGB) || layer.EDRMetadata) return 1;
+        gpu::wait_idle(edr.device);
+        gpu::destroy_device(edr.device);
+        desc.swapchain_format = gpu::Format::bgra8_unorm;
+        if (gpu::create_device(desc).error != gpu::Error::unsupported || layer.pixelFormat != MTLPixelFormatRGBA16Float) return 1;
+        desc.swapchain_color_space = gpu::ColorSpace::srgb;
         const gpu::DeviceInit init = gpu::create_device(desc);
         if (init.error == gpu::Error::unsupported) { [layer release]; return 77; }
         if (!init.device) { [layer release]; return 1; }
@@ -46,6 +58,16 @@ int main(int argc, char** argv)
         gpu::CommandPool* pools[2] = {gpu::create_command_pool(init.device), gpu::create_command_pool(init.device)};
         for (uint64 frame = 1; frame <= 8; ++frame)
         {
+            gpu::wait_idle(init.device);
+            const bool hdr = (frame & 2u) != 0;
+            const gpu::Format format = hdr ? gpu::Format::rgba16_float : gpu::Format::bgra8_unorm;
+            const gpu::ColorSpace space = hdr ? gpu::ColorSpace::extended_srgb_linear : gpu::ColorSpace::srgb;
+            if (gpu::set_swapchain_format(init.device, format, space) != gpu::Error::none
+                || bool(layer.wantsExtendedDynamicRangeContent) != hdr
+                || layer.pixelFormat != (hdr ? MTLPixelFormatRGBA16Float : MTLPixelFormatBGRA8Unorm)
+                || !CFEqual(CGColorSpaceGetName(layer.colorspace), hdr ? kCGColorSpaceExtendedLinearSRGB : kCGColorSpaceSRGB)) return 2;
+            if (gpu::set_swapchain_format(init.device, format, hdr ? gpu::ColorSpace::srgb : gpu::ColorSpace::extended_srgb_linear)
+                != gpu::Error::unsupported || bool(layer.wantsExtendedDynamicRangeContent) != hdr) return 2;
             if (!gpu::set_present_interval(init.device, frame & 1u ? 16666667 : 0)) return 2;
             if (frame > 2) gpu::wait_timeline({.semaphore = timeline, .value = frame - 2});
             if (frame == 5)
@@ -60,7 +82,7 @@ int main(int argc, char** argv)
             gpu::SwapchainFrame target = gpu::acquire(commands);
             if (!target.render_view || target.extent.x != extent.x || target.extent.y != extent.y) return 2;
             gpu::begin_render_pass(commands, {.colors = {{.render_view = target.render_view, .load = gpu::LoadOp::clear,
-                                                         .clear = {.x = 0.2f, .y = 0.4f, .z = 0.6f, .w = 1}}}});
+                                                         .clear = {.x = hdr ? 3.0f : 0.2f, .y = 0.4f, .z = 0.6f, .w = 1}}}});
             gpu::end_render_pass(commands);
             gpu::end_commands(commands);
             gpu::submit_and_present(init.device, {.commands = {commands}, .completion = {.semaphore = timeline, .value = frame}});

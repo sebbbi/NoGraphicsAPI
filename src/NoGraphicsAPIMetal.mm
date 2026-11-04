@@ -2,6 +2,8 @@
 #include "BufferAddressMap.hpp"
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
+#import <QuartzCore/CATransaction.h>
+#import <CoreGraphics/CoreGraphics.h>
 #include <TargetConditionals.h>
 #include <mach/mach_time.h>
 #include <os/lock.h>
@@ -559,6 +561,27 @@ id<MTLBuffer> resolve_buffer(Device* device, GpuRange range, uint64* offset)
 {
     return reinterpret_cast<id<MTLBuffer>>(device->buffer_map.resolve(range, offset));
 }
+
+bool presentation_format_supported(Format format, ColorSpace color_space)
+{
+    if (color_space == ColorSpace::extended_srgb_linear) return format == Format::rgba16_float;
+    return color_space == ColorSpace::srgb && (format == Format::bgra8_unorm || format == Format::bgra8_srgb);
+}
+
+void configure_presentation(CAMetalLayer* layer, Format format, ColorSpace color_space)
+{
+    const bool edr = color_space == ColorSpace::extended_srgb_linear;
+    CGColorSpaceRef space = CGColorSpaceCreateWithName(edr ? kCGColorSpaceExtendedLinearSRGB : kCGColorSpaceSRGB);
+    // Rendering threads need not have a run loop to commit implicit layer transactions.
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    layer.pixelFormat = pixel_format(format);
+    layer.colorspace = space;
+    CGColorSpaceRelease(space);
+    layer.EDRMetadata = nil;
+    layer.wantsExtendedDynamicRangeContent = edr;
+    [CATransaction commit];
+}
 }
 
 DeviceInit create_device(const DeviceDesc& desc) noexcept
@@ -566,7 +589,8 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
 #if !TARGET_OS_OSX
     if (desc.window && !desc.vsync) return {.error = Error::unsupported};
 #endif
-    if (desc.swapchain_color_space != ColorSpace::srgb)
+    const Format swapchain_format = desc.swapchain_format == Format::undefined ? Format::bgra8_unorm : desc.swapchain_format;
+    if (!presentation_format_supported(swapchain_format, desc.swapchain_color_space))
     {
         report_error("unsupported swapchain color space", nil);
         return {.error = Error::unsupported};
@@ -656,8 +680,10 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         {
             device->layer = [(CAMetalLayer*)desc.window retain];
             device->display_sync = desc.vsync;
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
             device->layer.device = device->metal;
-            device->layer.pixelFormat = pixel_format(desc.swapchain_format == Format::undefined ? Format::bgra8_unorm : desc.swapchain_format);
+            configure_presentation(device->layer, swapchain_format, desc.swapchain_color_space);
             device->layer.maximumDrawableCount = desc.desired_swapchain_image_count < 3 ? 2 : 3;
             [device->queues[0].queue addResidencySet:device->layer.residencySet];
             device->layer.framebufferOnly = YES;
@@ -671,12 +697,14 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
                 device->presentation_done = [device->metal newEvent];
                 if (!device->presentation_queue || !device->presentation_ready || !device->presentation_done)
                 {
+                    [CATransaction commit];
                     report_error("presentation queue", nil);
                     destroy_device(device);
                     return {.error = Error::driver_error};
                 }
             }
 #endif
+            [CATransaction commit];
         }
         return {.device = device};
     }
@@ -747,13 +775,10 @@ Error set_swapchain_format(Device* device, Format format, ColorSpace color_space
     assert(device && !device->drawable && !device->acquired);
     @autoreleasepool
     {
-        if (!device->layer || color_space != ColorSpace::srgb)
-            return Error::unsupported;
-        if (device->layer.pixelFormat == pixel_format(format))
-            return Error::none;
-        if (format != Format::bgra8_unorm && format != Format::bgra8_srgb)
-            return Error::unsupported;
-        device->layer.pixelFormat = pixel_format(format);
+        if (!device->layer || !presentation_format_supported(format, color_space)) return Error::unsupported;
+        if (device->layer.pixelFormat == pixel_format(format)
+            && bool(device->layer.wantsExtendedDynamicRangeContent) == (color_space == ColorSpace::extended_srgb_linear)) return Error::none;
+        configure_presentation(device->layer, format, color_space);
         return Error::none;
     }
 }

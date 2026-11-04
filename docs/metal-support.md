@@ -79,10 +79,13 @@ counts; NoGraphicsAPI does not emulate an indirect command.
 Metal 4 does not imply BC texture compression support. Query the required texture formats before
 choosing assets; ASTC is available throughout the baseline.
 
-Presentation currently supports only `ColorSpace::srgb`. `create_device()` and `set_swapchain_format()`
-return `Error::unsupported` for `ColorSpace::extended_srgb_linear`; EDR layer configuration is not implemented.
-After `wait_idle()`, with no acquired frame, the setter accepts the current format or switches between
-`Format::bgra8_unorm` and `Format::bgra8_srgb` without replacing application resources.
+Presentation supports `Format::bgra8_unorm` or `Format::bgra8_srgb` with `ColorSpace::srgb`, and
+`Format::rgba16_float` with `ColorSpace::extended_srgb_linear`. Both initialization and live switching configure the
+CAMetalLayer pixel format, color-space tag and EDR flag together. Explicit Core Animation transactions commit initialization and mode changes
+on rendering threads without a run loop. The linear EDR path leaves metadata nil for application tone mapping; 1.0 represents current SDR white.
+Display capability and headroom belong to the application.
+After `wait_idle()`, with no acquired frame, `set_swapchain_format()` switches these modes without replacing application resources.
+Unsupported pairs return `Error::unsupported` without changing the previous presentation mode.
 
 Metal 4 presents directly with framebuffer-only drawables by default. On macOS, set
 `DeviceDesc::steam_overlay_compatibility = true` to allow drawable texture views and use Steam's classic Metal presentation hook.
@@ -93,6 +96,8 @@ rendering completes. Application completion timelines still cover application re
 This adds two submissions per frame and gives up framebuffer-only drawable optimizations. `wait_idle()` also drains the presentation queue.
 The flag has no effect on Vulkan, iOS or headless devices.
 Use three drawables to keep scanout from starving a two-frame renderer on Apple displays.
+`set_present_interval()` supplies a minimum drawable duration when display synchronization is enabled. Both direct Metal 4 presentation
+and the classic Steam hook honor it. Zero restores ordinary presentation; the call adds no CPU sleep.
 
 ## Synchronization
 

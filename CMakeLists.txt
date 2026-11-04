@@ -65,7 +65,7 @@ target_include_directories(NoGraphicsAPI PUBLIC
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 if(APPLE)
-    target_link_libraries(NoGraphicsAPI PRIVATE "-framework Metal" "-framework Foundation" "-framework QuartzCore")
+    target_link_libraries(NoGraphicsAPI PRIVATE "-framework Metal" "-framework Foundation" "-framework QuartzCore" "-framework CoreGraphics")
     target_compile_options(NoGraphicsAPI PRIVATE -fno-objc-arc)
 else()
     target_link_libraries(NoGraphicsAPI PUBLIC Vulkan::Headers PRIVATE Vulkan::Vulkan)
