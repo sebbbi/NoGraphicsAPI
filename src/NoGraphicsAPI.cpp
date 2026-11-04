@@ -167,11 +167,11 @@ constexpr bool has_flag(T value, T flag)
     return (static_cast<U>(value) & static_cast<U>(flag)) != 0;
 }
 
-bool has_name(Span<const VkExtensionProperties> values, const char* name)
+bool has_name(Span<const VkExtensionProperties> values, const char* name, uint32 minimum_revision = 1)
 {
     for (size_t index = 0; index < values.size; ++index)
     {
-        if (strcmp(values.data[index].extensionName, name) == 0)
+        if (strcmp(values.data[index].extensionName, name) == 0 && values.data[index].specVersion >= minimum_revision)
             return true;
     }
     return false;
@@ -726,6 +726,8 @@ struct Device
     VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
     bool descriptor_heap = false;
     bool swapchain_maintenance = false;
+    PFN_vkGetSwapchainTimeDomainPropertiesEXT get_time_domains = nullptr;
+    uint64 present_interval_ns = 0;
     uint64 max_timeline_value_difference = 0;
     uint64 texture_heap_alignment = 16;
     uint32 texture_memory_type = VK_MAX_MEMORY_TYPES;
@@ -1422,6 +1424,8 @@ struct Swapchain
     Format format = Format::bgra8_srgb;
     VkColorSpaceKHR color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
     VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
+    bool relative_present = false;
+    uint64_t time_domain_id = 0;
     VkSurfaceTransformFlagBitsKHR transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
     VkCompositeAlphaFlagBitsKHR composite_alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     detail::PresentContext* present_context = nullptr;
@@ -1526,8 +1530,9 @@ struct QueriedFeatures
     VkPhysicalDeviceUnifiedImageLayoutsFeaturesKHR unified_image_layouts{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_UNIFIED_IMAGE_LAYOUTS_FEATURES_KHR};
     VkPhysicalDeviceMeshShaderFeaturesEXT mesh_shader{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
     VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR swapchain_maintenance1{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR};
+    VkPhysicalDevicePresentTimingFeaturesEXT present_timing{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_TIMING_FEATURES_EXT};
 
-    explicit QueriedFeatures(bool presentation, bool include_unified_image_layouts, bool include_address_commands, bool native_heap)
+    explicit QueriedFeatures(bool presentation, bool include_unified_image_layouts, bool include_address_commands, bool native_heap, bool relative_present)
     {
         core.pNext = &vulkan11;
         vulkan11.pNext = &vulkan12;
@@ -1546,6 +1551,11 @@ struct QueriedFeatures
         }
         if (native_heap) untyped_pointers.pNext = descriptor_buffer.pNext;
         mesh_shader.pNext = presentation ? &swapchain_maintenance1 : nullptr;
+        if (relative_present)
+        {
+            present_timing.pNext = mesh_shader.pNext;
+            mesh_shader.pNext = &present_timing;
+        }
     }
 };
 
@@ -1569,6 +1579,7 @@ struct Candidate
     bool storage_push_constant16 = false;
     bool khr_swapchain_maintenance1 = false;
     bool swapchain_maintenance = false;
+    bool relative_present = false;
     bool descriptor_heap = false;
     VkPhysicalDeviceDescriptorHeapPropertiesEXT heap_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_PROPERTIES_EXT};
     VkPhysicalDeviceDescriptorBufferPropertiesEXT descriptor_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_PROPERTIES_EXT};
@@ -1670,8 +1681,11 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
     }
 
     const bool address_commands_extension = has_name({extensions, extension_count}, VK_KHR_DEVICE_ADDRESS_COMMANDS_EXTENSION_NAME);
+    const bool timing_extensions = surface && has_name({extensions, extension_count}, VK_EXT_PRESENT_TIMING_EXTENSION_NAME, 3)
+        && has_name({extensions, extension_count}, VK_KHR_PRESENT_ID_2_EXTENSION_NAME)
+        && has_name({extensions, extension_count}, VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
     QueriedFeatures features(surface && (khr_swapchain_maintenance1 || ext_swapchain_maintenance1),
-                             unified_image_layouts_extension, address_commands_extension, native_heap);
+                             unified_image_layouts_extension, address_commands_extension, native_heap, timing_extensions);
     vkGetPhysicalDeviceFeatures2(physical_device, &features.core);
     struct RequiredFeature { VkBool32 available; const char* name; };
     const RequiredFeature required_features[]{
@@ -1723,6 +1737,7 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
     result.storage_input_output16 = features.vulkan11.storageInputOutput16 == VK_TRUE;
     result.storage_push_constant16 = features.vulkan11.storagePushConstant16 == VK_TRUE;
     result.khr_swapchain_maintenance1 = khr_swapchain_maintenance1;
+    result.relative_present = features.present_timing.presentAtRelativeTime == VK_TRUE;
     result.swapchain_maintenance = surface && features.swapchain_maintenance1.swapchainMaintenance1 == VK_TRUE;
 #if defined(NOGRAPHICSAPI_TEST_LEGACY_PRESENTATION)
     result.swapchain_maintenance = false;
@@ -2106,7 +2121,9 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
             state->physical_device, static_cast<Format>(value));
     }
 
-    QueriedFeatures enabled_features(state->swapchain_maintenance, selected.unified_image_layouts, selected.address_commands, state->descriptor_heap);
+    QueriedFeatures enabled_features(state->swapchain_maintenance, selected.unified_image_layouts, selected.address_commands,
+                                     state->descriptor_heap, selected.relative_present);
+    enabled_features.present_timing.presentAtRelativeTime = selected.relative_present;
     state->texture_compression_etc2 = selected.texture_compression_etc2;
     enabled_features.core.features.imageCubeArray = selected.image_cube_array;
     enabled_features.core.features.samplerAnisotropy = VK_TRUE;
@@ -2171,7 +2188,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         };
         first_queue += queue_counts[type];
     }
-    const char* enabled_device_extensions[7]{};
+    const char* enabled_device_extensions[10]{};
     uint32 enabled_device_extension_count = 0;
     enabled_device_extensions[enabled_device_extension_count++] = state->descriptor_heap
         ? VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME : VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME;
@@ -2186,6 +2203,12 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     if (presentation)
     {
         enabled_device_extensions[enabled_device_extension_count++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+        if (selected.relative_present)
+        {
+            enabled_device_extensions[enabled_device_extension_count++] = VK_EXT_PRESENT_TIMING_EXTENSION_NAME;
+            enabled_device_extensions[enabled_device_extension_count++] = VK_KHR_PRESENT_ID_2_EXTENSION_NAME;
+            enabled_device_extensions[enabled_device_extension_count++] = VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME;
+        }
         if (state->swapchain_maintenance)
             enabled_device_extensions[enabled_device_extension_count++] = selected.khr_swapchain_maintenance1
                 ? VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME : VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
@@ -2204,6 +2227,8 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     if (error != Error::none)
         return fail_device_creation(state, error);
     first_queue = 0;
+    if (selected.relative_present)
+        state->get_time_domains = load_device_proc<PFN_vkGetSwapchainTimeDomainPropertiesEXT>(state->device, "vkGetSwapchainTimeDomainPropertiesEXT");
     for (uint32 type = 0; type < queue_type_count; ++type)
     {
         for (uint32 index = 0; index < queue_counts[type]; ++index)
@@ -2575,8 +2600,10 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept
         .pNext = device.swapchain_maintenance ? &present_mode_info : nullptr,
         .surface = device.surface,
     };
+    VkPresentTimingSurfaceCapabilitiesEXT timing_caps{.sType = VK_STRUCTURE_TYPE_PRESENT_TIMING_SURFACE_CAPABILITIES_EXT};
     VkSurfaceCapabilities2KHR capabilities_info{
         .sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR,
+        .pNext = device.get_time_domains && swapchain.present_mode == VK_PRESENT_MODE_FIFO_KHR ? &timing_caps : nullptr,
     };
     Error error = error_from_vk(vkGetPhysicalDeviceSurfaceCapabilities2KHR(device.physical_device, &surface_info, &capabilities_info),
         "vkGetPhysicalDeviceSurfaceCapabilities2KHR");
@@ -2648,6 +2675,7 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept
     const VkSwapchainCreateInfoKHR create_info{
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
         .pNext = device.swapchain_maintenance ? &present_modes_info : nullptr,
+        .flags = timing_caps.presentAtRelativeTimeSupported ? VkSwapchainCreateFlagsKHR(VK_SWAPCHAIN_CREATE_PRESENT_TIMING_BIT_EXT) : 0u,
         .surface = device.surface,
         .minImageCount = requested_image_count,
         .imageFormat = requested_format,
@@ -2735,6 +2763,16 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept
     }
     retire_swapchain_handle(swapchain);
     swapchain.handle = new_handle;
+    swapchain.relative_present = false;
+    if (timing_caps.presentAtRelativeTimeSupported)
+    {
+        // Relative durations need no clock conversion, but Vulkan still requires a domain ID returned for this swapchain.
+        VkTimeDomainKHR domain{};
+        VkSwapchainTimeDomainPropertiesEXT domains{.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_TIME_DOMAIN_PROPERTIES_EXT,
+            .timeDomainCount = 1, .pTimeDomains = &domain, .pTimeDomainIds = &swapchain.time_domain_id};
+        const VkResult domain_result = device.get_time_domains(device.device, new_handle, &domains, nullptr);
+        swapchain.relative_present = (domain_result == VK_SUCCESS || domain_result == VK_INCOMPLETE) && domains.timeDomainCount == 1;
+    }
     swapchain.image_count = image_count;
     swapchain.width = extent.width;
     swapchain.height = extent.height;
@@ -2802,6 +2840,12 @@ Error set_swapchain_vsync(Device* device, bool enabled) noexcept
         if (!swapchain.handle) require_error(recreate_swapchain(swapchain), "Swapchain recreation");
     }
     return error;
+}
+
+bool set_present_interval(Device* device, uint64 nanoseconds) noexcept
+{
+    device->present_interval_ns = nanoseconds;
+    return device->swapchain && device->swapchain->handle && device->swapchain->relative_present;
 }
 
 uint32x2 get_drawable_extent(Device* device) noexcept
@@ -4016,9 +4060,15 @@ void submit_and_present(Device* device, const SubmitDesc& desc) noexcept
         .swapchainCount = 1,
         .pFences = &present_context.presented,
     };
+    const VkPresentTimingInfoEXT timing{.sType = VK_STRUCTURE_TYPE_PRESENT_TIMING_INFO_EXT,
+        .flags = VK_PRESENT_TIMING_INFO_PRESENT_AT_RELATIVE_TIME_BIT_EXT | VK_PRESENT_TIMING_INFO_PRESENT_AT_NEAREST_REFRESH_CYCLE_BIT_EXT,
+        .targetTime = device->present_interval_ns, .timeDomainId = swapchain->time_domain_id,
+        .targetTimeDomainPresentStage = VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_VISIBLE_BIT_EXT};
+    const VkPresentTimingsInfoEXT timings{.sType = VK_STRUCTURE_TYPE_PRESENT_TIMINGS_INFO_EXT,
+        .pNext = device->swapchain_maintenance ? &fence_info : nullptr, .swapchainCount = 1, .pTimingInfos = &timing};
     const VkPresentInfoKHR present_info{
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-        .pNext = device->swapchain_maintenance ? &fence_info : nullptr,
+        .pNext = swapchain->relative_present && device->present_interval_ns ? &timings : timings.pNext,
         .waitSemaphoreCount = 1,
         .pWaitSemaphores = &rendered,
         .swapchainCount = 1,

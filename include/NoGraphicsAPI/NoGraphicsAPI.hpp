@@ -732,6 +732,8 @@ void destroy_device(Device* device) noexcept;
 [[nodiscard]] Error set_swapchain_format(Device* device, Format format, ColorSpace color_space) noexcept;
 // Call after wait_idle, outside an acquired frame. Unsupported modes leave the current mode unchanged.
 [[nodiscard]] Error set_swapchain_vsync(Device* device, bool enabled) noexcept;
+// Request spacing between displayed frames, in nanoseconds (zero disables it). Returns whether the current swapchain supports it.
+[[nodiscard]] bool set_present_interval(Device* device, uint64 nanoseconds) noexcept;
 
 [[nodiscard]] TimelineSemaphore* create_timeline_semaphore(Device* device, uint64 initial_value = 0) noexcept;
 void destroy_timeline_semaphore(TimelineSemaphore* semaphore) noexcept;

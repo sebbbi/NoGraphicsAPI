@@ -32,6 +32,7 @@ int main(int argc, char** argv)
     const bool scrgb = argc == 2 && strcmp(argv[1], "--scrgb") == 0;
     const bool switch_color_space = argc == 2 && strcmp(argv[1], "--switch-color-space") == 0;
     const bool switch_vsync = argc == 2 && strcmp(argv[1], "--switch-vsync") == 0;
+    const bool timed = argc == 2 && strcmp(argv[1], "--present-interval") == 0;
     const WNDCLASSEXA window_class{
         .cbSize = sizeof(WNDCLASSEXA),
         .lpfnWndProc = DefWindowProcA,
@@ -167,6 +168,14 @@ int main(int argc, char** argv)
         const gpu::SwapchainFrame frame = gpu::acquire(commands);
         CHECK(frame.render_view && frame.extent.x == width && frame.extent.y == height);
         if (!frame.render_view) break;
+        if (timed)
+        {
+            const bool available = gpu::set_present_interval(device, frame_index & 1u ? 0 : 16666667);
+            if (frame_index == 0) skipped = !available;
+            else CHECK(available == !skipped);
+        }
+        if (switch_vsync && !(frame_index & 1u) && frame_index != 4)
+            CHECK(!gpu::set_present_interval(device, 16666667));
 
         gpu::CommandBuffer* first = gpu::begin_commands(independent_pool);
         gpu::barrier(first, gpu::Stage::transfer, gpu::Access::transfer_write, gpu::Stage::transfer, gpu::Access::transfer_read);
@@ -237,7 +246,7 @@ int main(int argc, char** argv)
     CHECK(UnregisterClassA(window_class.lpszClassName, window_class.hInstance));
     if (skipped && !failures)
     {
-        puts("The surface does not support FP16 scRGB; presentation color-space switch test skipped.");
+        puts(timed ? "The surface does not support relative present intervals." : "The surface does not support FP16 scRGB.");
         return 77;
     }
     if (!failures)

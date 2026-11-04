@@ -46,6 +46,7 @@ int main(int argc, char** argv)
         gpu::CommandPool* pools[2] = {gpu::create_command_pool(init.device), gpu::create_command_pool(init.device)};
         for (uint64 frame = 1; frame <= 8; ++frame)
         {
+            if (!gpu::set_present_interval(init.device, frame & 1u ? 16666667 : 0)) return 2;
             if (frame > 2) gpu::wait_timeline({.semaphore = timeline, .value = frame - 2});
             if (frame == 5)
             {

@@ -321,6 +321,8 @@ struct Device
     id<MTLEvent> presentation_ready = nil;
     id<MTLEvent> presentation_done = nil;
     CAMetalLayer* layer = nil;
+    bool display_sync = true;
+    double present_interval = 0.0;
     id<CAMetalDrawable> drawable = nil;
     CommandBuffer* acquired = nullptr;
     RenderView drawable_view = {};
@@ -653,6 +655,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         if (desc.window)
         {
             device->layer = [(CAMetalLayer*)desc.window retain];
+            device->display_sync = desc.vsync;
             device->layer.device = device->metal;
             device->layer.pixelFormat = pixel_format(desc.swapchain_format == Format::undefined ? Format::bgra8_unorm : desc.swapchain_format);
             device->layer.maximumDrawableCount = desc.desired_swapchain_image_count < 3 ? 2 : 3;
@@ -761,10 +764,17 @@ Error set_swapchain_vsync(Device* device, bool enabled) noexcept
     if (!device->layer) return Error::unsupported;
 #if TARGET_OS_OSX
     device->layer.displaySyncEnabled = enabled;
+    device->display_sync = enabled;
     return Error::none;
 #else
     return enabled ? Error::none : Error::unsupported;
 #endif
+}
+
+bool set_present_interval(Device* device, uint64 nanoseconds) noexcept
+{
+    device->present_interval = double(nanoseconds) * 1.0e-9;
+    return device->layer && device->display_sync;
 }
 
 uint32x2 get_drawable_extent(Device* device) noexcept
@@ -1449,13 +1459,15 @@ void submit_and_present(Device* device, const SubmitDesc& desc) noexcept
         assert(found);
         [device->queues[0].queue waitForDrawable:device->drawable];
         submit(device, desc, 0);
+        const bool timed = device->display_sync && device->present_interval > 0.0;
         if (device->presentation_queue)
         {
             // Shared-event waits defer scheduling and therefore presentDrawable's registration until rendering completes.
             [device->queues[0].queue signalEvent:device->presentation_ready value:device->queues[0].submitted_value];
             id<MTLCommandBuffer> presentation = [device->presentation_queue commandBuffer];
             [presentation encodeWaitForEvent:device->presentation_ready value:device->queues[0].submitted_value];
-            [presentation presentDrawable:device->drawable];
+            if (timed) [presentation presentDrawable:device->drawable afterMinimumDuration:device->present_interval];
+            else [presentation presentDrawable:device->drawable];
             // Steam can append drawable writes during commit. A following buffer signals completion after all hook-injected work.
             id<MTLCommandBuffer> completion = [device->presentation_queue commandBuffer];
             [completion encodeSignalEvent:device->presentation_done value:device->queues[0].submitted_value];
@@ -1467,7 +1479,8 @@ void submit_and_present(Device* device, const SubmitDesc& desc) noexcept
         else
         {
             [device->queues[0].queue signalDrawable:device->drawable];
-            [device->drawable present];
+            if (timed) [device->drawable presentAfterMinimumDuration:device->present_interval];
+            else [device->drawable present];
         }
         [device->drawable release];
         device->acquired->acquired = false;

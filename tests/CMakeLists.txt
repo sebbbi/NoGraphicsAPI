@@ -162,7 +162,9 @@ if(WIN32)
     add_test(NAME test_presentation_color_space_switch COMMAND test_presentation --switch-color-space)
     add_test(NAME test_presentation_queue_families COMMAND test_presentation --queue-families)
     add_test(NAME test_presentation_vsync COMMAND test_presentation --switch-vsync)
-    set_tests_properties(test_presentation test_presentation_scrgb test_presentation_color_space_switch test_presentation_queue_families test_presentation_vsync PROPERTIES
+    add_test(NAME test_presentation_interval COMMAND test_presentation --present-interval)
+    set_tests_properties(test_presentation test_presentation_scrgb test_presentation_color_space_switch test_presentation_queue_families
+        test_presentation_vsync test_presentation_interval PROPERTIES
         SKIP_RETURN_CODE 77 TIMEOUT 60 FAIL_REGULAR_EXPRESSION "NoGraphicsAPI validation:")
 endif()
 
