@@ -748,6 +748,10 @@ void wait_idle(Device* device) noexcept;
 // submit_and_present prepares the image for presentation after all submitted buffers.
 // Empty while the drawable extent is zero. A nonempty acquire must be submitted with submit_and_present on queue zero.
 [[nodiscard]] SwapchainFrame acquire(CommandBuffer* commands) noexcept;
+#if defined(__APPLE__)
+// Borrow a CAMetalDisplayLink drawable from this device's layer. Retained until submission; uses ordinary presentation, ignoring the present interval.
+[[nodiscard]] SwapchainFrame acquire_metal_drawable(CommandBuffer* commands, void* drawable) noexcept;
+#endif
 void submit_and_present(Device* device, const SubmitDesc& desc) noexcept;
 
 // Every non-null returned pointer is 16-byte aligned. GPU heaps are raw blocks for application-side suballocation.

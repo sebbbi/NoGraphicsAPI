@@ -98,6 +98,10 @@ The flag has no effect on Vulkan, iOS or headless devices.
 Use three drawables to keep scanout from starving a two-frame renderer on Apple displays.
 `set_present_interval()` supplies a minimum drawable duration when display synchronization is enabled. Both direct Metal 4 presentation
 and the classic Steam hook honor it. Zero restores ordinary presentation; the call adds no CPU sleep.
+Applications driving a layer with `CAMetalDisplayLink` pass each update's drawable to `acquire_metal_drawable()` instead of `acquire()`.
+The drawable must belong to the device's layer and match its current format. The backend retains it until submission;
+the caller owns display-link scheduling and rejects stale updates after surface changes. These drawables use ordinary presentation,
+ignoring `set_present_interval()`, as required by Core Animation. The Steam bridge and drawable-readiness synchronization are unchanged.
 
 ## Synchronization
 

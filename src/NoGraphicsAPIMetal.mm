@@ -325,6 +325,7 @@ struct Device
     CAMetalLayer* layer = nil;
     bool display_sync = true;
     double present_interval = 0.0;
+    bool display_link_drawable = false;
     id<CAMetalDrawable> drawable = nil;
     CommandBuffer* acquired = nullptr;
     RenderView drawable_view = {};
@@ -1465,12 +1466,29 @@ SwapchainFrame acquire(CommandBuffer* commands) noexcept
         const uint32x2 size = get_drawable_extent(device);
         if (!size.x || !size.y) return {};
         device->drawable = [[device->layer nextDrawable] retain];
+        device->display_link_drawable = false;
         if (!device->drawable) return {};
         device->acquired = commands;
         commands->acquired = true;
         device->drawable_view = {.texture = device->drawable.texture};
         return {.render_view = &device->drawable_view,
                 .extent = {.x = static_cast<uint32>(device->drawable.texture.width), .y = static_cast<uint32>(device->drawable.texture.height)}};
+    }
+}
+
+SwapchainFrame acquire_metal_drawable(CommandBuffer* commands, void* drawable) noexcept
+{
+    @autoreleasepool
+    {
+        Device* device = commands->device;
+        assert(commands->recording && !commands->render && commands->pool->kind == QueueKind::general && device->layer && !device->drawable && drawable);
+        device->drawable = [(id<CAMetalDrawable>)drawable retain];
+        device->display_link_drawable = true;
+        device->acquired = commands;
+        commands->acquired = true;
+        device->drawable_view = {.texture = device->drawable.texture};
+        return {.render_view = &device->drawable_view,
+            .extent = {.x = static_cast<uint32>(device->drawable.texture.width), .y = static_cast<uint32>(device->drawable.texture.height)}};
     }
 }
 
@@ -1484,7 +1502,7 @@ void submit_and_present(Device* device, const SubmitDesc& desc) noexcept
         assert(found);
         [device->queues[0].queue waitForDrawable:device->drawable];
         submit(device, desc, 0);
-        const bool timed = device->display_sync && device->present_interval > 0.0;
+        const bool timed = !device->display_link_drawable && device->display_sync && device->present_interval > 0.0;
         if (device->presentation_queue)
         {
             // Shared-event waits defer scheduling and therefore presentDrawable's registration until rendering completes.

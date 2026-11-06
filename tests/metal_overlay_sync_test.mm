@@ -95,10 +95,12 @@ void* release_rendering(void*)
 
 int main(int argc, char** argv)
 {
+    bool external_drawable = false;
     for (int i = 1; i < argc; ++i)
     {
         if (strcmp(argv[i], "--overlay") == 0) test.overlay = true;
         else if (strcmp(argv[i], "--overlay-on-commit") == 0) test.overlay = test.overlay_on_commit = true;
+        else if (strcmp(argv[i], "--external-drawable") == 0) external_drawable = true;
         else return 1;
     }
     @autoreleasepool
@@ -130,7 +132,10 @@ int main(int argc, char** argv)
         test.original_ready = method_setImplementation(ready_method, reinterpret_cast<IMP>(ready_hook));
         gpu::CommandPool* pool = gpu::create_command_pool(test.device);
         gpu::CommandBuffer* commands = gpu::begin_commands(pool);
-        const gpu::SwapchainFrame target = gpu::acquire(commands);
+        id<CAMetalDrawable> supplied = external_drawable ? [[layer nextDrawable] retain] : nil;
+        if (external_drawable && !gpu::set_present_interval(test.device, 16666666)) return 2;
+        const gpu::SwapchainFrame target = external_drawable ? gpu::acquire_metal_drawable(commands, supplied) : gpu::acquire(commands);
+        [supplied release];
         if (!target.render_view) return 2;
         gpu::begin_render_pass(commands, {.colors = {{.render_view = target.render_view, .load = gpu::LoadOp::clear,
             .clear = {.x = 0.2f, .y = 0.4f, .z = 0.6f, .w = 1.0f}}}});
