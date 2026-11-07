@@ -29,8 +29,10 @@ int main(int argc, char** argv)
     gpu::CommandPool* pool = gpu::create_command_pool(device);
     gpu::CommandPool* external_pool = gpu::create_command_pool(device);
     gpu::TimelineSemaphore* timeline = gpu::create_timeline_semaphore(device);
-    const gpu::GpuHeap cpu_roots = gpu::create_gpu_heap(device, 3 * sizeof(RootData) + 2 * sizeof(RootDataGenerate));
-    gpu::BumpAllocator arena(cpu_roots.range);
+    const uint64 alignment = gpu::get_device_caps(device).root_alignment;
+    const gpu::GpuHeap cpu_roots = gpu::create_gpu_heap(device, 3 * sizeof(RootData) + ((sizeof(RootDataGenerate) + alignment - 1) & ~(alignment - 1))
+        + sizeof(RootDataGenerate));
+    gpu::BumpAllocator arena(cpu_roots.range, alignment);
     const gpu::GpuHeap roots = gpu::create_gpu_heap(device, 2 * sizeof(RootData) + 16, gpu::MemoryType::gpu_only);
     const gpu::GpuHeap output = gpu::create_gpu_heap(device, 6 * 64 * sizeof(uint32), gpu::MemoryType::gpu_only);
     const gpu::GpuHeap readback = gpu::create_gpu_heap(device, output.range.size, gpu::MemoryType::readback);
@@ -47,13 +49,13 @@ int main(int argc, char** argv)
             root.output_index = i * 64;
             root.seed = round * 100 + i;
             for (uint32 j = 0; j < 60; ++j) root.values[j] = root.seed * 7 + j;
-            const gpu::GpuCpuRange<RootData> copied = arena.allocate<RootData>();
+            const gpu::GpuCpuRange<RootData> copied = arena.allocate_root<RootData>();
             *copied.cpu = root;
             gpu::dispatch(i == 1 ? second : first, copied.gpu, {.x = 1, .y = 1, .z = 1});
         }
         memset(&root, 0, sizeof(root));
         gpu::bind_pso(second, generate);
-        const gpu::GpuCpuRange<RootDataGenerate> generated = arena.allocate_atomic<RootDataGenerate>();
+        const gpu::GpuCpuRange<RootDataGenerate> generated = arena.allocate_root<RootDataGenerate>();
         RootDataGenerate generated_value{.destination = reinterpret_cast<RootData*>(roots.range.gpu),
             .output = reinterpret_cast<uint32*>(output.range.gpu),
             .dispatch_arguments = reinterpret_cast<uint32*>(roots.range.gpu + 2 * sizeof(RootData)), .first_index = 3, .seed = round * 100 + 3};
@@ -69,7 +71,7 @@ int main(int argc, char** argv)
         gpu::dispatch_indirect(third, roots.range.gpu + sizeof(RootData), {.gpu = roots.range.gpu + 2 * sizeof(RootData), .size = 12});
         gpu::barrier(third, gpu::Stage::compute | gpu::Stage::indirect, gpu::Access::shader_read | gpu::Access::indirect_read,
             gpu::Stage::compute, gpu::Access::shader_write);
-        const gpu::GpuCpuRange<RootDataGenerate> rewritten = arena.allocate<RootDataGenerate>();
+        const gpu::GpuCpuRange<RootDataGenerate> rewritten = arena.allocate_root<RootDataGenerate>();
         generated_value.first_index = 5;
         generated_value.seed = round * 100 + 5;
         *rewritten.cpu = generated_value;

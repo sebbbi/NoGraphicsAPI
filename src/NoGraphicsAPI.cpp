@@ -470,6 +470,8 @@ constexpr VkBufferUsageFlags universal_buffer_usage =
     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
     VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
     VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+// Including uniform-buffer usage guarantees that the base device address can host a native heap root at offset zero.
+constexpr VkBufferUsageFlags native_root_buffer_usage = universal_buffer_usage | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
 
 constexpr VkMemoryPropertyFlags cpu_visible_memory_properties =
     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
@@ -914,7 +916,7 @@ VkMemoryRequirements buffer_memory_requirements(Device& device, VkBufferUsageFla
 
 bool supports_gpu_heap_memory(Device& device) noexcept
 {
-    const VkMemoryRequirements ordinary = buffer_memory_requirements(device, universal_buffer_usage);
+    const VkMemoryRequirements ordinary = buffer_memory_requirements(device, device.descriptor_heap ? native_root_buffer_usage : universal_buffer_usage);
     uint32 memory_type = 0;
     if (!device.find_memory_type(ordinary.memoryTypeBits, cpu_visible_memory_properties, 0, ordinary.size, memory_type) ||
         !device.find_memory_type(ordinary.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, ordinary.size, memory_type,
@@ -1317,7 +1319,8 @@ GpuHeap Device::allocate_gpu_heap(VkDeviceSize size, MemoryType memory) noexcept
     }
 
     GpuHeapOwner* heap = new GpuHeapOwner{.state = this};
-    if (!create_backing_buffer(heap->backing, size, universal_buffer_usage, required, preferred, avoided))
+    const VkBufferUsageFlags usage = descriptor_heap ? native_root_buffer_usage : universal_buffer_usage;
+    if (!create_backing_buffer(heap->backing, size, usage, required, preferred, avoided))
     {
         delete heap;
         return {};
@@ -2325,6 +2328,8 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         .copy_queue_count = queue_counts[2],
         .copy_texture_granularity = selected.copy_texture_granularity,
         .max_push_data_size = state->descriptor_heap ? state->heap_properties.maxPushDataSize : state->physical_properties.limits.maxPushConstantsSize,
+        .root_alignment = state->descriptor_heap && selected.properties.limits.minUniformBufferOffsetAlignment > gpu_allocation_alignment
+            ? selected.properties.limits.minUniformBufferOffsetAlignment : gpu_allocation_alignment,
         .texture_heap_alignment = state->texture_heap_alignment,
         .timestamp_period_ns = selected.properties.limits.timestampPeriod,
         .sub_texel_precision_bits = selected.properties.limits.subTexelPrecisionBits,
@@ -4234,7 +4239,7 @@ void emit_root_pointer(CommandBuffer* commands, const void* root) noexcept
 {
     flush_barriers(commands);
     if (!root) return;
-    assert((reinterpret_cast<uintptr>(root) & 15u) == 0);
+    assert(reinterpret_cast<uintptr>(root) % commands->state->caps.root_alignment == 0);
     if (!commands->state->descriptor_heap)
     {
         vkCmdPushConstants(commands->command_buffer, commands->state->pipeline_layout, descriptor_stages, 0, sizeof(root), &root);

@@ -14,7 +14,9 @@ int main()
     PSO* pso = create_compute_pso(device, {.code = {code.data, code.size}, .entry_point = "computeMain", .threadgroup_size = {.x = 64, .y = 1, .z = 1}});
     free(code.data);
     if (!pso) { destroy_device(device); return 1; }
-    const GpuHeap upload = create_gpu_heap(device, 1024);
+    const uint64 mask = get_device_caps(device).root_alignment - 1;
+    const uint64 root_stride = (sizeof(BarrierBatchRoot) + mask) & ~mask;
+    const GpuHeap upload = create_gpu_heap(device, 256 + 8 * root_stride);
     const GpuHeap data = create_gpu_heap(device, 512, MemoryType::gpu_only);
     const GpuHeap readback = create_gpu_heap(device, 9 * 256, MemoryType::readback);
     CommandPool* pool = create_command_pool(device);
@@ -26,7 +28,7 @@ int main()
     {
         const BarrierBatchRoot root{.input = reinterpret_cast<uint32*>(data.range.gpu + (i & 1u) * 256),
             .output = reinterpret_cast<uint32*>(data.range.gpu + ((i + 1u) & 1u) * 256), .value = i + 1};
-        memcpy(upload.range.cpu + 256 + i * sizeof(root), &root, sizeof(root));
+        memcpy(upload.range.cpu + 256 + i * root_stride, &root, sizeof(root));
     }
     bool valid = true;
     for (uint32 mode = 0; mode < 4; ++mode)
@@ -46,7 +48,7 @@ int main()
         for (uint32 i = 0; i < 8; ++i)
         {
             bind_pso(commands, pso);
-            dispatch(commands, upload.range.gpu + 256 + i * sizeof(BarrierBatchRoot), {.x = 1, .y = 1, .z = 1});
+            dispatch(commands, upload.range.gpu + 256 + i * root_stride, {.x = 1, .y = 1, .z = 1});
             barrier(commands, Stage::compute, Access::shader_write, Stage::compute, Access::shader_read);
             if (mode == 1) write_timestamp(commands, ticks + i);
             barrier(commands, Stage::compute, Access::shader_write, Stage::transfer, Access::transfer_read);

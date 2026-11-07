@@ -67,7 +67,7 @@ struct RootArguments
 Allocate a root from application-owned mapped storage, fill it through the CPU address, then pass its GPU address:
 
 ```cpp
-const gpu::GpuCpuRange<RootArguments> root = bump_allocator.allocate<RootArguments>();
+const gpu::GpuCpuRange<RootArguments> root = bump_allocator.allocate_root<RootArguments>();
 *root.cpu = {
     .vertices = vertex_memory.gpu,
     .material = material_memory.gpu,

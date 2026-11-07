@@ -24,14 +24,15 @@ nonuniform annotations. See [Metal implementation](metal-support.md) for texture
 ## Root and pointer layout
 
 Define each root once in the shader's matching shared header. All draw and dispatch variants take
-a 16-byte-aligned GPU pointer to that structure, or `nullptr` for rootless shaders. No allocation or
+a GPU pointer aligned to `DeviceCaps::root_alignment`, or `nullptr` for rootless shaders. No allocation or
 root copy happens inside the graphics API. The root and its referenced data must stay valid until
 their consuming submissions finish. For CPU-provided values that differ between commands, allocate separate records.
 
 For transient CPU-written roots, use `BumpAllocator` over mapped frame storage:
 
 ```cpp
-const gpu::GpuCpuRange<ExampleRoot> root = frame_data.allocate<ExampleRoot>();
+gpu::BumpAllocator frame_data(mapped_frame, gpu::get_device_caps(device).root_alignment);
+const gpu::GpuCpuRange<ExampleRoot> root = frame_data.allocate_root<ExampleRoot>();
 *root.cpu = {.vertices = vertices.gpu, .texture_index = texture_index};
 gpu::dispatch(commands, root.gpu, {.x = groups, .y = 1, .z = 1});
 ```
@@ -58,7 +59,7 @@ Metal 4 selects textures using `baseResourceID + index`.
 
 Roots share a constant-buffer layout on both targets:
 
-- Align the GPU address and total byte size to 16 bytes.
+- Keep the root layout and total byte size 16-byte aligned. Each bound address must also meet the device's root alignment.
 - Align 32-bit two-component vectors to eight bytes and four-component vectors to 16 bytes.
   Scalars and pointers use their natural alignment. Add explicit padding to the shared C++/Slang declaration.
 - Use `float4`/`uint4` instead of three-component root vectors. Inline row-major matrices have four columns
@@ -76,7 +77,7 @@ The optional third argument declares the root address alignment in bytes; it def
 GPU_ROOT(ExampleRoot, root, 16);
 ```
 
-Use a power of two at least four, satisfying the API's 16-byte address requirement and the type's alignment.
+Declare a power of two supported by the actual address. The shared ABI guarantees at least 16 bytes.
 Metal applies `__builtin_assume` to the constant pointer. Vulkan's uniform-buffer binding is unchanged.
 Neither backend allocates or copies root storage; all stages consume the application's GPU address directly.
 

@@ -161,7 +161,7 @@ int main() {
 	{
         if (latest_completion.value >= 2)
             wait_timeline({.semaphore = latest_completion.semaphore, .value = latest_completion.value - 1});
-        BumpAllocator frame_data(frame_ranges[latest_completion.value % 2]);
+        BumpAllocator frame_data(frame_ranges[latest_completion.value % 2], get_device_caps(device).root_alignment);
         CommandPool* command_pool = command_pools[latest_completion.value % 2];
         reset_command_pool(command_pool);
         CommandBuffer* commands = begin_commands(command_pool);
@@ -213,7 +213,7 @@ int main() {
         float4x4 projection = math::perspective_rh_zo(45.0f * math::pi / 180.0f,
                                                      float(frame.extent.x) / float(frame.extent.y), 0.1f, 100.0f);
         projection.rows[1].y = -projection.rows[1].y;
-		const GpuCpuRange<CubeRootArguments> root = frame_data.allocate<CubeRootArguments>();
+		const GpuCpuRange<CubeRootArguments> root = frame_data.allocate_root<CubeRootArguments>();
         *root.cpu = {
             .vertices = vertex_allocation.gpu,
             .transform = projection * view * math::rotation_y(radians_per_frame * float(frame_index++)),

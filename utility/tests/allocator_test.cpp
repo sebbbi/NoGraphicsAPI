@@ -311,6 +311,26 @@ bool check_bump_allocator() noexcept
     return true;
 }
 
+bool check_root_alignment() noexcept
+{
+    alignas(256) byte cpu[512]{}, gpu_address[512]{};
+    const uint64 alignments[]{16, 64, 256};
+    for (uint64 alignment : alignments)
+    {
+        gpu::BumpAllocator arena({.cpu = cpu + 32, .gpu = gpu_address + 16, .size = 256}, alignment);
+        CHECK(arena.allocate(17).gpu == gpu_address + 16);
+        const uint64 start = (48 + alignment - 1) & ~(alignment - 1);
+        CHECK(arena.root_padding() == start - 48);
+        CHECK(empty(arena.allocate_root(273 - start)));
+        const gpu::GpuCpuRange<byte> root = arena.allocate_root(272 - start);
+        CHECK(root.gpu == gpu_address + start && root.cpu == cpu + start + 16 && root.size == 272 - start);
+        CHECK(empty(arena.allocate(1)));
+        arena.reset();
+        CHECK(arena.allocate_root<uint32>().gpu == reinterpret_cast<uint32*>(gpu_address + alignment));
+    }
+    return true;
+}
+
 struct AtomicBumpThreadContext
 {
     gpu::BumpAllocator* allocator = nullptr;
@@ -408,7 +428,7 @@ int main()
     if (!check_gpu_cpu_range_defaults() || !check_bit_operations() || !check_fixed_function() ||
         !check_heap_allocator_basics() || !check_heap_allocator_address_domains() ||
         !check_heap_allocator_limit_and_move() || !check_typed_allocations() || !check_heap_allocator_fragmentation() || !check_bump_allocator() ||
-        !check_atomic_bump_allocator() || !check_maximum_heap_range())
+        !check_root_alignment() || !check_atomic_bump_allocator() || !check_maximum_heap_range())
         return 1;
     return 0;
 }

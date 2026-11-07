@@ -17,7 +17,7 @@ static_assert(sizeof(TaskTestData) == 784 && sizeof(TaskTestPayload) == 128);
 static const uint64 pixel_offset = 1024;
 static const uint64 pixel_bytes = task_test_width * task_test_height * 4;
 static const uint64 data_bytes = sizeof(TaskTestData) + sizeof(gpu::uint32x3);
-static const uint64 root_offset = (data_bytes + 15) & ~uint64(15);
+static const uint64 root_offset = (data_bytes + 255) & ~uint64(255);
 
 struct Fixture
 {

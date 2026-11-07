@@ -26,9 +26,10 @@ byte* offset_pointer(byte* pointer, uint64 offset) noexcept
 
 } // namespace
 
-BumpAllocator::BumpAllocator(GpuCpuRange<byte> storage) noexcept
-    : storage_(storage)
+BumpAllocator::BumpAllocator(GpuCpuRange<byte> storage, uint64 root_alignment) noexcept
+    : storage_(storage), root_alignment_(root_alignment)
 {
+    assert(root_alignment >= alignment && !(root_alignment & (root_alignment - 1)));
     assert(storage.size != 0);
     assert(storage.cpu || storage.gpu);
     assert((!storage.cpu || reinterpret_cast<uintptr>(storage.cpu) % alignment == 0) &&
@@ -36,7 +37,7 @@ BumpAllocator::BumpAllocator(GpuCpuRange<byte> storage) noexcept
 }
 
 BumpAllocator::BumpAllocator(BumpAllocator&& other) noexcept
-    : storage_(other.storage_), offset_(other.offset_)
+    : storage_(other.storage_), root_alignment_(other.root_alignment_), offset_(other.offset_)
 {
     other.storage_ = {};
     other.offset_ = 0;
@@ -48,6 +49,7 @@ BumpAllocator& BumpAllocator::operator=(BumpAllocator&& other) noexcept
         return *this;
 
     storage_ = other.storage_;
+    root_alignment_ = other.root_alignment_;
     offset_ = other.offset_;
     other.storage_ = {};
     other.offset_ = 0;
@@ -69,6 +71,23 @@ GpuCpuRange<byte> BumpAllocator::allocate(uint64 byte_size) noexcept
     const uint64 aligned_size = (byte_size + alignment - 1) & ~(alignment - 1);
     offset_ += aligned_size < remaining ? aligned_size : remaining;
     return allocation;
+}
+
+uint64 BumpAllocator::root_padding() const noexcept
+{
+    assert(storage_.gpu);
+    return (0ull - (reinterpret_cast<uintptr>(storage_.gpu) + offset_)) & (root_alignment_ - 1);
+}
+
+GpuCpuRange<byte> BumpAllocator::allocate_root(uint64 byte_size) noexcept
+{
+    assert(byte_size);
+    const uint64 padding = root_padding();
+    const uint64 available = storage_.size - offset_;
+    if (padding > available || byte_size > available - padding)
+        return {};
+    offset_ += padding;
+    return allocate(byte_size);
 }
 
 GpuCpuRange<byte> BumpAllocator::allocate_atomic(uint64 byte_size) noexcept

@@ -108,15 +108,15 @@ void UploadQueue::wait_oldest() noexcept
     reclaim();
 }
 
-GpuCpuRange<byte> UploadQueue::reserve(uint64 byte_size) noexcept
+GpuCpuRange<byte> UploadQueue::reserve(uint64 byte_size, uint64 gpu_alignment) noexcept
 {
     State& state = state_;
     assert(state.completion.semaphore && !state.in_callback && byte_size && byte_size <= state.heap.range.size);
     if (state.operation_count == operation_limit) flush();
     for (;;)
     {
-        uint64 offset = (state.head % state.heap.range.size + alignment - 1) & ~(alignment - 1);
-        if (byte_size > state.heap.range.size - offset) offset = state.heap.range.size;
+        uint64 offset = (state.head % state.heap.range.size + gpu_alignment - 1) & ~(gpu_alignment - 1);
+        if (offset > state.heap.range.size || byte_size > state.heap.range.size - offset) offset = state.heap.range.size;
         const uint64 start = state.head - state.head % state.heap.range.size + offset;
         if (state.head == state.tail && !state.retirement_count) state.head = state.tail = start;
         if (start + byte_size - state.tail <= state.heap.range.size)
@@ -181,7 +181,7 @@ void UploadQueue::upload_texture(Texture* destination, ByteSpan source, const Te
 GpuCpuRange<byte> UploadQueue::begin_compute(uint64 byte_size) noexcept
 {
     assert(state_.upload_stages != Stage::transfer && "compute uploads require a general or compute queue");
-    const GpuCpuRange<byte> staging = reserve(byte_size);
+    const GpuCpuRange<byte> staging = reserve(byte_size, get_device_caps(state_.device).root_alignment);
     barrier(begin(), Stage::transfer | Stage::compute, Access::transfer_write | Access::shader_write,
             Stage::compute, Access::shader_read | Access::shader_write | Access::descriptor_read);
     state_.in_callback = true;

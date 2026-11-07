@@ -74,7 +74,7 @@ the same table used by Metal. Each command range must fit in one GPU heap; at mo
 per device. Lookups use binary search with atomic version checks; only table updates serialize.
 Devices with the extension pass command addresses directly and do not allocate the table.
 
-Application data has no backend suballocator. The optional utility library provides fixed-16-byte
+Application data has no backend suballocator. The optional utility library provides linear
 `BumpAllocator` and reusable `HeapAllocator` policies over `GpuHeap::range`; the graphics API does not
 depend on either policy. `BumpAllocator::allocate_atomic()` provides relaxed-atomic concurrent worker
 reservations that return disjoint mapped ranges. All other allocator operations require exclusive access
@@ -191,8 +191,9 @@ it neither allocates storage nor copies the root structure. Only the address occ
 One root is shared by all active graphics stages. Roots may contain typed GPU pointers, texture and
 sampler indices, and scalar, vector and matrix values.
 
-Application-owned roots must be 16-byte aligned and remain live until GPU use finishes. For transient
-CPU-written roots, use a `BumpAllocator` over mapped storage protected by a frame timeline. GPU shaders
+Application-owned root addresses must satisfy `DeviceCaps::root_alignment` and remain live until GPU use finishes.
+Native heaps require the larger of 16 and `minUniformBufferOffsetAlignment`. Descriptor buffers and Metal require 16 bytes. For transient
+CPU-written roots, use `BumpAllocator::allocate_root<T>()` over mapped storage protected by a frame timeline. GPU shaders
 can produce roots for later draws/dispatches; synchronize writes with `Access::shader_read` at the
 consuming stages. That access includes uniform-buffer reads. See [the root contract](slang.md#root-and-pointer-layout).
 

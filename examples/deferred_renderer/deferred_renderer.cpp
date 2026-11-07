@@ -246,7 +246,7 @@ int main()
         }
         delete_queue.tick();
 
-        BumpAllocator frame_data(frame_ranges[latest_completion.value % frames_in_flight]);
+        BumpAllocator frame_data(frame_ranges[latest_completion.value % frames_in_flight], get_device_caps(device).root_alignment);
         CommandPool* command_pool = command_pools[latest_completion.value % frames_in_flight];
         reset_command_pool(command_pool);
         CommandBuffer* commands = begin_commands(command_pool);
@@ -279,7 +279,7 @@ int main()
             Stage::compute,  Access::shader_read | Access::shader_write);
 
         bind_pso(commands, simulation_pso);
-        const GpuCpuRange<SimulationRoot> simulation_root = frame_data.allocate<SimulationRoot>();
+        const GpuCpuRange<SimulationRoot> simulation_root = frame_data.allocate_root<SimulationRoot>();
         *simulation_root.cpu = {
             .objects = object_allocation.gpu,
             .delta_seconds = delta_seconds,
@@ -317,7 +317,7 @@ int main()
         projection.rows[1].y = -projection.rows[1].y;
         rotation_angle += cube_rotation_speed * delta_seconds;
 
-        const GpuCpuRange<GBufferRoot> gbuffer_root = frame_data.allocate<GBufferRoot>();
+        const GpuCpuRange<GBufferRoot> gbuffer_root = frame_data.allocate_root<GBufferRoot>();
         *gbuffer_root.cpu = {
             .objects = object_allocation.gpu,
             .view_projection = projection * view,
@@ -345,7 +345,7 @@ int main()
 
         bind_pso(commands, deferred_lighting_pso);
 
-        const GpuCpuRange<DeferredLightingRoot> deferred_lighting_root = frame_data.allocate<DeferredLightingRoot>();
+        const GpuCpuRange<DeferredLightingRoot> deferred_lighting_root = frame_data.allocate_root<DeferredLightingRoot>();
         *deferred_lighting_root.cpu = {
             .camera_position = math::to_float4(camera_position, 1.0f),
             .ray_center = math::to_float4(view_forward),

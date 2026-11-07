@@ -44,7 +44,7 @@ public:
     // Source covers one complete region, including pitch padding, and must fit capacity. The region follows copy_memory_to_texture's requirements.
     void upload_texture(Texture* destination, ByteSpan source, const TextureCopyDesc& copy = {}) noexcept;
 
-    // Reserves byte_size (1..capacity), then invokes callback(commands, staging) synchronously with 16-byte-aligned CPU/GPU addresses.
+    // Reserves byte_size (1..capacity), then invokes callback(commands, staging) synchronously. The GPU address satisfies DeviceCaps::root_alignment.
     // Requires a general or compute queue. Fill staging and record compute work; the reservation remains occupied until submission completes.
     // The callback must not mutate the uploader or end/submit/retain its command buffer. Staging cannot be used by later submissions.
     // Bind required pipeline/heaps and record dependencies between dispatches inside the callback.
@@ -110,7 +110,7 @@ private:
 
     CommandBuffer* begin() noexcept;
     void wait_oldest() noexcept;
-    GpuCpuRange<byte> reserve(uint64 byte_size) noexcept;
+    GpuCpuRange<byte> reserve(uint64 byte_size, uint64 gpu_alignment = alignment) noexcept;
     GpuCpuRange<byte> begin_compute(uint64 byte_size) noexcept;
     void end_compute() noexcept;
 

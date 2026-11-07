@@ -40,7 +40,7 @@ slot reuse and referenced texture lifetimes.
 
 Each draw or dispatch takes a GPU pointer to an application-owned root. Pointer fields reference GPU
 storage, and descriptor fields hold indices. The root and referenced resources survive GPU completion.
-Mapped frame storage and `BumpAllocator::allocate<T>()` provide transient roots without per-command driver allocation.
+Mapped frame storage and `BumpAllocator::allocate_root<T>()` provide transient roots without per-command driver allocation.
 
 Roots use a shared aligned layout and row-major matrices; pointed-to data keeps C POD layout. Vulkan pushes the root address; Metal 4 updates
 its argument table. GPU work can write root contents before

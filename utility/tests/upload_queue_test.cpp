@@ -440,7 +440,7 @@ static void order_queue(Fixture& fixture, uint32 queue_index)
 #if defined(NOGRAPHICSAPI_UPLOAD_QUEUE_SPV_PATH)
 static void run_compute_callbacks(Fixture& fixture, uint32 queue_index = 0)
 {
-    fixture.ring = UploadQueue(fixture.device, 288, queue_index);
+    fixture.ring = UploadQueue(fixture.device, 1024, queue_index);
     order_queue(fixture, queue_index);
     uint32 initial[16]{};
     for (uint32 index = 0; index < 16; ++index) initial[index] = index * 23 + 7;
@@ -453,13 +453,14 @@ static void run_compute_callbacks(Fixture& fixture, uint32 queue_index = 0)
         {
             ++callbacks;
             check(staging.size == sizeof(initial) + 32 && !(reinterpret_cast<uintptr>(staging.cpu) & 15)
-                && !(reinterpret_cast<uintptr>(staging.gpu) & 15), "callback receives the requested aligned staging range");
-            for (uint32 index = 0; index < 16; ++index) reinterpret_cast<uint32*>(staging.cpu)[index] = iteration * 31 + index + 1;
+                && reinterpret_cast<uintptr>(staging.gpu) % get_device_caps(fixture.device).root_alignment == 0, "compute staging starts on a root boundary");
+            for (uint32 index = 0; index < 16; ++index) reinterpret_cast<uint32*>(staging.cpu + sizeof(UploadQueueRoot))[index] = iteration * 31 + index + 1;
             bind_pso(commands, fixture.compute);
-            *reinterpret_cast<UploadQueueRoot*>(staging.cpu + sizeof(initial)) = {
-                .source = reinterpret_cast<uint32*>(staging.gpu), .destination = reinterpret_cast<uint32*>(fixture.buffer.range.gpu), .count = 16,
+            *reinterpret_cast<UploadQueueRoot*>(staging.cpu) = {
+                .source = reinterpret_cast<uint32*>(staging.gpu + sizeof(UploadQueueRoot)),
+                .destination = reinterpret_cast<uint32*>(fixture.buffer.range.gpu), .count = 16,
             };
-            dispatch(commands, staging.gpu + sizeof(initial), {.x = 1, .y = 1, .z = 1});
+            dispatch(commands, staging.gpu, {.x = 1, .y = 1, .z = 1});
         });
         check(callbacks == iteration + 1, "compute callback executes synchronously exactly once");
         for (uint32 index = 0; index < 16; ++index) initial[index] += iteration * 31 + index + 1;
@@ -472,6 +473,7 @@ static void run_compute_callbacks(Fixture& fixture, uint32 queue_index = 0)
         "transfer-compute-compute-transfer ordering remains within one batch");
     read_results(fixture);
 
+    fixture.ring = UploadQueue(fixture.device, 288, queue_index);
     uint32 values[64]{};
     for (uint32 index = 0; index < 64; ++index) values[index] = index * 19 + 3;
     fixture.ring.upload_buffer({.gpu = fixture.buffer.range.gpu + 1024, .size = sizeof(values)}, {values, sizeof(values)});

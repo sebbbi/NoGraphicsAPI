@@ -466,6 +466,8 @@ struct DeviceCaps
     // Copy-only texture offsets/extents align to these texel-block counts, except at mip edges. Zero means whole mip levels only.
     uint32x3 copy_texture_granularity = {.x = 1, .y = 1, .z = 1};
     uint64 max_push_data_size = 0;
+    // Required GPU address alignment for draw and dispatch roots. The shared root layout still has 16-byte alignment.
+    uint64 root_alignment = 16;
     // Common element size for suballocating TextureHeap storage; every SizeAlign::align divides this value.
     uint64 texture_heap_alignment = 0;
     float timestamp_period_ns = 0.0f; // Nanoseconds per timestamp tick; zero when profiling is unavailable.
@@ -754,7 +756,7 @@ void wait_idle(Device* device) noexcept;
 #endif
 void submit_and_present(Device* device, const SubmitDesc& desc) noexcept;
 
-// Every non-null returned pointer is 16-byte aligned. GPU heaps are raw blocks for application-side suballocation.
+// Every non-null returned pointer is 16-byte aligned. The GPU base also satisfies DeviceCaps::root_alignment.
 // Metal and Vulkan without device-address commands support at most 64 live GPU heaps per device.
 [[nodiscard]] GpuHeap create_gpu_heap(Device* device, uint64 byte_count, MemoryType memory = MemoryType::cpu_visible) noexcept;
 void destroy_gpu_heap(const GpuHeap& heap) noexcept;
@@ -855,7 +857,7 @@ void set_depth_stencil(CommandBuffer* commands, const DepthStencilState& state) 
 // Bind graphics/mesh PSOs inside an active render pass; bind compute PSOs outside render passes.
 void bind_pso(CommandBuffer* commands, const PSO* pso) noexcept;
 
-// root uses the shared constant-buffer layout and a 16-byte-aligned GPU address, or nullptr for rootless shaders.
+// root uses the shared constant-buffer layout and a DeviceCaps::root_alignment-aligned GPU address, or nullptr for rootless shaders.
 // Retain its storage through GPU completion.
 // Finish CPU writes before submission; wait for prior GPU users before overwriting. Synchronize GPU writes before consuming the root.
 // Storage is application-owned; these commands do not copy root bytes or allocate memory.
