@@ -425,6 +425,7 @@ enum class Stage : uint64
     transfer = 1ull << 9u,
     host = 1ull << 10u,
     all_commands = 1ull << 11u, // All GPU command stages; excludes host.
+    dispatch_indirect = 1ull << 12u, // Dispatch arguments only; indirect also includes draw arguments.
 };
 
 constexpr Stage operator|(Stage lhs, Stage rhs) noexcept

@@ -8,12 +8,28 @@
 namespace
 {
 IMP original_compute = nullptr;
+IMP original_publication = nullptr;
+Method publication_method = nullptr;
 uint32 compute_encoders = 0;
+uint32 queue_publications = 0;
+
+void publication_hook(id encoder, SEL selector, MTLStages source, MTLStages destination, MTL4VisibilityOptions visibility)
+{
+    ++queue_publications;
+    reinterpret_cast<void (*)(id, SEL, MTLStages, MTLStages, MTL4VisibilityOptions)>(original_publication)(
+        encoder, selector, source, destination, visibility);
+}
 
 id compute_hook(id commands, SEL selector)
 {
     ++compute_encoders;
-    return reinterpret_cast<id (*)(id, SEL)>(original_compute)(commands, selector);
+    id encoder = reinterpret_cast<id (*)(id, SEL)>(original_compute)(commands, selector);
+    if (!original_publication)
+    {
+        publication_method = class_getInstanceMethod([encoder class], @selector(barrierAfterStages:beforeQueueStages:visibilityOptions:));
+        original_publication = method_setImplementation(publication_method, reinterpret_cast<IMP>(publication_hook));
+    }
+    return encoder;
 }
 }
 
@@ -28,8 +44,9 @@ int main()
         const gpu::Span<byte> code = read_shader(NOGRAPHICSAPI_METAL_BARRIER_COMPUTE);
         if (!code.data) { gpu::destroy_device(device); return 1; }
         gpu::PSO* compute = gpu::create_compute_pso(device, {.code = {code.data, code.size}, .entry_point = "chainMain"});
+        gpu::PSO* setup = gpu::create_compute_pso(device, {.code = {code.data, code.size}, .entry_point = "dispatchSetupMain"});
         free(code.data);
-        if (!compute) { gpu::destroy_device(device); return 1; }
+        if (!compute || !setup) { gpu::destroy_pso(setup); gpu::destroy_pso(compute); gpu::destroy_device(device); return 1; }
 
         id<MTLDevice> native_device = MTLCreateSystemDefaultDevice();
         id<MTL4CommandBuffer> native_commands = [native_device newCommandBuffer];
@@ -48,17 +65,19 @@ int main()
         gpu::RenderView* view = gpu::create_render_view(texture);
         uint64 completed = 0;
         bool valid = true;
-        for (uint32 mode = 0; mode < 5; ++mode)
+        for (uint32 mode = 0; mode < 6; ++mode)
         {
             gpu::reset_command_pool(pool);
             compute_encoders = 0;
+            queue_publications = 0;
             uint64 ticks[8]{};
             const uint32 initial[4]{7, 0, 0, 0};
             memcpy(upload.range.cpu, initial, sizeof(initial));
             for (uint32 i = 0; i < 8; ++i)
             {
                 const MetalBarrierRoot root{.input = reinterpret_cast<uint32*>(data.range.gpu + (i & 1u) * 16),
-                    .output = reinterpret_cast<uint32*>(data.range.gpu + ((i + 1) & 1u) * 16), .value = i + 1};
+                    .output = reinterpret_cast<uint32*>(data.range.gpu + ((i + 1) & 1u) * 16),
+                    .arguments = reinterpret_cast<uint32*>(data.range.gpu + 32), .value = i + 1};
                 memcpy(upload.range.cpu + 64 + i * sizeof(root), &root, sizeof(root));
             }
             gpu::CommandBuffer* commands = gpu::begin_commands(pool);
@@ -69,8 +88,17 @@ int main()
             gpu::barrier(commands, gpu::Stage::transfer, gpu::Access::transfer_write, gpu::Stage::compute, gpu::Access::shader_read);
             for (uint32 i = 0; i < 8; ++i)
             {
+                if (mode == 5)
+                {
+                    gpu::bind_pso(commands, setup);
+                    gpu::dispatch(commands, upload.range.gpu + 64 + i * sizeof(MetalBarrierRoot), {.x = 1, .y = 1, .z = 1});
+                    gpu::barrier(commands, gpu::Stage::compute, gpu::Access::shader_write,
+                        gpu::Stage::dispatch_indirect, gpu::Access::indirect_read);
+                }
                 gpu::bind_pso(commands, compute);
-                gpu::dispatch(commands, upload.range.gpu + 64 + i * sizeof(MetalBarrierRoot), {.x = 1, .y = 1, .z = 1});
+                if (mode == 5)
+                    gpu::dispatch_indirect(commands, upload.range.gpu + 64 + i * sizeof(MetalBarrierRoot), {.gpu = data.range.gpu + 32, .size = 12});
+                else gpu::dispatch(commands, upload.range.gpu + 64 + i * sizeof(MetalBarrierRoot), {.x = 1, .y = 1, .z = 1});
                 if (mode == 1) gpu::write_timestamp(commands, ticks + i);
                 if (i == 3 && mode == 2)
                 {
@@ -102,11 +130,13 @@ int main()
                 gpu::barrier(commands, gpu::Stage::color_output, gpu::Access::color_write, gpu::Stage::transfer, gpu::Access::transfer_read);
                 gpu::copy_texture_to_memory(commands, texture, {.gpu = readback.range.gpu + 256, .size = 256});
             }
+            const bool deferred_publications = (mode != 0 && mode != 5) || queue_publications == 0;
             gpu::end_commands(commands);
             gpu::submit(device, {.commands = {commands}, .completion = {.semaphore = timeline, .value = ++completed}});
             gpu::wait_timeline({.semaphore = timeline, .value = completed});
             gpu::read_timestamps(pool);
-            bool passed = compute_encoders == (mode == 1 ? 9u : mode >= 2 ? 2u : 1u);
+            bool passed = deferred_publications && compute_encoders == (mode == 1 ? 9u : mode >= 2 && mode <= 4 ? 2u : 1u);
+            if (mode == 0 || mode == 5) passed &= queue_publications <= 3;
             const uint32* values = reinterpret_cast<const uint32*>(readback.range.cpu);
             for (uint32 i = 0; i < 8; ++i)
             {
@@ -115,12 +145,13 @@ int main()
             }
             if (mode == 4)
                 for (uint32 i = 0; i < 64; ++i) passed &= values[64 + i] == 0xff0000ffu;
-            printf("Metal encoder batching mode %u: %u compute encoders, final value %u: %s\n",
-                mode, compute_encoders, values[7], passed ? "passed" : "failed");
+            printf("Metal encoder batching mode %u: %u compute encoders, %u queue publications, final value %u: %s\n",
+                mode, compute_encoders, queue_publications, values[7], passed ? "passed" : "failed");
             valid &= passed;
         }
         gpu::wait_idle(device);
         method_setImplementation(method, original_compute);
+        if (publication_method) method_setImplementation(publication_method, original_publication);
         [native_commands release];
         [native_device release];
         gpu::destroy_render_view(view);
@@ -132,6 +163,7 @@ int main()
         gpu::destroy_command_pool(pool);
         gpu::destroy_timeline_semaphore(timeline);
         gpu::destroy_pso(compute);
+        gpu::destroy_pso(setup);
         gpu::destroy_device(device);
         return valid ? 0 : 1;
     }

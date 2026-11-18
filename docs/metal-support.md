@@ -111,6 +111,9 @@ dependent accesses need explicit barriers. Additional compute queues are support
 Compute bindings survive internal encoder splits, but are cleared at explicit render-pass boundaries.
 
 Barriers combine intra-encoder dependencies with queue scopes covering earlier and later encoders, including subsequent submissions.
+Compute dependencies within an encoder stay at their recorded positions. Producer barriers targeting subsequent encoders are merged
+by stage and visibility and emitted at the end of that compute encoder. `Stage::dispatch_indirect` synchronizes dispatch arguments
+without including graphics stages; `Stage::indirect` includes both draw and dispatch arguments.
 Between passes, barriers accumulate by destination stage and visibility until the next real encoder starts;
 only a trailing barrier with no encoder requires its own encoder. Fragment, depth and color destinations wait
 at fragment/tile stages, allowing independent vertex, object and mesh work to overlap previous passes.

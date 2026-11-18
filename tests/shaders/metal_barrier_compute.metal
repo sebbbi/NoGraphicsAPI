@@ -7,6 +7,11 @@ kernel void chainMain(constant MetalBarrierRoot& root [[buffer(0)]])
     root.output[0] = root.input[0] + root.value;
 }
 
+kernel void dispatchSetupMain(constant MetalBarrierRoot& root [[buffer(0)]])
+{
+    root.arguments[0] = root.arguments[1] = root.arguments[2] = 1;
+}
+
 kernel void computeMain(constant MetalBarrierRoot& root [[buffer(0)]])
 {
     if (root.overwrite) root.input[0] = root.value;

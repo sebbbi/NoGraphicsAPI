@@ -425,7 +425,7 @@ VkBlendFactor to_vk(BlendFactor factor)
 constexpr VkPipelineStageFlags2 to_vk(Stage stages)
 {
     VkPipelineStageFlags2 result = 0;
-    if (has_flag(stages, Stage::indirect)) result |= VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+    if (has_flag(stages, Stage::indirect | Stage::dispatch_indirect)) result |= VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
     if (has_flag(stages, Stage::index_input)) result |= VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT;
     if (has_flag(stages, Stage::vertex)) result |= VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
     if (has_flag(stages, Stage::task)) result |= VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT;
@@ -442,6 +442,7 @@ constexpr VkPipelineStageFlags2 to_vk(Stage stages)
 
 static_assert(to_vk(Stage::all_commands) == VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
 static_assert(to_vk(Stage::task) == VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT);
+static_assert(to_vk(Stage::dispatch_indirect) == VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT);
 static_assert(to_vk(Stage::all_commands | Stage::host) ==
               (VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_2_HOST_BIT));
 
@@ -2934,9 +2935,10 @@ SwapchainFrame acquire(CommandBuffer* commands) noexcept
         device->acquired_swapchain = swapchain;
         const VkImageMemoryBarrier2 barrier{
             .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-            .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
-            .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-            .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+            // Chain the layout transition after the color-output acquisition wait.
+            .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
             .oldLayout = swapchain->initialized[image_index] ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR : VK_IMAGE_LAYOUT_UNDEFINED,
             .newLayout = VK_IMAGE_LAYOUT_GENERAL,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -3984,7 +3986,7 @@ void submit_commands(Device* device, const SubmitDesc& desc, uint32 queue_index,
         queue->wait_submit_infos[desc.waits.size] = {
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
             .semaphore = wait_semaphore,
-            .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+            .stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
         };
     }
     VkSemaphoreSubmitInfo signal_infos[3]{

@@ -40,6 +40,7 @@ MTLStages barrier_stages(Stage stages, bool source)
     MTLStages result = 0;
     // Preserve Vulkan's logical execution scopes without joining its alternative graphics/compute branches.
     if (mask & static_cast<uint64>(Stage::indirect)) result |= geometry | MTLStageDispatch | (source ? 0 : raster);
+    if (mask & static_cast<uint64>(Stage::dispatch_indirect)) result |= MTLStageDispatch;
     if (mask & static_cast<uint64>(Stage::index_input | Stage::vertex)) result |= MTLStageVertex | (source ? 0 : raster);
     if (mask & static_cast<uint64>(Stage::task)) result |= MTLStageObject | (source ? 0 : MTLStageMesh | raster);
     if (mask & static_cast<uint64>(Stage::mesh)) result |= MTLStageMesh | (source ? MTLStageObject : raster);
@@ -262,6 +263,7 @@ struct CommandBuffer
     id<MTL4ComputeCommandEncoder> compute = nil;
     id<MTL4RenderCommandEncoder> render = nil;
     PendingBarriers barriers{};
+    PendingBarriers compute_publications{};
     MTLStages compute_waits[2]{};
     MTLStages compute_visibility[2]{};
     bool barriers_pending = false;
@@ -484,10 +486,40 @@ CommandBuffer* create_context(CommandPool* pool)
 
 id<MTLDepthStencilState> depth_state(CommandPool* pool, const DepthStencilState& state);
 
+void accumulate_barrier(PendingBarriers& barriers, MTLStages source, MTLStages destination, MTL4VisibilityOptions visibility)
+{
+    for (uint32 i = 0; i < 8; ++i)
+    {
+        if (!(destination & barrier_destinations[i])) continue;
+        if (visibility)
+        {
+            barriers.memory[i] |= source;
+            barriers.execution[i] &= ~source;
+        }
+        else barriers.execution[i] |= source & ~barriers.memory[i];
+    }
+}
+
 void end_compute(CommandBuffer* commands)
 {
     if (commands->compute)
     {
+        // Keep intra-pass dependencies at their original positions; merge queue publications at the encoder boundary.
+        for (uint32 memory = 0; memory < 2; ++memory)
+        {
+            MTLStages* sources = memory ? commands->compute_publications.memory : commands->compute_publications.execution;
+            for (uint32 i = 0; i < 8; ++i)
+            {
+                const MTLStages source = sources[i];
+                if (!source) continue;
+                MTLStages destination = barrier_destinations[i];
+                for (uint32 j = i + 1; j < 8; ++j)
+                    if (sources[j] == source) { destination |= barrier_destinations[j]; sources[j] = 0; }
+                [commands->compute barrierAfterStages:source beforeQueueStages:destination
+                    visibilityOptions:memory ? MTL4VisibilityOptionDevice : MTL4VisibilityOptionNone];
+            }
+        }
+        commands->compute_publications = {};
         [commands->compute endEncoding];
         [commands->compute release];
         commands->compute = nil;
@@ -533,10 +565,16 @@ void flush_barriers(CommandBuffer* commands, id<MTL4CommandEncoder> encoder)
             if (!source) continue;
             const MTLStages destination = barrier_destinations[i];
             const MTL4VisibilityOptions visibility = memory ? MTL4VisibilityOptionDevice : MTL4VisibilityOptionNone;
-            if (commands->compute) compute_queue_wait(commands, source, destination, visibility);
-            else [encoder barrierAfterQueueStages:source beforeStages:destination visibilityOptions:visibility];
-            // The shared barrier also covers later encoders and subsequent submissions on this queue.
-            [encoder barrierAfterStages:source beforeQueueStages:destination visibilityOptions:visibility];
+            if (commands->compute)
+            {
+                compute_queue_wait(commands, source, destination, visibility);
+                accumulate_barrier(commands->compute_publications, source, destination, visibility);
+            }
+            else
+            {
+                [encoder barrierAfterQueueStages:source beforeStages:destination visibilityOptions:visibility];
+                [encoder barrierAfterStages:source beforeQueueStages:destination visibilityOptions:visibility];
+            }
         }
     }
     commands->barriers = {};
@@ -1397,6 +1435,7 @@ CommandBuffer* begin_commands(CommandPool* pool) noexcept
         [context->arguments setAddress:0 atIndex:2];
         context->timestamp_count = 0;
         context->barriers = {};
+        context->compute_publications = {};
         context->barriers_pending = false;
         context->pso = nullptr;
         context->recording = true;
@@ -1646,8 +1685,7 @@ void barrier(CommandBuffer* commands, Stage before, Access before_access, Stage 
         const MTL4VisibilityOptions visibility = (static_cast<uint64>(before_access) & writes) ? MTL4VisibilityOptionDevice : MTL4VisibilityOptionNone;
         if (commands->compute)
         {
-            // Queue barriers cover other encoders; the encoder barrier covers subsequent work in this pass.
-            [commands->compute barrierAfterStages:source beforeQueueStages:destination visibilityOptions:visibility];
+            accumulate_barrier(commands->compute_publications, source, destination, visibility);
             compute_queue_wait(commands, source, destination, visibility);
             if ((source & compute_stages) && (destination & compute_stages))
                 [commands->compute barrierAfterEncoderStages:source & compute_stages beforeEncoderStages:destination & compute_stages
@@ -1655,16 +1693,7 @@ void barrier(CommandBuffer* commands, Stage before, Access before_access, Stage 
         }
         else
         {
-            for (uint32 i = 0; i < 8; ++i)
-            {
-                if (!(destination & barrier_destinations[i])) continue;
-                if (visibility)
-                {
-                    commands->barriers.memory[i] |= source;
-                    commands->barriers.execution[i] &= ~source;
-                }
-                else commands->barriers.execution[i] |= source & ~commands->barriers.memory[i];
-            }
+            accumulate_barrier(commands->barriers, source, destination, visibility);
             commands->barriers_pending = true;
         }
     }

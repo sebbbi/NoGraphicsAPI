@@ -154,9 +154,12 @@ set_tests_properties(test_command_addresses PROPERTIES
     SKIP_RETURN_CODE 77 TIMEOUT 60 FAIL_REGULAR_EXPRESSION "Validation Error;NoGraphicsAPI validation:")
 
 if(WIN32)
-    add_executable(test_presentation presentation_test.cpp)
+    add_executable(test_presentation presentation_test.cpp ${continuation_vertex_spv} ${continuation_fragment_spv})
     NoGraphicsAPI_disable_exceptions(test_presentation)
     target_link_libraries(test_presentation PRIVATE NoGraphicsAPI::NoGraphicsAPI)
+    target_compile_definitions(test_presentation PRIVATE
+        NOGRAPHICSAPI_CONTINUATION_VERTEX_SPV="${continuation_vertex_spv}"
+        NOGRAPHICSAPI_CONTINUATION_FRAGMENT_SPV="${continuation_fragment_spv}")
     add_test(NAME test_presentation COMMAND test_presentation)
     add_test(NAME test_presentation_scrgb COMMAND test_presentation --scrgb)
     add_test(NAME test_presentation_color_space_switch COMMAND test_presentation --switch-color-space)
@@ -423,8 +426,10 @@ if(NOT APPLE)
         target_compile_definitions(NoGraphicsAPI_legacy_presentation PRIVATE
             NOGRAPHICSAPI_TEST_LEGACY_PRESENTATION $<TARGET_PROPERTY:NoGraphicsAPI,COMPILE_DEFINITIONS>)
         add_executable(test_presentation_legacy presentation_test.cpp)
+        add_dependencies(test_presentation_legacy test_presentation)
         NoGraphicsAPI_disable_exceptions(test_presentation_legacy)
         target_link_libraries(test_presentation_legacy PRIVATE NoGraphicsAPI_legacy_presentation)
+        target_compile_definitions(test_presentation_legacy PRIVATE $<TARGET_PROPERTY:test_presentation,COMPILE_DEFINITIONS>)
         add_test(NAME test_presentation_legacy COMMAND test_presentation_legacy)
         add_test(NAME test_presentation_legacy_color_space_switch COMMAND test_presentation_legacy --switch-color-space)
         add_test(NAME test_presentation_legacy_vsync COMMAND test_presentation_legacy --switch-vsync)

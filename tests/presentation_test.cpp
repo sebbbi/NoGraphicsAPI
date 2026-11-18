@@ -1,4 +1,5 @@
 #include <NoGraphicsAPI/NoGraphicsAPI.hpp>
+#include "shader_code.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -74,6 +75,26 @@ int main(int argc, char** argv)
     }
 
     gpu::Device* device = device_init.device;
+    gpu::Span<byte> vertex = read_shader(NOGRAPHICSAPI_CONTINUATION_VERTEX_SPV);
+    gpu::Span<byte> fragment = read_shader(NOGRAPHICSAPI_CONTINUATION_FRAGMENT_SPV);
+    gpu::PSO* pipelines[2]{};
+    if (vertex.data && fragment.data)
+        for (uint32 index = 0; index != 2; ++index)
+            pipelines[index] = gpu::create_graphics_pso(device, {
+                .vertex = {.code = {vertex.data, vertex.size}, .entry_point = "vertexMain"},
+                .fragment = {.code = {fragment.data, fragment.size}, .entry_point = "fragmentMain"},
+                .color_targets = {{.format = index ? gpu::Format::rgba16_float : gpu::Format::bgra8_srgb}},
+            });
+    free(vertex.data);
+    free(fragment.data);
+    if (!pipelines[0] || !pipelines[1])
+    {
+        for (gpu::PSO* pipeline : pipelines) if (pipeline) gpu::destroy_pso(pipeline);
+        gpu::destroy_device(device);
+        DestroyWindow(window);
+        UnregisterClassA(window_class.lpszClassName, window_class.hInstance);
+        return 1;
+    }
     gpu::CommandPool* present_pool = gpu::create_command_pool(device);
     gpu::CommandPool* middle_pool = gpu::create_command_pool(device);
     gpu::CommandPool* last_pool = gpu::create_command_pool(device);
@@ -194,6 +215,8 @@ int main(int argc, char** argv)
         const gpu::RenderingDesc rendering{.colors = colors};
         const bool split_pass = (frame_index & 1u) != 0;
         gpu::begin_render_pass(commands, rendering, split_pass ? gpu::RenderingFlags::suspending : gpu::RenderingFlags::none);
+        gpu::bind_pso(commands, pipelines[hdr_output]);
+        gpu::draw(commands, nullptr, 3);
         gpu::write_timestamp(commands, timestamp_cpu);
         gpu::end_render_pass(commands);
         gpu::end_commands(commands);
@@ -204,12 +227,16 @@ int main(int argc, char** argv)
             // Record continuations in reverse order, using the same clear description in every segment.
             gpu::CommandBuffer* last = gpu::begin_commands(last_pool);
             gpu::begin_render_pass(last, rendering, gpu::RenderingFlags::resuming);
+            gpu::bind_pso(last, pipelines[hdr_output]);
+            gpu::draw(last, nullptr, 3);
             gpu::write_timestamp(last, timestamp_cpu + 2);
             gpu::end_render_pass(last);
             gpu::end_commands(last);
 
             gpu::CommandBuffer* middle = gpu::begin_commands(middle_pool);
             gpu::begin_render_pass(middle, rendering, gpu::RenderingFlags::resuming | gpu::RenderingFlags::suspending);
+            gpu::bind_pso(middle, pipelines[hdr_output]);
+            gpu::draw(middle, nullptr, 3);
             gpu::write_timestamp(middle, timestamp_cpu + 1);
             gpu::end_render_pass(middle);
             gpu::end_commands(middle);
@@ -241,6 +268,7 @@ int main(int argc, char** argv)
     gpu::destroy_command_pool(middle_pool);
     gpu::destroy_command_pool(present_pool);
     gpu::destroy_timeline_semaphore(completion.semaphore);
+    for (gpu::PSO* pipeline : pipelines) gpu::destroy_pso(pipeline);
     gpu::destroy_device(device);
     CHECK(DestroyWindow(window));
     CHECK(UnregisterClassA(window_class.lpszClassName, window_class.hInstance));

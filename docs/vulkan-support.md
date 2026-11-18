@@ -221,6 +221,7 @@ This preserves dependency chains; separate entries in one Vulkan call would be i
 the next draw, dispatch, copy, render-pass boundary, timestamp or command-buffer end. Bindings do not split the batch, repeated masks
 add no work, and each command buffer needs only one pending dependency. The acquire transition joins the next batch.
 Texture metadata initialization flushes preceding dependencies before its transition because it can access aliased storage.
+`Stage::dispatch_indirect` and `Stage::indirect` both map to Vulkan's `DRAW_INDIRECT` stage, which covers draw and dispatch argument reads.
 The call has no texture or buffer parameter. The application describes the real
 producer/consumer hazard, while resource identity and image-layout bookkeeping disappear from the
 public API.
@@ -327,6 +328,8 @@ For presentation, `acquire(commands)` returns a swapchain-owned `RenderView` and
 while the drawable extent is zero. Later command buffers in the same submission may also access the image.
 Submit through `submit_and_present(device, desc)`, which always uses queue zero and transitions the image
 back to presentation after all submitted command buffers.
+The acquired view is a color attachment: its semaphore wait and acquire layout transition use color-output stages,
+allowing vertex work to proceed before acquisition completes. Explicit application timeline waits retain their all-command scope.
 Windowed device creation/destruction, drawable queries, acquire, and presentation stay on the native
 message-pump thread; other work follows the threading rules above. Binary WSI semaphores remain private, while
 `VK_KHR_swapchain_maintenance1` present fences support safe reuse and swapchain replacement without
