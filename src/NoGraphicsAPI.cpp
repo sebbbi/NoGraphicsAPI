@@ -13,6 +13,23 @@
 
 #include <vulkan/vulkan.h>
 
+// Vulkan presents on Win32, and on Linux on Wayland or X11 through Xlib. The Linux WSI headers need only these declarations,
+// so neither wayland-client.h nor Xlib.h, whose macros (None, Bool, Status) would clash, is included.
+#if defined(_WIN32)
+#define NGA_VULKAN_PRESENT 1
+#elif defined(__linux__) && !defined(__ANDROID__)
+struct wl_display;
+struct wl_surface;
+typedef struct _XDisplay Display;
+typedef unsigned long Window;
+typedef unsigned long VisualID;
+#include <vulkan/vulkan_wayland.h>
+#include <vulkan/vulkan_xlib.h>
+#define NGA_VULKAN_PRESENT 1
+#else
+#define NGA_VULKAN_PRESENT 0
+#endif
+
 #include <NoGraphicsAPI/bit.hpp>
 #include "BufferAddressMap.hpp"
 #include <assert.h>
@@ -44,7 +61,7 @@ constexpr uint32 max_color_attachments = 8;
 constexpr uint32 max_swapchain_images = 8;
 constexpr VkPresentModeKHR swapchain_present_mode = VK_PRESENT_MODE_FIFO_KHR;
 constexpr uint32 gpu_allocation_alignment = 16;
-constexpr uint32 max_surface_formats = 64;
+constexpr uint32 max_surface_formats = 256; // Mesa lists 72 on Wayland, each format in each color space.
 constexpr uint32 format_count = static_cast<uint32>(Format::undefined);
 
 enum class DescriptorHeapType : uint8
@@ -702,6 +719,8 @@ struct Device
     VkFormatFeatureFlags2 format_features[format_count]{};
     bool texture_compression_etc2 = false;
     bool swapchain_color_space_enabled = false;
+    bool wayland_surface = false; // The surface has no extent of its own; the swapchain takes drawable_extent.
+    VkExtent2D drawable_extent{};
     VkSemaphore presentation_retirement = VK_NULL_HANDLE;
     uint64 presentation_retirement_value = 0;
     uint64 completed_presentation_retirement = 0;
@@ -1717,9 +1736,14 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     const bool presentation = desc.window != nullptr;
     assert(desc.desired_swapchain_image_count != 0 && desc.desired_swapchain_image_count <= max_swapchain_images &&
            "swapchain image count must fit the wrapper's presentation context array");
-#if !defined(_WIN32)
+#if !NGA_VULKAN_PRESENT
     if (presentation)
         return {.error = Error::unsupported};
+#elif defined(_WIN32)
+    const char* const surface_extension = VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
+#else
+    const char* const surface_extension =
+        desc.window_system == WindowSystem::xlib ? VK_KHR_XLIB_SURFACE_EXTENSION_NAME : VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME;
 #endif
 
     uint32 loader_version = VK_API_VERSION_1_0;
@@ -1740,7 +1764,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     error = enumerate_instance_extensions({instance_extensions, max_instance_extensions}, instance_extension_count);
     if (error != Error::none)
         return fail_device_creation(state, error);
-#if defined(_WIN32)
+#if NGA_VULKAN_PRESENT
     state->swapchain_color_space_enabled = presentation &&
         has_name({instance_extensions, instance_extension_count}, VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
     const bool khr_surface_maintenance1 = presentation && has_name(
@@ -1753,9 +1777,9 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     {
         const char* missing_extensions[5]{};
         uint32 missing_extension_count = 0;
-        constexpr const char* required_extensions[]{
+        const char* const required_extensions[]{
             VK_KHR_SURFACE_EXTENSION_NAME,
-            VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
+            surface_extension,
             VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME,
         };
         for (const char* name : required_extensions)
@@ -1796,13 +1820,13 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     if (debug_utils_available) enabled_instance_extensions[enabled_instance_extension_count++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
     if (validation_available) enabled_layers[enabled_layer_count++] = "VK_LAYER_KHRONOS_validation";
 #endif
-#if defined(_WIN32)
+#if NGA_VULKAN_PRESENT
     if (presentation)
     {
         if (state->swapchain_color_space_enabled)
             enabled_instance_extensions[enabled_instance_extension_count++] = VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME;
         enabled_instance_extensions[enabled_instance_extension_count++] = VK_KHR_SURFACE_EXTENSION_NAME;
-        enabled_instance_extensions[enabled_instance_extension_count++] = VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
+        enabled_instance_extensions[enabled_instance_extension_count++] = surface_extension;
         enabled_instance_extensions[enabled_instance_extension_count++] = VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME;
         if (khr_surface_maintenance1)
             enabled_instance_extensions[enabled_instance_extension_count++] = VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME;
@@ -1863,6 +1887,30 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         error = error_from_vk(vkCreateWin32SurfaceKHR(state->instance, &surface_info, nullptr, &state->surface), "vkCreateWin32SurfaceKHR");
         if (error != Error::none)
             return fail_device_creation(state, error);
+    }
+#elif NGA_VULKAN_PRESENT
+    if (presentation && desc.window_system == WindowSystem::xlib)
+    {
+        const VkXlibSurfaceCreateInfoKHR surface_info{
+            .sType = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR,
+            .dpy = static_cast<Display*>(desc.display),
+            .window = static_cast<Window>(reinterpret_cast<uintptr_t>(desc.window)),
+        };
+        error = error_from_vk(vkCreateXlibSurfaceKHR(state->instance, &surface_info, nullptr, &state->surface), "vkCreateXlibSurfaceKHR");
+        if (error != Error::none)
+            return fail_device_creation(state, error);
+    }
+    else if (presentation)
+    {
+        const VkWaylandSurfaceCreateInfoKHR surface_info{
+            .sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR,
+            .display = static_cast<wl_display*>(desc.display),
+            .surface = static_cast<wl_surface*>(desc.window),
+        };
+        error = error_from_vk(vkCreateWaylandSurfaceKHR(state->instance, &surface_info, nullptr, &state->surface), "vkCreateWaylandSurfaceKHR");
+        if (error != Error::none)
+            return fail_device_creation(state, error);
+        state->wayland_surface = true;
     }
 #endif
 
@@ -1988,7 +2036,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         enabled_device_extensions[enabled_device_extension_count++] = VK_KHR_UNIFIED_IMAGE_LAYOUTS_EXTENSION_NAME;
     }
     enabled_device_extensions[enabled_device_extension_count++] = VK_EXT_MESH_SHADER_EXTENSION_NAME;
-#if defined(_WIN32)
+#if NGA_VULKAN_PRESENT
     if (presentation)
     {
         enabled_device_extensions[enabled_device_extension_count++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
@@ -2293,6 +2341,22 @@ VkCompositeAlphaFlagBitsKHR choose_composite_alpha(VkCompositeAlphaFlagsKHR supp
     return static_cast<VkCompositeAlphaFlagBitsKHR>(0);
 }
 
+// The surface's extent, or on Wayland, where the surface takes the swapchain's, the drawable extent within the surface's limits.
+[[nodiscard]] VkExtent2D surface_extent(const Device& device, const VkSurfaceCapabilitiesKHR& capabilities) noexcept
+{
+    if (!device.wayland_surface)
+        return capabilities.currentExtent;
+    const VkExtent2D extent = device.drawable_extent;
+    if (extent.width == 0 || extent.height == 0)
+        return {};
+    return {
+        .width = extent.width < capabilities.minImageExtent.width ? capabilities.minImageExtent.width
+               : extent.width > capabilities.maxImageExtent.width ? capabilities.maxImageExtent.width : extent.width,
+        .height = extent.height < capabilities.minImageExtent.height ? capabilities.minImageExtent.height
+                : extent.height > capabilities.maxImageExtent.height ? capabilities.maxImageExtent.height : extent.height,
+    };
+}
+
 [[nodiscard]] bool swapchain_surface_configuration_changed(const Swapchain& swapchain) noexcept
 {
     VkSurfaceCapabilitiesKHR capabilities{};
@@ -2300,7 +2364,7 @@ VkCompositeAlphaFlagBitsKHR choose_composite_alpha(VkCompositeAlphaFlagsKHR supp
         "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
     require_error(error, "Display surface query");
 
-    const VkExtent2D extent = capabilities.currentExtent;
+    const VkExtent2D extent = surface_extent(*swapchain.state, capabilities);
     const uint32 variable_extent = UINT_MAX;
     return extent.width == variable_extent ||
            extent.height == variable_extent ||
@@ -2332,7 +2396,7 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept
         return error;
     const VkSurfaceCapabilitiesKHR& capabilities = capabilities_info.surfaceCapabilities;
 
-    const VkExtent2D extent = capabilities.currentExtent;
+    const VkExtent2D extent = surface_extent(device, capabilities);
     if (extent.width == UINT_MAX)
         return Error::unsupported;
     if ((capabilities.supportedUsageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) == 0)
@@ -2527,7 +2591,7 @@ uint32x2 get_drawable_extent(Device* device) noexcept
     const Error error = error_from_vk(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device->physical_device, device->surface, &capabilities),
         "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
     if (error != Error::none) return {};
-    const VkExtent2D extent = capabilities.currentExtent;
+    const VkExtent2D extent = surface_extent(*device, capabilities);
     if (extent.width == UINT_MAX || extent.height == UINT_MAX)
     {
         if (error_callback) error_callback("The display surface does not provide a fixed drawable extent.", false);
@@ -2543,6 +2607,17 @@ uint32x2 get_drawable_extent(Device* device) noexcept
         .x = extent.width,
         .y = extent.height,
     };
+}
+
+void set_drawable_extent(Device* device, uint32x2 extent) noexcept
+{
+    assert(device && !device->acquired_swapchain && "set_drawable_extent must be called outside presentation");
+    if (!device->wayland_surface)
+        return;
+    if (device->drawable_extent.width == extent.x && device->drawable_extent.height == extent.y)
+        return;
+    device->drawable_extent = {.width = extent.x, .height = extent.y};
+    device->swapchain->recreate_required = true;
 }
 
 SwapchainFrame acquire(CommandBuffer* commands) noexcept

@@ -7,7 +7,7 @@ CMake selects native Metal 4 on Apple platforms and Vulkan elsewhere. Apple devi
 | Target | Toolchain |
 | --- | --- |
 | Windows x86-64 | MSVC or clang-cl. |
-| Linux x86-64 | GCC or Clang; headless library and tests. |
+| Linux x86-64 | GCC or Clang; presents on Wayland or X11 (Xlib); headless tests. |
 | macOS 26+ ARM64 | Xcode 26+ SDK and Metal compiler. |
 | iOS/iPadOS 26+ ARM64 | Xcode 26+ with the device SDK. |
 

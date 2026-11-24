@@ -94,9 +94,9 @@ and after writes through an overlapping texture; applications synchronize storag
 Textures have no CPU mapping. Upload and readback use GPU address ranges, and their lifetimes follow
 submission timelines. The backend does not track texture-to-heap or texture-to-descriptor dependencies.
 
-Presentation is outside the post. NoGraphicsAPI provides a Win32 Vulkan swapchain and Metal
-`CAMetalLayer` acquisition/presentation. Applications own native windows/layers; the library handles
-native presentation synchronization and image transitions.
+Presentation is outside the post. NoGraphicsAPI provides a Vulkan swapchain on Win32, Wayland, and
+Xlib, and Metal `CAMetalLayer` acquisition/presentation. Applications own native windows/layers; the
+library handles native presentation synchronization and image transitions.
 
 ## Native API requirements and limits
 

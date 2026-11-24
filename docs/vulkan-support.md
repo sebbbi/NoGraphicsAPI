@@ -12,9 +12,10 @@ The result has no public descriptor sets, descriptor pools, descriptor-set layou
 layouts, render passes, or framebuffers. Vulkan objects still exist where the driver requires them,
 but they do not shape the application-facing model.
 
-The current backend targets desktop Vulkan 1.4. MoltenVK is intentionally unsupported, and Win32 is
-the only presentation backend. Headless library builds are supported on the other configured
-desktop platforms.
+The current backend targets desktop Vulkan 1.4. MoltenVK is intentionally unsupported. Vulkan
+presents on Win32, and on Linux to a Wayland surface or an Xlib window; `DeviceDesc::window_system`
+names which. A Wayland surface has no extent of its own, so the application passes the window's
+size with `set_drawable_extent`.
 
 ## Vulkan feature surface
 
@@ -37,7 +38,7 @@ conventional feature checked by device creation.
 | 64-bit timestamps (optional) | Supported queues capture GPU markers; `read_timestamps(pool)` retrieves them into CPU memory after submission completion. |
 | Shader and layout features | Scalar layout, float16, 16-bit push/storage access, draw parameters, independent blending, and formatless storage-image access. |
 | Texture features | At least BC or ASTC LDR compression; exact format and usage support remains queryable. |
-| Win32 WSI | `VK_KHR_surface`, `VK_KHR_win32_surface`, `VK_KHR_swapchain`, and the maintenance extensions listed below. |
+| WSI | `VK_KHR_surface`, `VK_KHR_win32_surface`, `VK_KHR_wayland_surface`, or `VK_KHR_xlib_surface`, `VK_KHR_swapchain`, and the maintenance extensions listed below. |
 
 Windowed devices also require `VK_KHR_get_surface_capabilities2`,
 `VK_KHR_surface_maintenance1`, and [`VK_KHR_swapchain_maintenance1`][swapchain-maintenance]. The

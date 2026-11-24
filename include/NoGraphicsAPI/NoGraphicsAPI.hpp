@@ -454,13 +454,16 @@ struct DeviceCaps
 };
 
 enum class ColorSpace : uint32 { srgb, extended_srgb_linear };
+enum class WindowSystem : uint32 { wayland, xlib }; // Linux
 
 // Win32 windowed device lifecycle, swapchain format/extent changes, acquire, and presentation stay on the window's message-pump thread.
 // Metal calls may use a render thread; synchronize CAMetalLayer access with native UI/layer changes.
 // The window/layer must outlive the device. Other calls follow the object-level threading contract below.
 struct DeviceDesc
 {
-    void* window = nullptr; // HWND on Windows; CAMetalLayer* on macOS/iOS. Null creates a headless device.
+    void* window = nullptr; // HWND on Windows; CAMetalLayer* on macOS/iOS; wl_surface* or an X11 Window, cast, on Linux. Null creates a headless device.
+    void* display = nullptr; // Linux: the wl_display* or X11 Display* the window belongs to; required to present.
+    WindowSystem window_system = WindowSystem::wayland; // Linux: what window and display are.
     Format swapchain_format = Format::undefined;
     ColorSpace swapchain_color_space = ColorSpace::srgb;
     uint32 desired_swapchain_image_count = 2; // Vulkan: 1..8 presentation contexts. Metal clamps to 2..3 drawables.
@@ -699,6 +702,9 @@ void destroy_device(Device* device) noexcept;
 [[nodiscard]] const DeviceCaps& get_device_caps(const Device* device) noexcept;
 [[nodiscard]] bool supports_texture_format(const Device* device, Format format, TextureUsage usage) noexcept;
 [[nodiscard]] uint32x2 get_drawable_extent(Device* device) noexcept;
+// Wayland: the surface takes its size from the swapchain, so pass the window's size in pixels before the first acquire and after each
+// resize; the drawable stays zero-size until then. Elsewhere the window or layer sets the extent and this does nothing.
+void set_drawable_extent(Device* device, uint32x2 extent) noexcept;
 // Call after wait_idle, outside an acquired frame. Unsupported pairs leave the current mode unchanged.
 // A zero-size drawable defers swapchain recreation until acquire sees a nonzero extent.
 [[nodiscard]] Error set_swapchain_format(Device* device, Format format, ColorSpace color_space) noexcept;

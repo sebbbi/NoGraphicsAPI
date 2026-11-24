@@ -703,6 +703,10 @@ uint32x2 get_drawable_extent(Device* device) noexcept
     }
 }
 
+void set_drawable_extent(Device*, uint32x2) noexcept
+{
+}
+
 TimelineSemaphore* create_timeline_semaphore(Device* device, uint64 initial_value) noexcept
 {
     @autoreleasepool
