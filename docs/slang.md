@@ -76,7 +76,8 @@ GPU_ROOT(ExampleRoot, root, 16);
 ```
 
 Use a power of two at least four, satisfying the API's 16-byte address requirement and the type's alignment.
-Metal applies `__builtin_assume` to the constant pointer. Vulkan's uniform-buffer binding is unchanged.
+Metal ignores it: a `__builtin_assume` on the constant root pointer made Apple's compiler run the fragment
+shader once per sample in multisampled pipelines. Vulkan's uniform-buffer binding is unchanged.
 Neither backend allocates or copies root storage; all stages consume the application's GPU address directly.
 
 On macOS, `tools/check_root_layouts.py` scans `GPU_ROOT` declarations and checks every field, nested field,

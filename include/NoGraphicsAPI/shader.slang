@@ -15,7 +15,9 @@
 ConstantBuffer<T> gpu_root_aligned_storage<T>(ConstantBuffer<T> storage, constexpr int alignment)
 {
     static_assert(sizeof(T) % 16 == 0, "Root structs require a 16-byte stride and native vector alignment; pointed-to data uses C layout");
-    __intrinsic_asm "(__builtin_assume((reinterpret_cast<ulong>($0) & ($1 - 1)) == 0), $0)";
+    // No alignment hint: a __builtin_assume on the root pointer makes Apple's compiler shade every sample
+    // of a multisampled pipeline (4x the fragment work at 4x MSAA), and a constant pointer gains nothing from it.
+    __intrinsic_asm "$0";
 }
 
 [[vk::binding(1)]] ConstantBuffer<uint64_t> gpu_texture_pool_base : register(b1);
